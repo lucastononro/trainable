@@ -7,6 +7,7 @@ import type {
   Message,
   Artifact,
   MetricPoint,
+  ModelInfo,
   FileTreeNode,
   StageStartResponse,
   DeleteResponse,
@@ -87,4 +88,36 @@ export const api = {
 
   readFile: (path: string) =>
     fetchJSON<{ path: string; content: string }>(`/files/read?path=${encodeURIComponent(path)}`),
+
+  // Models
+  listModels: () => fetchJSON<ModelInfo[]>('/models'),
+
+  // Quick create (no files required)
+  quickCreate: async (name?: string, instructions?: string): Promise<CreateExperimentResponse> => {
+    const data = new FormData();
+    if (name) data.append('name', name);
+    if (instructions) data.append('instructions', instructions);
+    const res = await fetch(`${API_BASE}/experiments/quick`, {
+      method: 'POST',
+      body: data,
+    });
+    if (!res.ok) throw new Error(`Quick create failed: ${res.status}`);
+    return res.json();
+  },
+
+  // Attach data to existing experiment
+  attachData: async (experimentId: string, files?: File[], s3Path?: string, sessionId?: string) => {
+    const data = new FormData();
+    if (s3Path) data.append('s3_path', s3Path);
+    if (sessionId) data.append('session_id', sessionId);
+    if (files) {
+      for (const f of files) data.append('files', f);
+    }
+    const res = await fetch(`${API_BASE}/experiments/${experimentId}/attach`, {
+      method: 'POST',
+      body: data,
+    });
+    if (!res.ok) throw new Error(`Attach failed: ${res.status}`);
+    return res.json();
+  },
 };

@@ -1,3 +1,19 @@
+name: eda
+description: >
+  Exploratory Data Analysis. Profiles datasets, finds patterns,
+  generates visualizations, and writes a summary report.
+default_model: claude-sonnet-4-6
+max_depth: 1
+
+tools:
+  - name: execute_code
+  - name: delegate_task
+
+subagents:
+  - data_prep
+  - feature_eng
+  - reviewer
+
 opener: "Begin EDA. Start by listing the dataset files."
 
 system: |
@@ -37,4 +53,8 @@ system: |
      - Include a clear recommendation for the target column and problem type
      - Flag any data quality issues for the prep stage
 
-  User instructions: {instructions}
+  ## Custom instructions
+  {instructions}
+
+  ## Prior context
+  {prev_context}

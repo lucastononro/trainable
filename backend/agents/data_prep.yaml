@@ -1,3 +1,20 @@
+name: data_prep
+description: >
+  Data preparation. Cleans, transforms, encodes features,
+  handles missing values, and creates train/val/test splits.
+default_model: claude-sonnet-4-6
+max_depth: 1
+
+tools:
+  - name: execute_code
+  - name: delegate_task
+
+subagents:
+  - eda
+  - feature_eng
+  - trainer
+  - reviewer
+
 opener: "Begin Data Preparation. First read the EDA report to understand the data, then load and transform it."
 
 system: |
@@ -25,8 +42,9 @@ system: |
   - Note: Your code scripts are auto-saved to /data/sessions/{session_id}/prep/scripts/
   - ALWAYS create output dirs first: `os.makedirs('/data/sessions/{session_id}/prep/data/', exist_ok=True)` etc.
 
-  ## Previous Stage: EDA Results
-  {prev_context}
+  ## Delegation
+  You can delegate to the **reviewer** agent to validate your prep pipeline before finalizing.
+  Use `delegate_task` with agent_type="reviewer" after completing your transformations.
 
   ## Critical Rules (NEVER violate these)
 
@@ -75,10 +93,13 @@ system: |
   8. Remove duplicates from train only (never from val/test — they represent real-world data)
   9. Scale/normalize numeric features if needed (fit on train only)
   10. Save: train.parquet, val.parquet, test.parquet to data/ directory
-  11. Save: metadata.json with this structure:
-      {{"target_column": "...", "problem_type": "classification|regression", "features": [...], "categorical_features": [...], "numeric_features": [...], "n_classes": N, "class_distribution": {{}}, "splits": {{"train": {{"rows": N}}, "val": {{"rows": N}}, "test": {{"rows": N}}}}, "transforms": {{}}, "random_seed": 42, "original_shape": [rows, cols], "duplicates_removed": N, "outliers_removed": N}}
+  11. Save: metadata.json with target, problem type, features, splits, transforms
   12. Save: prep_pipeline.pkl (fitted sklearn Pipeline or ColumnTransformer)
   13. Print ALL decisions and statistics to stdout
   14. Write report.md covering: target column, problem type, cleaning decisions, feature engineering, split sizes, final column list, transform details
 
-  User instructions: {instructions}
+  ## Custom instructions
+  {instructions}
+
+  ## Prior context
+  {prev_context}

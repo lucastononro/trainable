@@ -18,12 +18,17 @@ logger = logging.getLogger(__name__)
 
 
 async def save_and_publish(
-    session_id: str, event_type: str, data: dict, role: str | None = None
+    session_id: str,
+    event_type: str,
+    data: dict,
+    role: str | None = None,
+    publish: bool = True,
 ):
-    """Persist a chat event to the DB and publish via SSE."""
+    """Persist a chat event to the DB and optionally publish via SSE."""
 
     # Publish to SSE immediately
-    await broadcaster.publish(session_id, {"type": event_type, "data": data})
+    if publish:
+        await broadcaster.publish(session_id, {"type": event_type, "data": data})
 
     # Persist to DB
     if role:

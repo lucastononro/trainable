@@ -99,15 +99,16 @@ async def send_message(
 
         # Determine the current stage from session state
         state = session.state or "created"
-        stage = _infer_stage(state)
+        dataset_ref = session.experiment.dataset_ref or "" if session.experiment else ""
+        stage = _infer_stage(state, dataset_ref)
 
         # Capture experiment context before DB session closes
         experiment_id = session.experiment_id
         instructions = (
             session.experiment.instructions or "" if session.experiment else ""
         )
-        dataset_ref = session.experiment.dataset_ref or "" if session.experiment else ""
         user_content = body.content
+        selected_model = body.model or session.model
 
         async def _run_followup():
             try:
@@ -118,6 +119,7 @@ async def send_message(
                     instructions=instructions,
                     dataset_ref=dataset_ref,
                     user_prompt=user_content,
+                    model=selected_model,
                 )
                 async with async_session() as fresh_db:
                     s = await fresh_db.get(SessionModel, session_id)
@@ -143,13 +145,13 @@ async def send_message(
     return msg.to_dict()
 
 
-def _infer_stage(state: str) -> str:
-    """Infer the active stage from session state for follow-up messages."""
-    if "train" in state:
-        return "train"
-    if "prep" in state:
-        return "prep"
-    # Default to eda (covers created, eda_running, eda_done, cancelled, failed)
+def _infer_stage(state: str, dataset_ref: str = "") -> str:
+    """Infer the agent/stage from session state for follow-up messages.
+
+    Always defaults to 'chat' — the chat agent decides when to delegate
+    to orchestrator or specialist agents on its own.
+    """
+    return "chat"
     return "eda"
 
 
@@ -224,11 +226,16 @@ async def start_stage(
     exp_instructions = session.experiment.instructions or ""
     dataset_ref = session.experiment.dataset_ref or ""
     stage_instructions = body.instructions or ""
+    selected_model = body.model or session.model
 
     # Merge experiment-level + stage-specific instructions
     instructions = exp_instructions
     if stage_instructions:
         instructions = f"{exp_instructions}\n\nAdditional instructions for this stage:\n{stage_instructions}".strip()
+
+    # Persist model selection if provided
+    if body.model:
+        session.model = body.model
 
     # Update state
     session.state = f"{stage}_running"
@@ -244,6 +251,7 @@ async def start_stage(
                 instructions=instructions,
                 dataset_ref=dataset_ref,
                 gpu=body.gpu,
+                model=selected_model,
             )
             # Agent saves messages directly via _save_and_publish
             # Just update the session state

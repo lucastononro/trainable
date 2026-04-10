@@ -40,6 +40,15 @@ def _run_migrations(connection):
             )
             logger.info("[DB] Added s3_path column to artifacts table")
 
+    # Add model to sessions if missing
+    if insp.has_table("sessions"):
+        columns = [c["name"] for c in insp.get_columns("sessions")]
+        if "model" not in columns:
+            connection.execute(
+                text("ALTER TABLE sessions ADD COLUMN model VARCHAR(100)")
+            )
+            logger.info("[DB] Added model column to sessions table")
+
     # Add stage and run_tag to metrics if missing
     if insp.has_table("metrics"):
         columns = [c["name"] for c in insp.get_columns("metrics")]

@@ -31,7 +31,7 @@ async def abort_agent(session_id: str, silent: bool = False) -> bool:
 
 def cleanup_session(session_id: str) -> None:
     """Remove all per-session state when a session ends."""
-    from .tools import _code_counter, _known_files
+    from tools.execute_code import _code_counter, _known_files
 
     _running_tasks.pop(session_id, None)
     _known_files.pop(session_id, None)

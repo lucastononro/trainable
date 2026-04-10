@@ -13,8 +13,19 @@ export interface Session {
   id: string;
   experiment_id: string;
   state: string;
+  model?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  tier: 'premium' | 'standard' | 'fast';
+  context: string;
+  input_cost: number;
+  output_cost: number;
+  description: string;
 }
 
 export interface Message {

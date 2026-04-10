@@ -65,6 +65,7 @@ class Session(Base):
     id = Column(String(36), primary_key=True)
     experiment_id = Column(String(36), ForeignKey("experiments.id"), nullable=False)
     state = Column(String(50), default=SessionState.CREATED.value)
+    model = Column(String(100), default=None)
     created_at = Column(String, default=lambda: utcnow().isoformat())
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
@@ -90,6 +91,7 @@ class Session(Base):
             "id": self.id,
             "experiment_id": self.experiment_id,
             "state": self.state,
+            "model": self.model,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

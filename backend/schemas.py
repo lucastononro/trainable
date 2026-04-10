@@ -16,8 +16,10 @@ class ExperimentCreate(BaseModel):
 class MessageCreate(BaseModel):
     content: str
     run_agent: bool = False
+    model: Optional[str] = None
 
 
 class StageStart(BaseModel):
     gpu: Optional[str] = None
     instructions: Optional[str] = None
+    model: Optional[str] = None

@@ -119,3 +119,61 @@ body {
 .markdown-content blockquote {
   @apply border-l-4 border-primary-500 pl-4 my-4 italic text-gray-400;
 }
+
+/* Chat-inline markdown — lighter spacing for message bubbles */
+.markdown-chat p {
+  @apply my-1.5 leading-relaxed text-gray-200;
+}
+.markdown-chat p:first-child {
+  @apply mt-0;
+}
+.markdown-chat p:last-child {
+  @apply mb-0;
+}
+.markdown-chat ul {
+  @apply list-disc list-inside my-1.5 text-gray-300;
+}
+.markdown-chat ol {
+  @apply list-decimal list-inside my-1.5 text-gray-300;
+}
+.markdown-chat code {
+  @apply bg-white/10 text-gray-200 px-1 py-0.5 rounded text-[13px] font-mono;
+}
+.markdown-chat pre {
+  @apply bg-black/40 text-gray-100 p-3 rounded-lg overflow-x-auto my-2 border border-white/5 text-xs;
+}
+.markdown-chat pre code {
+  @apply bg-transparent p-0;
+}
+.markdown-chat h1,
+.markdown-chat h2,
+.markdown-chat h3 {
+  @apply font-semibold text-white mt-3 mb-1;
+}
+.markdown-chat h1 {
+  @apply text-base;
+}
+.markdown-chat h2 {
+  @apply text-sm;
+}
+.markdown-chat h3 {
+  @apply text-sm;
+}
+.markdown-chat table {
+  @apply w-full border-collapse my-2 text-xs;
+}
+.markdown-chat th {
+  @apply border border-white/10 px-2 py-1.5 text-left text-gray-300 font-medium bg-white/5;
+}
+.markdown-chat td {
+  @apply border border-white/10 px-2 py-1.5 text-gray-400;
+}
+.markdown-chat blockquote {
+  @apply border-l-2 border-primary-500/50 pl-3 my-2 text-gray-400 italic;
+}
+.markdown-chat strong {
+  @apply text-white font-semibold;
+}
+.markdown-chat a {
+  @apply text-primary-400 underline underline-offset-2;
+}
