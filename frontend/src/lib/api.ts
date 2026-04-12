@@ -91,6 +91,12 @@ export const api = {
   abortSession: (sessionId: string) =>
     fetchJSON<AbortResponse>(`/sessions/${sessionId}/abort`, { method: 'POST' }),
 
+  replyClarification: (sessionId: string, questionId: string, answer: string) =>
+    fetchJSON<{ status: string }>(
+      `/sessions/${sessionId}/clarifications/${questionId}`,
+      { method: 'POST', body: JSON.stringify({ answer }) },
+    ),
+
   // Files
   getFileTree: (sessionId: string) =>
     fetchJSON<FileTreeNode>(`/files/tree?root=/sessions/${sessionId}`),

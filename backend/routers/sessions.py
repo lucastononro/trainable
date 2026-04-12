@@ -16,10 +16,11 @@ from sqlalchemy.orm import selectinload
 from db import async_session, get_db
 from models import Artifact, Experiment, Message, Metric
 from models import Session as SessionModel
-from schemas import MessageCreate, StageStart
+from schemas import ClarificationReply, MessageCreate, StageStart
 from services.agent import abort_agent, run_agent
 from services.agent.tasks import _running_tasks
 from services.broadcaster import broadcaster
+from services.clarifications import list_pending, resolve as resolve_clarification
 
 logger = logging.getLogger(__name__)
 
@@ -287,6 +288,43 @@ async def start_stage(
     _running_tasks[session_id] = task
 
     return {"status": "started", "state": f"{stage}_running"}
+
+
+@router.get("/sessions/{session_id}/clarifications")
+async def get_pending_clarifications(session_id: str):
+    """Return any clarifications currently waiting for a user reply."""
+    return {"pending": list_pending(session_id)}
+
+
+@router.post("/sessions/{session_id}/clarifications/{question_id}")
+async def reply_to_clarification(
+    session_id: str,
+    question_id: str,
+    body: ClarificationReply,
+):
+    """User reply for an escalated clarification — resumes the paused sub-agent."""
+    answered = resolve_clarification(
+        session_id,
+        question_id,
+        {"answer": body.answer, "answered_by": "user", "timeout": False},
+    )
+    if not answered:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending clarification with that question_id (already answered or expired).",
+        )
+    await broadcaster.publish(
+        session_id,
+        {
+            "type": "clarification_resolved",
+            "data": {
+                "question_id": question_id,
+                "answered_by": "user",
+                "answer": body.answer,
+            },
+        },
+    )
+    return {"status": "ok"}
 
 
 @router.get("/sessions/{session_id}/artifacts")

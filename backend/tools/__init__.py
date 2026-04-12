@@ -46,6 +46,8 @@ def _build_tool_entry(
     stage: str,
     depth: int,
     publish_fn,
+    agent_id: str = "root",
+    parent_agent_id: str | None = None,
     **handler_kwargs,
 ) -> dict | None:
     """Build a single tool dict {description, input_schema, handler} for the MCP server."""
@@ -72,6 +74,8 @@ def _build_tool_entry(
         stage=stage,
         publish_fn=publish_fn,
         parent_agent_type=agent_type,
+        parent_agent_id=agent_id,
+        parent_parent_agent_id=parent_agent_id,
         current_depth=depth,
         **handler_kwargs,
     )
@@ -117,6 +121,8 @@ def build_mcp_server(
     model: str | None = None,
     instructions: str = "",
     agent_models: dict | None = None,
+    agent_id: str = "root",
+    parent_agent_id: str | None = None,
 ):
     """Build an MCP server with all tools defined in the agent's YAML config.
 
@@ -135,6 +141,8 @@ def build_mcp_server(
             stage=stage,
             depth=depth,
             publish_fn=publish_fn,
+            agent_id=agent_id,
+            parent_agent_id=parent_agent_id,
             gpu=gpu,
             parent_model=model,
             instructions=instructions,

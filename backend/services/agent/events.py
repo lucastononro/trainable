@@ -23,30 +23,47 @@ async def save_and_publish(
     data: dict,
     role: str | None = None,
     publish: bool = True,
+    agent_meta: dict | None = None,
 ):
-    """Persist a chat event to the DB and optionally publish via SSE."""
+    """Persist a chat event to the DB and optionally publish via SSE.
 
-    # Publish to SSE immediately
+    agent_meta carries per-agent identity (agent_id, agent_type, parent_agent_id, depth)
+    and is merged into the row's metadata so downstream tools can filter by agent.
+    """
+
+    # Publish to SSE immediately. Mirror agent_meta into the SSE payload so the
+    # frontend (and any other listener) can attribute events without re-querying.
     if publish:
-        await broadcaster.publish(session_id, {"type": event_type, "data": data})
+        sse_data = dict(data)
+        if agent_meta:
+            sse_data.setdefault("agent_id", agent_meta.get("agent_id"))
+            sse_data.setdefault("agent_type", agent_meta.get("agent_type"))
+            sse_data.setdefault("parent_agent_id", agent_meta.get("parent_agent_id"))
+            sse_data.setdefault("depth", agent_meta.get("depth"))
+        await broadcaster.publish(session_id, {"type": event_type, "data": sse_data})
 
     # Persist to DB
     if role:
         try:
             async with async_session() as db:
+                metadata = {
+                    "event_type": event_type,
+                    **{
+                        k: v
+                        for k, v in data.items()
+                        if k not in ("text", "content")
+                    },
+                }
+                if agent_meta:
+                    for k, v in agent_meta.items():
+                        if v is not None:
+                            metadata.setdefault(k, v)
                 db.add(
                     Message(
                         session_id=session_id,
                         role=role,
                         content=data.get("text", data.get("content", "")),
-                        metadata_={
-                            "event_type": event_type,
-                            **{
-                                k: v
-                                for k, v in data.items()
-                                if k not in ("text", "content")
-                            },
-                        },
+                        metadata_=metadata,
                     )
                 )
                 await db.commit()

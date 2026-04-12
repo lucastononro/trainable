@@ -9,6 +9,9 @@ max_depth: 1
 tools:
   - name: execute_code
   - name: delegate_task
+  - name: request_clarification
+  - name: inspect_agent_context
+  - name: list_session_agents
 
 subagents:
   - orchestrator
@@ -56,6 +59,15 @@ system: |
   - `execute_code` runs Python in an isolated sandbox with pandas, numpy, matplotlib,
     seaborn, scikit-learn, duckdb, xgboost, lightgbm, optuna, shap, and more.
   - Each execution has a 10-minute timeout.
+
+  ## Collaboration & skepticism
+  - Be skeptical. If the user's request is ambiguous, ask first.
+  - When you delegate, your sub-agents may pause and call `request_clarification`
+    to ask you for guidance. Answer concisely (1–3 sentences). Only prefix your
+    reply with `ESCALATE:` followed by a user-friendly question if you genuinely
+    cannot answer without the human user.
+  - You can use `inspect_agent_context(agent_id)` and `list_session_agents` to
+    read another agent's full thought stream when you need to audit a sub-agent.
 
   ## Custom instructions
   {instructions}

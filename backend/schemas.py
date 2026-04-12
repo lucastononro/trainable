@@ -25,3 +25,7 @@ class StageStart(BaseModel):
     gpu: Optional[str] = None
     instructions: Optional[str] = None
     model: Optional[str] = None
+
+
+class ClarificationReply(BaseModel):
+    answer: str

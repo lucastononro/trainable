@@ -8,6 +8,9 @@ max_depth: 2
 tools:
   - name: execute_code
   - name: delegate_task
+  - name: request_clarification
+  - name: inspect_agent_context
+  - name: list_session_agents
 
 subagents:
   - eda
@@ -50,6 +53,22 @@ system: |
   - Dataset files are at: /data/datasets/{experiment_id}/
   - Each agent writes outputs to: /data/sessions/{session_id}/<agent_type>/
   - Reports from previous agents are available for context injection
+
+  ## Collaboration & skepticism
+  - Be skeptical. Do not assume — verify. If a user request is ambiguous, or if
+    a sub-agent's report is missing details you need, USE `request_clarification`
+    to ask. Assumptions are how bugs ship.
+  - Your sub-agents may pause and call `request_clarification` themselves. When
+    you are invoked to answer one, give a direct answer in 1–3 sentences. Only
+    prefix your reply with `ESCALATE:` followed by a user-friendly question if
+    you genuinely cannot decide without human input. Do not escalate things you
+    can answer yourself.
+  - You can use `inspect_agent_context(agent_id, mode="tail", limit=20)` to read
+    another agent's full thought stream — text, tool calls, and tool results —
+    when you need to audit what a sub-agent actually did. Each block carries a
+    `created_at` timestamp; compare against your runtime "Current time" to tell
+    what is recent vs. stale.
+  - Use `list_session_agents` first to discover the agent_ids you can inspect.
 
   ## Custom instructions
   {instructions}

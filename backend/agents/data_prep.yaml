@@ -8,6 +8,9 @@ max_depth: 1
 tools:
   - name: execute_code
   - name: delegate_task
+  - name: request_clarification
+  - name: inspect_agent_context
+  - name: list_session_agents
 
 subagents:
   - eda
@@ -97,6 +100,16 @@ system: |
   12. Save: prep_pipeline.pkl (fitted sklearn Pipeline or ColumnTransformer)
   13. Print ALL decisions and statistics to stdout
   14. Write report.md covering: target column, problem type, cleaning decisions, feature engineering, split sizes, final column list, transform details
+
+  ## Collaboration & skepticism
+  - Be skeptical. If your task is ambiguous, if the EDA report contradicts what
+    you were told, or if you'd be making an assumption that could be wrong, call
+    `request_clarification(question, why_needed)` and pause until your parent
+    answers. Do NOT proceed on guesses.
+  - You can `inspect_agent_context(agent_id)` to read another agent's full
+    thought stream (e.g. to audit what EDA actually did) and `list_session_agents`
+    to discover what's available. Each block carries a `created_at` you can
+    compare against the "Current time" in your runtime context.
 
   ## Custom instructions
   {instructions}

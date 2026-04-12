@@ -13,6 +13,8 @@ def create_mcp_server(
     instructions: str = "",
     model: str | None = None,
     agent_models: dict | None = None,
+    agent_id: str = "root",
+    parent_agent_id: str | None = None,
 ):
     """Create a per-call MCP server with tools determined by the agent's YAML config."""
     # Lazy import to avoid circular dependency
@@ -28,4 +30,6 @@ def create_mcp_server(
         model=model,
         instructions=instructions,
         agent_models=agent_models or {},
+        agent_id=agent_id,
+        parent_agent_id=parent_agent_id,
     )

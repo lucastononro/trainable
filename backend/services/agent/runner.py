@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from datetime import datetime, timezone
 
 from claude_agent_sdk import (
     AssistantMessage,
     ClaudeAgentOptions,
     ResultMessage,
+    UserMessage,
     query,
 )
 from sqlalchemy import select
@@ -29,6 +32,33 @@ from .tasks import _silent_aborts
 from .tools import create_mcp_server
 
 logger = logging.getLogger(__name__)
+
+# Cap each persisted thought block (text, tool_use, tool_result) at this many
+# characters. Tool results from execute_code can be megabytes — never store the
+# raw blob, just enough for an inspector to understand what happened.
+_THOUGHT_BLOCK_MAX_CHARS = 1500
+
+
+def _truncate(text: str, limit: int = _THOUGHT_BLOCK_MAX_CHARS) -> tuple[str, bool, int]:
+    """Return (truncated_text, was_truncated, original_bytes)."""
+    if text is None:
+        return "", False, 0
+    original = len(text)
+    if original <= limit:
+        return text, False, original
+    return text[:limit] + f"\n\n…[truncated {original - limit} chars]", True, original
+
+
+def _block_to_text(block) -> str:
+    """Best-effort serialization of a tool_use input or tool_result content."""
+    if isinstance(block, str):
+        return block
+    if isinstance(block, (dict, list)):
+        try:
+            return json.dumps(block, default=str, ensure_ascii=False)
+        except Exception:
+            return str(block)
+    return str(block)
 
 
 async def _load_conversation_history(session_id: str) -> list[dict]:
@@ -108,10 +138,16 @@ async def run_agent(
     agent_type: str | None = None,
     depth: int = 0,
     agent_models: dict | None = None,
+    agent_id: str = "root",
+    parent_agent_id: str | None = None,
 ):
     """Run an agent. agent_type maps to a YAML in agents/. Falls back to stage name.
 
     agent_models is a per-agent model override map: {"eda": "claude-haiku-4-5", ...}
+
+    agent_id uniquely identifies this run inside the session. The top-level
+    caller passes "root"; nested calls from delegate_task pass a fresh uuid
+    fragment so messages produced by each agent can be filtered later.
     """
 
     # Resolve agent_type: explicit param > stage name > "orchestrator" for general use
@@ -126,6 +162,23 @@ async def run_agent(
         }
         agent_type = stage_to_agent.get(stage, stage)
 
+    agent_meta = {
+        "agent_id": agent_id,
+        "agent_type": agent_type,
+        "parent_agent_id": parent_agent_id,
+        "depth": depth,
+    }
+
+    async def _publish(event_type: str, data: dict, role: str | None = None, publish: bool = True):
+        await save_and_publish(
+            session_id,
+            event_type,
+            data,
+            role=role,
+            publish=publish,
+            agent_meta=agent_meta,
+        )
+
     collected_text = ""
 
     try:
@@ -139,13 +192,27 @@ async def run_agent(
             prev_context=prev_context,
         )
 
+        # Inject the wall-clock time so the agent can compare its "now" against
+        # message timestamps when inspecting another agent's context.
+        now_iso = datetime.now(timezone.utc).isoformat()
+        system_prompt += (
+            f"\n\n## Runtime context\n"
+            f"- Current time (UTC): {now_iso}\n"
+            f"- Your agent_id: {agent_id}\n"
+            f"- Your agent_type: {agent_type}\n"
+            f"- Your depth: {depth}\n"
+            + (f"- Parent agent_id: {parent_agent_id}\n" if parent_agent_id else "")
+            + "- Every message in this session is timestamped (created_at). When you call "
+              "inspect_agent_context, each block carries its created_at so you can tell what "
+              "is recent vs. stale relative to the time above."
+        )
+
         if user_prompt:
             prompt = user_prompt
         else:
             prompt = get_agent_opener(agent_type)
 
-        await save_and_publish(
-            session_id,
+        await _publish(
             "state_change",
             {"state": f"{stage}_running", "agent_type": agent_type},
             role="system",
@@ -181,6 +248,8 @@ async def run_agent(
             instructions=instructions,
             model=model,
             agent_models=agent_models or {},
+            agent_id=agent_id,
+            parent_agent_id=parent_agent_id,
         )
 
         # Build tool list from agent config
@@ -207,8 +276,10 @@ async def run_agent(
         )
 
         logger.info(
-            "Starting agent=%s stage=%s session=%s model=%s depth=%d tools=%s",
+            "Starting agent=%s id=%s parent=%s stage=%s session=%s model=%s depth=%d tools=%s",
             agent_type,
+            agent_id,
+            parent_agent_id,
             stage,
             session_id,
             model,
@@ -220,18 +291,90 @@ async def run_agent(
             async for message in query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
                     for block in message.content:
-                        if hasattr(block, "text") and block.text:
-                            collected_text += block.text
-                            # Publish each text block as a single message —
-                            # the frontend merges consecutive blocks into one
-                            # bubble until a tool call breaks the run.
-                            await save_and_publish(
-                                session_id,
+                        # 1) Plain text — keep the existing agent_message stream
+                        #    that the frontend already renders, AND mirror it
+                        #    into the agent_thought stream so inspectors see it.
+                        if hasattr(block, "text") and getattr(block, "text", None):
+                            text = block.text
+                            collected_text += text
+                            await _publish(
                                 "agent_message",
-                                {"text": block.text},
+                                {"text": text},
                                 role="assistant",
                             )
-                            logger.info("Agent text: %s", block.text[:120])
+                            truncated_text, was_trunc, orig_bytes = _truncate(text)
+                            await _publish(
+                                "agent_thought",
+                                {
+                                    "text": truncated_text,
+                                    "block_type": "text",
+                                    "truncated": was_trunc,
+                                    "original_bytes": orig_bytes,
+                                },
+                                role="assistant",
+                                publish=False,
+                            )
+                            logger.info("Agent text: %s", text[:120])
+                            continue
+
+                        # 2) Tool use — record the tool name and (truncated) input.
+                        tool_name = getattr(block, "name", None)
+                        tool_input = getattr(block, "input", None)
+                        tool_use_id = getattr(block, "id", None)
+                        if tool_name is not None and tool_input is not None:
+                            payload_text = _block_to_text(tool_input)
+                            truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
+                            await _publish(
+                                "agent_thought",
+                                {
+                                    "text": truncated_text,
+                                    "block_type": "tool_use",
+                                    "tool_name": tool_name,
+                                    "tool_use_id": tool_use_id,
+                                    "truncated": was_trunc,
+                                    "original_bytes": orig_bytes,
+                                },
+                                role="assistant",
+                                publish=False,
+                            )
+                            logger.info("Agent tool_use: %s", tool_name)
+
+                elif isinstance(message, UserMessage):
+                    # Tool results come back framed as a UserMessage with
+                    # ToolResultBlock content. Persist a truncated copy.
+                    for block in getattr(message, "content", []) or []:
+                        tool_use_id = getattr(block, "tool_use_id", None)
+                        if tool_use_id is None:
+                            continue
+                        raw = getattr(block, "content", None)
+                        if isinstance(raw, list):
+                            parts = []
+                            for item in raw:
+                                # mcp TextContent objects expose .text; dicts use ['text']
+                                if hasattr(item, "text"):
+                                    parts.append(item.text or "")
+                                elif isinstance(item, dict):
+                                    parts.append(item.get("text", ""))
+                                else:
+                                    parts.append(str(item))
+                            payload_text = "\n".join(p for p in parts if p)
+                        else:
+                            payload_text = _block_to_text(raw)
+                        truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
+                        is_error = bool(getattr(block, "is_error", False))
+                        await _publish(
+                            "agent_thought",
+                            {
+                                "text": truncated_text,
+                                "block_type": "tool_result",
+                                "tool_use_id": tool_use_id,
+                                "is_error": is_error,
+                                "truncated": was_trunc,
+                                "original_bytes": orig_bytes,
+                            },
+                            role="user",
+                            publish=False,
+                        )
 
                 elif isinstance(message, ResultMessage):
                     logger.info("Agent %s done", agent_type)
@@ -242,8 +385,7 @@ async def run_agent(
         # Post-stage hooks: validation, S3 sync, metadata extraction
         await post_stage_hook(session_id, experiment_id, stage)
 
-        await save_and_publish(
-            session_id,
+        await _publish(
             "state_change",
             {"state": f"{stage}_done", "agent_type": agent_type},
             role="system",
@@ -256,15 +398,12 @@ async def run_agent(
             settings.agent_timeout_seconds,
             session_id,
         )
-        await save_and_publish(
-            session_id,
+        await _publish(
             "agent_error",
             {"error": f"Agent timed out after {settings.agent_timeout_seconds}s"},
             role="system",
         )
-        await save_and_publish(
-            session_id, "state_change", {"state": "failed"}, role="system"
-        )
+        await _publish("state_change", {"state": "failed"}, role="system")
 
     except asyncio.CancelledError:
         silent = session_id in _silent_aborts
@@ -276,29 +415,25 @@ async def run_agent(
             silent,
         )
         if not silent:
-            await save_and_publish(
-                session_id,
+            await _publish(
                 "agent_aborted",
                 {"reason": "user_cancelled", "stage": stage},
                 role="system",
             )
-            await save_and_publish(
-                session_id, "state_change", {"state": "cancelled"}, role="system"
-            )
+            await _publish("state_change", {"state": "cancelled"}, role="system")
 
     except Exception as e:
         logger.exception("Error in agent %s for session %s", agent_type, session_id)
-        await save_and_publish(
-            session_id, "agent_error", {"error": str(e)}, role="system"
-        )
-        await save_and_publish(
-            session_id, "state_change", {"state": "failed"}, role="system"
-        )
+        await _publish("agent_error", {"error": str(e)}, role="system")
+        await _publish("state_change", {"state": "failed"}, role="system")
         raise
 
     finally:
-        from .tasks import cleanup_session
+        # Only clean up session-wide state when the root run finishes — sub-agents
+        # share the same session and would otherwise wipe each other out.
+        if depth == 0:
+            from .tasks import cleanup_session
 
-        cleanup_session(session_id)
+            cleanup_session(session_id)
 
     return collected_text

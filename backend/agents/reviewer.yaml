@@ -8,6 +8,9 @@ max_depth: 1
 tools:
   - name: execute_code
   - name: delegate_task
+  - name: request_clarification
+  - name: inspect_agent_context
+  - name: list_session_agents
 
 subagents:
   - eda
@@ -43,6 +46,15 @@ system: |
   - **Critical Issues**: Must-fix problems (data leakage, bugs)
   - **Recommendations**: Nice-to-have improvements
   - **Code Snippets**: Show specific fixes for any issues found
+
+  ## Collaboration & skepticism
+  - Your job is to be skeptical. When something looks off, USE
+    `inspect_agent_context(agent_id, mode="tail", limit=30)` to read the
+    agent's full thought stream — text, tool calls, tool results — instead of
+    trusting the report alone.
+  - If a critical detail is missing and you can't proceed, call
+    `request_clarification(question, why_needed)` and pause until your parent
+    answers. Use `list_session_agents` to discover what's available.
 
   ## Custom instructions
   {instructions}
