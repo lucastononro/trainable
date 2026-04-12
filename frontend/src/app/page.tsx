@@ -2171,15 +2171,14 @@ function renderChatItem(item: ChatItem, streamingItemId?: string | null) {
       const agentColor = agentMeta ? AGENT_COLORS[agentMeta.color] : null;
       const avatarBg = agentColor ? agentColor.bg : 'bg-emerald-500/20';
       const avatarText = agentColor ? agentColor.text : 'text-emerald-400';
-      const borderClass = agentColor ? agentColor.border : 'border-surface-border';
       const isStreaming = item.id === streamingItemId;
 
       return (
         <div key={item.id} className="flex gap-3 animate-fade-in">
-          <div className={`w-7 h-7 rounded-full ${avatarBg} flex items-center justify-center shrink-0 mt-0.5`}>
+          <div className={`w-7 h-7 rounded-full ${avatarBg} flex items-center justify-center shrink-0 mt-1`}>
             <Bot className={`w-3.5 h-3.5 ${avatarText}`} />
           </div>
-          <div className={`max-w-[85%] px-4 py-2.5 rounded-2xl rounded-bl-md bg-surface-elevated border ${borderClass} text-sm text-gray-200 markdown-content`}>
+          <div className="flex-1 min-w-0 text-sm text-gray-200 markdown-content">
             {agentMeta && (
               <div className={`text-[10px] ${avatarText} font-medium mb-1`}>{agentMeta.label}</div>
             )}
