@@ -105,6 +105,13 @@ export default function Sidebar() {
           </>
         ) : (
           <div className="flex flex-col items-center gap-1 w-full">
+            <a
+              href="/"
+              className="p-1.5 flex items-center justify-center"
+              title="Trainable"
+            >
+              <img src="/logo-brain.png" alt="Trainable" className="h-5 w-auto" />
+            </a>
             <button
               onClick={() => setSidebarOpen(true)}
               className="p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors text-gray-500 hover:text-gray-300"
@@ -126,7 +133,7 @@ export default function Sidebar() {
 
       {/* Experiment list */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-1.5 space-y-0.5">
-        {sidebarOpen ? (
+        {sidebarOpen && (
           <>
             {experiments.length === 0 && !creating && (
               <div className="px-3 py-8 text-center">
@@ -167,27 +174,6 @@ export default function Sidebar() {
               );
             })}
           </>
-        ) : (
-          /* Collapsed: icon-only experiment dots */
-          <div className="flex flex-col items-center gap-1 pt-1">
-            {experiments.slice(0, 12).map((exp) => {
-              const isActive = exp.id === activeExperimentId;
-              return (
-                <button
-                  key={exp.id}
-                  onClick={() => setActiveExperiment(exp.id, exp.latest_session_id)}
-                  className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
-                    isActive
-                      ? 'bg-white/[0.1] ring-1 ring-white/[0.15]'
-                      : 'hover:bg-white/[0.06]'
-                  }`}
-                  title={exp.name}
-                >
-                  <span className={`w-2.5 h-2.5 rounded-full ${statusDot(exp.latest_state)}`} />
-                </button>
-              );
-            })}
-          </div>
         )}
       </div>
     </div>
