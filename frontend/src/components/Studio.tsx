@@ -70,7 +70,7 @@ export default function Studio({
           <ArrowLeft className="w-4 h-4 text-gray-500" />
         </button>
         <a href="/" className="flex items-center shrink-0">
-          <img src="/logo-brain.png" alt="Trainable" className="h-6 w-auto" />
+          <img src="/logo-brain-transparent.png" alt="Trainable" className="h-6 w-auto" />
         </a>
         <div className="w-px h-4 bg-white/[0.08]" />
         <h1 className="text-sm font-medium text-gray-300 truncate">{experiment.name}</h1>

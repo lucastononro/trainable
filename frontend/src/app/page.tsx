@@ -1087,7 +1087,7 @@ export default function HomePage() {
               {/* Logo + title */}
               <div className="text-center space-y-3">
                 <div className="flex items-center justify-center gap-3">
-                  <img src="/logo-brain.png" alt="Trainable" className="h-10 w-auto" />
+                  <img src="/logo-brain-transparent.png" alt="Trainable" className="h-10 w-auto" />
                 </div>
                 <h1 className="text-2xl font-semibold text-white">What would you like to explore?</h1>
                 <p className="text-sm text-gray-500">

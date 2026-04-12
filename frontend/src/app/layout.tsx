@@ -10,7 +10,7 @@ export const metadata: Metadata = {
   title: 'Trainable',
   description: 'LLM-powered ML experimentation platform',
   icons: {
-    icon: '/logo-brain.png',
+    icon: '/logo-brain-transparent.png',
   },
 };
 

@@ -83,7 +83,7 @@ export default function Sidebar() {
         {sidebarOpen ? (
           <>
             <a href="/" className="shrink-0 ml-0.5">
-              <img src="/logo-brain.png" alt="Trainable" className="h-5 w-auto" />
+              <img src="/logo-brain-transparent.png" alt="Trainable" className="h-5 w-auto" />
             </a>
             <span className="text-sm font-semibold text-gray-300 truncate">Trainable</span>
             <div className="flex-1" />
@@ -110,7 +110,7 @@ export default function Sidebar() {
               className="p-1.5 flex items-center justify-center"
               title="Trainable"
             >
-              <img src="/logo-brain.png" alt="Trainable" className="h-5 w-auto" />
+              <img src="/logo-brain-transparent.png" alt="Trainable" className="h-5 w-auto" />
             </a>
             <button
               onClick={() => setSidebarOpen(true)}
