@@ -122,8 +122,12 @@ async def run_agent(
     model: str | None = None,
     agent_type: str | None = None,
     depth: int = 0,
+    agent_models: dict | None = None,
 ):
-    """Run an agent. agent_type maps to a YAML in agents/. Falls back to stage name."""
+    """Run an agent. agent_type maps to a YAML in agents/. Falls back to stage name.
+
+    agent_models is a per-agent model override map: {"eda": "claude-haiku-4-5", ...}
+    """
 
     # Resolve agent_type: explicit param > stage name > "orchestrator" for general use
     if not agent_type:
@@ -163,7 +167,9 @@ async def run_agent(
         )
 
         # Resolve model: explicit param > agent default > global config
-        model = model or get_agent_default_model(agent_type) or settings.claude_model
+        # Resolution order: explicit param > per-agent override > agent YAML default > global config
+        override_model = (agent_models or {}).get(agent_type)
+        model = model or override_model or get_agent_default_model(agent_type) or settings.claude_model
 
         # Load conversation history for follow-up messages
         if user_prompt:
@@ -189,6 +195,7 @@ async def run_agent(
             depth=depth,
             instructions=instructions,
             model=model,
+            agent_models=agent_models or {},
         )
 
         # Build tool list from agent config

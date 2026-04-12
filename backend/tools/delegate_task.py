@@ -18,9 +18,16 @@ def create_handler(
     current_depth: int = 0,
     gpu: str | None = None,
     parent_model: str | None = None,
+    agent_models: dict | None = None,
     **kwargs,
 ):
-    """Factory: create a delegate_task handler bound to a parent agent context."""
+    """Factory: create a delegate_task handler bound to a parent agent context.
+
+    agent_models is a per-agent model override map: {"eda": "claude-haiku-4-5", ...}
+    When the parent delegates to a sub-agent, we check this map first.
+    """
+
+    agent_models = agent_models or {}
 
     from services.agent.agents import (
         can_delegate,
@@ -65,7 +72,8 @@ def create_handler(
                 "is_error": True,
             }
 
-        sub_model = get_agent_default_model(agent_type) or parent_model
+        # Resolution order: user override > agent YAML default > parent's model
+        sub_model = agent_models.get(agent_type) or get_agent_default_model(agent_type) or parent_model
         stage = "train" if agent_type == "trainer" else agent_type
         agent_id = str(uuid.uuid4())[:8]
 
@@ -101,6 +109,7 @@ def create_handler(
                 model=sub_model,
                 agent_type=agent_type,
                 depth=next_depth,
+                agent_models=agent_models,
             )
 
             duration = round(time.time() - start, 1)

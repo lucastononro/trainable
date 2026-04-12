@@ -116,6 +116,7 @@ def build_mcp_server(
     gpu: str | None = None,
     model: str | None = None,
     instructions: str = "",
+    agent_models: dict | None = None,
 ):
     """Build an MCP server with all tools defined in the agent's YAML config.
 
@@ -137,6 +138,7 @@ def build_mcp_server(
             gpu=gpu,
             parent_model=model,
             instructions=instructions,
+            agent_models=agent_models or {},
         )
         if entry:
             tool_entries[tool_name] = entry

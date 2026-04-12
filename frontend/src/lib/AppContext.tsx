@@ -11,10 +11,13 @@ interface AppState {
   selectedModel: string;
   sidebarOpen: boolean;
   models: ModelInfo[];
+  /** Per-agent model overrides, persisted in localStorage. */
+  agentModels: Record<string, string>;
   setActiveExperiment: (id: string | null, sessionId?: string | null) => void;
   refreshExperiments: () => Promise<void>;
   setSidebarOpen: (open: boolean) => void;
   setSelectedModel: (model: string) => void;
+  setAgentModel: (agentType: string, modelId: string | null) => void;
 }
 
 const AppContext = createContext<AppState | null>(null);
@@ -30,12 +33,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [activeExperimentId, setActiveExperimentId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6');
-  const [sidebarOpen, setSidebarOpen] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    const stored = localStorage.getItem('trainable:sidebar');
-    return stored === 'true';
-  });
+  // Always start false for SSR — hydrate from localStorage in effect below
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [hydrated, setHydrated] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [agentModels, setAgentModelsState] = useState<Record<string, string>>({});
+
+  // Hydrate client-only state from localStorage on mount (prevents SSR mismatch)
+  useEffect(() => {
+    const storedSidebar = localStorage.getItem('trainable:sidebar');
+    if (storedSidebar === 'true') setSidebarOpen(true);
+    const storedAgentModels = localStorage.getItem('trainable:agent-models');
+    if (storedAgentModels) {
+      try {
+        const parsed = JSON.parse(storedAgentModels);
+        if (parsed && typeof parsed === 'object') setAgentModelsState(parsed);
+      } catch {
+        // ignore corrupt value
+      }
+    }
+    setHydrated(true);
+  }, []);
+
+  const setAgentModel = useCallback(
+    (agentType: string, modelId: string | null) => {
+      setAgentModelsState((prev) => {
+        const next = { ...prev };
+        if (modelId) {
+          next[agentType] = modelId;
+        } else {
+          delete next[agentType];
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  // Persist agent model overrides to localStorage (after hydration)
+  useEffect(() => {
+    if (hydrated && typeof window !== 'undefined') {
+      localStorage.setItem('trainable:agent-models', JSON.stringify(agentModels));
+    }
+  }, [agentModels, hydrated]);
 
   const refreshExperiments = useCallback(async () => {
     try {
@@ -52,10 +92,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [refreshExperiments]);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
+    // Only persist after hydration completes to avoid overwriting stored value
+    if (hydrated && typeof window !== 'undefined') {
       localStorage.setItem('trainable:sidebar', String(sidebarOpen));
     }
-  }, [sidebarOpen]);
+  }, [sidebarOpen, hydrated]);
 
   const setActiveExperiment = useCallback(
     (id: string | null, sessionId?: string | null) => {
@@ -81,10 +122,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         selectedModel,
         sidebarOpen,
         models,
+        agentModels,
         setActiveExperiment,
         refreshExperiments,
         setSidebarOpen,
         setSelectedModel,
+        setAgentModel,
       }}
     >
       {children}

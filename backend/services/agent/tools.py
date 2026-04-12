@@ -12,6 +12,7 @@ def create_mcp_server(
     depth: int = 0,
     instructions: str = "",
     model: str | None = None,
+    agent_models: dict | None = None,
 ):
     """Create a per-call MCP server with tools determined by the agent's YAML config."""
     # Lazy import to avoid circular dependency
@@ -26,4 +27,5 @@ def create_mcp_server(
         gpu=gpu,
         model=model,
         instructions=instructions,
+        agent_models=agent_models or {},
     )

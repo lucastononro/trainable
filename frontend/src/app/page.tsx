@@ -124,7 +124,13 @@ export default function HomePage() {
     setSidebarOpen,
     setActiveExperiment,
     refreshExperiments,
+    agentModels,
   } = useApp();
+  // Keep a ref for stable access inside async handlers/closures
+  const agentModelsRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    agentModelsRef.current = agentModels;
+  }, [agentModels]);
 
   // Chat / session state
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
@@ -242,9 +248,19 @@ export default function HomePage() {
             }
             case 'agent_token':
               setChatItems((prev) => {
-                const last = prev[prev.length - 1];
-                if (last && last.type === 'assistant' && last.id === streamingItemIdRef.current) {
-                  return [...prev.slice(0, -1), { ...last, content: last.content + data.text }];
+                const streamingId = streamingItemIdRef.current;
+                if (streamingId) {
+                  const idx = prev.findIndex(
+                    (i) => i.id === streamingId && i.type === 'assistant',
+                  );
+                  if (idx >= 0) {
+                    const updated = [...prev];
+                    updated[idx] = {
+                      ...updated[idx],
+                      content: updated[idx].content + data.text,
+                    };
+                    return updated;
+                  }
                 }
                 const newId = `${Date.now()}-${Math.random()}`;
                 streamingItemIdRef.current = newId;
@@ -814,7 +830,7 @@ export default function HomePage() {
       pendingMessageRef.current = null;
       addItem({ type: 'user', content: text });
       setIsRunning(true);
-      api.sendMessage(activeSessionId, text, true).catch((e: any) => {
+      api.sendMessage(activeSessionId, text, true, agentModelsRef.current).catch((e: any) => {
         addItem({ type: 'error', content: e.message });
         setIsRunning(false);
       });
@@ -863,7 +879,7 @@ export default function HomePage() {
     setIsRunning(true);
 
     try {
-      await api.sendMessage(activeSessionId, text, true);
+      await api.sendMessage(activeSessionId, text, true, agentModelsRef.current);
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
       setIsRunning(false);
@@ -923,7 +939,7 @@ export default function HomePage() {
           ? textToSend
           : `I've attached ${fileNames.length} file${fileNames.length > 1 ? 's' : ''}: ${fileNames.join(', ')}. What can you tell me about this data?`;
         setIsRunning(true);
-        await api.sendMessage(sesId, agentPrompt, true);
+        await api.sendMessage(sesId, agentPrompt, true, agentModelsRef.current);
       }
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
@@ -958,7 +974,12 @@ export default function HomePage() {
           // Trigger agent to look at the data
           if (sesId) {
             setIsRunning(true);
-            await api.sendMessage(sesId, `I've attached data from S3: ${s3Path}. What can you tell me about this data?`, true);
+            await api.sendMessage(
+              sesId,
+              `I've attached data from S3: ${s3Path}. What can you tell me about this data?`,
+              true,
+              agentModelsRef.current,
+            );
           }
         }
       } catch (e: any) {

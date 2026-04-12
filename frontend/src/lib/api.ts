@@ -61,10 +61,19 @@ export const api = {
 
   getSession: (id: string) => fetchJSON<SessionDetail>(`/sessions/${id}`),
 
-  sendMessage: (sessionId: string, content: string, runAgent: boolean = false) =>
+  sendMessage: (
+    sessionId: string,
+    content: string,
+    runAgent: boolean = false,
+    agentModels?: Record<string, string>,
+  ) =>
     fetchJSON<Message>(`/sessions/${sessionId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ content, run_agent: runAgent }),
+      body: JSON.stringify({
+        content,
+        run_agent: runAgent,
+        ...(agentModels && Object.keys(agentModels).length > 0 ? { agent_models: agentModels } : {}),
+      }),
     }),
 
   getMessages: (sessionId: string) => fetchJSON<Message[]>(`/sessions/${sessionId}/messages`),

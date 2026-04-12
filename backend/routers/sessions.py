@@ -109,6 +109,7 @@ async def send_message(
         )
         user_content = body.content
         selected_model = body.model or session.model
+        agent_models = body.agent_models or {}
 
         async def _run_followup():
             try:
@@ -120,6 +121,7 @@ async def send_message(
                     dataset_ref=dataset_ref,
                     user_prompt=user_content,
                     model=selected_model,
+                    agent_models=agent_models,
                 )
                 async with async_session() as fresh_db:
                     s = await fresh_db.get(SessionModel, session_id)

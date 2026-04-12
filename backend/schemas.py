@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class ExperimentCreate(BaseModel):
@@ -17,6 +17,8 @@ class MessageCreate(BaseModel):
     content: str
     run_agent: bool = False
     model: Optional[str] = None
+    # Per-agent model overrides: {"eda": "claude-haiku-4-5", "trainer": "claude-opus-4-6"}
+    agent_models: Optional[dict[str, str]] = Field(default=None)
 
 
 class StageStart(BaseModel):
