@@ -4,7 +4,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
 import { SSEEvent, FileTreeNode, MetricPoint, ChartConfig } from '@/lib/types';
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import { ImperativePanelHandle, Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import {
   Bot,
   Send,
@@ -160,6 +160,7 @@ export default function HomePage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const prevExperimentIdRef = useRef<string | null>(null);
   const streamingItemIdRef = useRef<string | null>(null);
+  const workspacePanelRef = useRef<ImperativePanelHandle>(null);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -322,7 +323,7 @@ export default function HomePage() {
             case 'report_ready':
               setCanvasContent(data.content);
               setCanvasTitle(`${(data.stage || 'EDA').toUpperCase()} Report`);
-              setCanvasOpen(true);
+              workspacePanelRef.current?.expand();
               break;
             case 'files_ready': {
               const stage = (data.stage as string) || '';
@@ -390,7 +391,7 @@ export default function HomePage() {
               }
               if (newPoints.length > 0) {
                 setMetricPoints((prev) => {
-                  if (prev.length === 0) setCanvasOpen(true);
+                  if (prev.length === 0) workspacePanelRef.current?.expand();
                   return [...prev, ...newPoints];
                 });
               }
@@ -401,7 +402,7 @@ export default function HomePage() {
               if (!metricKeysRef.current.has(key)) {
                 metricKeysRef.current.add(key);
                 setMetricPoints((prev) => {
-                  if (prev.length === 0) setCanvasOpen(true);
+                  if (prev.length === 0) workspacePanelRef.current?.expand();
                   return [
                     ...prev,
                     {
@@ -519,7 +520,7 @@ export default function HomePage() {
     setIsRunning(false);
     streamingItemIdRef.current = null;
     setSessionState('created');
-    setCanvasOpen(false);
+    workspacePanelRef.current?.collapse();
     setCanvasContent('');
     setCanvasTitle('Report');
     setGeneratedFiles([]);
@@ -708,7 +709,18 @@ export default function HomePage() {
                 );
               }
             } else if (msg.role === 'user') {
-              if (msg.metadata?.event_type === 'file_attached') continue;
+              if (msg.metadata?.event_type === 'file_attached') {
+                // Show file attachment as a user bubble with file chips
+                const attachedFileNames = (msg.metadata?.files as string[]) || [];
+                restored.push(
+                  mkItem({
+                    type: 'user',
+                    content: '',
+                    meta: { files: attachedFileNames, hidden: true },
+                  }),
+                );
+                continue;
+              }
               restored.push(mkItem({ type: 'user', content: msg.content }));
             } else if (msg.role === 'assistant') {
               restored.push(mkItem({ type: 'assistant', content: msg.content }));
@@ -735,7 +747,10 @@ export default function HomePage() {
         setChatItems(restored);
         setCanvasContent(restoredCanvasContent);
         setCanvasTitle(restoredCanvasTitle);
-        setCanvasOpen(restoredCanvasOpen);
+        if (restoredCanvasOpen) {
+          // Delay expand to next tick so panel ref is mounted
+          setTimeout(() => workspacePanelRef.current?.expand(), 0);
+        }
         setGeneratedFiles(restoredFiles);
 
         // Build file tree from restored files
@@ -756,7 +771,7 @@ export default function HomePage() {
           .then((metrics) => {
             if (!cancelled && metrics.length > 0) {
               setMetricPoints(metrics);
-              setCanvasOpen(true);
+              workspacePanelRef.current?.expand();
               for (const m of metrics) {
                 metricKeysRef.current.add(`${m.step}:${m.name}:${m.run_tag || ''}`);
               }
@@ -866,6 +881,12 @@ export default function HomePage() {
     if (attachedFiles.length === 0 && !input.trim()) return;
     setAttachingFiles(true);
 
+    const filesToSend = [...attachedFiles];
+    const textToSend = input.trim();
+    const fileNames = filesToSend.map((f) => f.name);
+    setAttachedFiles([]);
+    setInput('');
+
     try {
       let expId = activeExperimentId;
       let sesId = activeSessionId;
@@ -879,24 +900,26 @@ export default function HomePage() {
         sesId = result.session_id;
       }
 
-      // Upload files if any
-      if (attachedFiles.length > 0 && expId) {
-        await api.attachData(expId, attachedFiles, undefined, sesId || undefined);
+      // Show the user message bubble with files + text
+      addItem({
+        type: 'user',
+        content: textToSend,
+        meta: { files: fileNames },
+      });
+
+      // Upload files (backend saves a hidden file_attached message for the agent)
+      if (filesToSend.length > 0 && expId) {
+        await api.attachData(expId, filesToSend, undefined, sesId || undefined);
         await refreshExperiments();
-        addItem({
-          type: 'status',
-          content: `Attached ${attachedFiles.length} file${attachedFiles.length > 1 ? 's' : ''}`,
-        });
-        setAttachedFiles([]);
       }
 
-      // Send message if any
-      if (input.trim() && sesId) {
-        const text = input.trim();
-        setInput('');
-        addItem({ type: 'user', content: text });
+      // Send the user's text (or a prompt about the files) and trigger the agent
+      if (sesId) {
+        const agentPrompt = textToSend
+          ? textToSend
+          : `I've attached ${fileNames.length} file${fileNames.length > 1 ? 's' : ''}: ${fileNames.join(', ')}. What can you tell me about this data?`;
         setIsRunning(true);
-        await api.sendMessage(sesId, text, true);
+        await api.sendMessage(sesId, agentPrompt, true);
       }
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
@@ -911,16 +934,28 @@ export default function HomePage() {
       setAttachingFiles(true);
       try {
         let expId = activeExperimentId;
-        if (!expId) {
+        let sesId = activeSessionId;
+        if (!expId || !sesId) {
           const result = await api.quickCreate();
           await refreshExperiments();
           setActiveExperiment(result.id, result.session_id);
           expId = result.id;
+          sesId = result.session_id;
         }
         if (expId) {
-          await api.attachData(expId, undefined, s3Path, activeSessionId || undefined);
+          const s3Name = s3Path.split('/').pop() || s3Path;
+          addItem({
+            type: 'user',
+            content: '',
+            meta: { files: [s3Name], s3: true },
+          });
+          await api.attachData(expId, undefined, s3Path, sesId || undefined);
           await refreshExperiments();
-          addItem({ type: 'status', content: `Attached S3 data: ${s3Path}` });
+          // Trigger agent to look at the data
+          if (sesId) {
+            setIsRunning(true);
+            await api.sendMessage(sesId, `I've attached data from S3: ${s3Path}. What can you tell me about this data?`, true);
+          }
         }
       } catch (e: any) {
         addItem({ type: 'error', content: e.message });
@@ -928,7 +963,7 @@ export default function HomePage() {
         setAttachingFiles(false);
       }
     },
-    [activeExperimentId, refreshExperiments, setActiveExperiment, addItem],
+    [activeExperimentId, activeSessionId, refreshExperiments, setActiveExperiment, addItem],
   );
 
   // Close attach menu on outside click
@@ -981,7 +1016,7 @@ export default function HomePage() {
             <>
               <button
                 onClick={() => {
-                  setCanvasOpen(true);
+                  workspacePanelRef.current?.expand();
                   window.dispatchEvent(new CustomEvent('trainable:open-metrics-tab'));
                 }}
                 className={`p-1.5 rounded-lg transition-colors relative ${
@@ -997,7 +1032,7 @@ export default function HomePage() {
                 )}
               </button>
               <button
-                onClick={() => setCanvasOpen((prev) => !prev)}
+                onClick={() => canvasOpen ? workspacePanelRef.current?.collapse() : workspacePanelRef.current?.expand()}
                 className={`p-1.5 rounded-lg transition-colors ${
                   canvasOpen
                     ? 'bg-primary-600/20 text-primary-400'
@@ -1163,7 +1198,7 @@ export default function HomePage() {
           // -------------------------------------------------------------------
           // Studio view: chat + workspace
           // -------------------------------------------------------------------
-          <PanelGroup direction="horizontal" className="flex-1">
+          <PanelGroup direction="horizontal" className="flex-1" autoSaveId="trainable-layout">
             {/* Chat panel */}
             <Panel defaultSize={canvasOpen ? 25 : 100} minSize={15}>
               <div className="h-full flex flex-col min-w-0">
@@ -1171,7 +1206,7 @@ export default function HomePage() {
                   <div
                     className={`mx-auto w-full space-y-4 ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}
                   >
-                    {chatItems.map((item) => renderChatItem(item, streamingItemIdRef.current))}
+                    {renderGroupedChatItems(chatItems, streamingItemIdRef.current)}
 
                     {isRunning && !streamingItemIdRef.current && (() => {
                       const last = chatItems[chatItems.length - 1];
@@ -1314,29 +1349,37 @@ export default function HomePage() {
             </Panel>
 
             {/* Resize handle + Workspace sidebar */}
-            {canvasOpen && (
-              <>
-                <PanelResizeHandle className="w-1.5 bg-surface-border hover:bg-primary-500/50 active:bg-primary-500/70 transition-colors relative group flex items-center justify-center">
-                  <div className="opacity-0 group-hover:opacity-100 transition-opacity">
-                    <GripVertical className="w-3 h-3 text-gray-400" />
-                  </div>
-                </PanelResizeHandle>
-                <Panel defaultSize={75} minSize={30}>
-                  <WorkspaceSidebar
-                    experimentId={activeExperimentId}
-                    sessionId={activeSessionId}
-                    canvasContent={canvasContent}
-                    canvasTitle={canvasTitle}
-                    generatedFiles={generatedFiles}
-                    fileTree={fileTree}
-                    metricPoints={metricPoints}
-                    chartConfig={chartConfig}
-                    sessionState={sessionState}
-                    onClose={() => setCanvasOpen(false)}
-                  />
-                </Panel>
-              </>
-            )}
+            <PanelResizeHandle className={`w-1.5 transition-colors relative group flex items-center justify-center ${canvasOpen ? 'bg-surface-border hover:bg-primary-500/50 active:bg-primary-500/70' : 'bg-transparent pointer-events-none'}`}>
+              {canvasOpen && (
+                <div className="opacity-0 group-hover:opacity-100 transition-opacity">
+                  <GripVertical className="w-3 h-3 text-gray-400" />
+                </div>
+              )}
+            </PanelResizeHandle>
+            <Panel
+              ref={workspacePanelRef}
+              defaultSize={canvasOpen ? 75 : 0}
+              minSize={20}
+              collapsible
+              collapsedSize={0}
+              onCollapse={() => setCanvasOpen(false)}
+              onExpand={() => setCanvasOpen(true)}
+            >
+              {canvasOpen && (
+                <WorkspaceSidebar
+                  experimentId={activeExperimentId}
+                  sessionId={activeSessionId}
+                  canvasContent={canvasContent}
+                  canvasTitle={canvasTitle}
+                  generatedFiles={generatedFiles}
+                  fileTree={fileTree}
+                  metricPoints={metricPoints}
+                  chartConfig={chartConfig}
+                  sessionState={sessionState}
+                  onClose={() => workspacePanelRef.current?.collapse()}
+                />
+              )}
+            </Panel>
           </PanelGroup>
         )}
       </div>
@@ -1959,10 +2002,69 @@ function useFunVerb(isAnimating: boolean) {
 }
 
 // ---------------------------------------------------------------------------
+// ToolGroupCard -- groups consecutive tool executions into a single card
+// ---------------------------------------------------------------------------
+
+function ToolGroupCard({ items }: { items: ChatItem[] }) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Check if any tool in the group is still running
+  const hasRunning = items.some((i) => i.type === 'tool_start');
+  const toolItems = items.filter((i) => i.type === 'tool_start' || i.type === 'tool_end');
+  const count = toolItems.length;
+  const totalDuration = toolItems.reduce(
+    (sum, i) => sum + (i.type === 'tool_end' ? (i.meta?.duration || 0) : 0),
+    0,
+  );
+
+  // If only 1 tool, render it directly without group wrapper
+  if (count === 1) {
+    return <CollapsibleToolCard item={toolItems[0]} />;
+  }
+
+  return (
+    <div className="flex gap-3 animate-fade-in">
+      <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-amber-500/20">
+        <Code2 className="w-3.5 h-3.5 text-amber-400" />
+      </div>
+      <div className="flex-1 min-w-0 rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border overflow-hidden">
+        <div
+          className="flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none"
+          onClick={() => setExpanded((prev) => !prev)}
+        >
+          {hasRunning ? (
+            <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+          ) : (
+            <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />
+          )}
+          <span className="text-sm text-gray-300 flex-1">
+            {hasRunning
+              ? `Running ${count} steps...`
+              : `Ran ${count} steps${totalDuration > 0 ? ` in ${totalDuration}s` : ''}`}
+          </span>
+          <ChevronRight
+            className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-150 ${
+              expanded ? 'rotate-90' : ''
+            }`}
+          />
+        </div>
+        {expanded && (
+          <div className="border-t border-surface-border px-2 py-2 space-y-1">
+            {toolItems.map((item) => (
+              <CollapsibleToolCard key={item.id} item={item} inline />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // CollapsibleToolCard -- amber themed tool execution card
 // ---------------------------------------------------------------------------
 
-function CollapsibleToolCard({ item }: { item: ChatItem }) {
+function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolean }) {
   const isStart = item.type === 'tool_start';
   const [collapsed, setCollapsed] = useState(true);
   const funVerb = useFunVerb(isStart);
@@ -1978,65 +2080,71 @@ function CollapsibleToolCard({ item }: { item: ChatItem }) {
     return () => clearInterval(id);
   }, [isStart, item.timestamp]);
 
+  const card = (
+    <div className={`${inline ? '' : 'max-w-[85%] '}rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border overflow-hidden`}>
+      <div
+        className={`flex items-center gap-2 ${inline ? 'px-3 py-1.5' : 'px-4 py-2.5'} cursor-pointer select-none`}
+        onClick={() => setCollapsed((prev) => !prev)}
+      >
+        {isStart ? (
+          <Loader2 className={`${inline ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-amber-400 animate-spin`} />
+        ) : (
+          <CheckCircle2 className={`${inline ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-green-400`} />
+        )}
+        <span className={`${inline ? 'text-xs' : 'text-sm'} text-gray-300 flex-1`}>
+          {isStart
+            ? `${funVerb}...${elapsed > 0 ? ` ${elapsed}s` : ''}`
+            : `${doneLabel} for ${item.meta?.duration || 1}s`}
+        </span>
+        <ChevronRight
+          className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-150 ${
+            !collapsed ? 'rotate-90' : ''
+          }`}
+        />
+      </div>
+      {!collapsed && (
+        <>
+          {item.meta?.code && (
+            <pre className="px-4 py-2 text-xs text-gray-400 font-mono max-h-24 overflow-y-auto border-t border-surface-border whitespace-pre-wrap">
+              {item.meta.code.length > 300
+                ? item.meta.code.slice(0, 300) + '...'
+                : item.meta.code}
+            </pre>
+          )}
+          {item.meta?.outputs?.length > 0 && (
+            <div className="px-4 py-2 border-t border-surface-border max-h-32 overflow-y-auto">
+              {item.meta.outputs.map((o: { text: string; stream: string }, i: number) => (
+                <pre
+                  key={i}
+                  className={`text-xs font-mono whitespace-pre-wrap break-all ${
+                    o.stream === 'stderr' ? 'text-red-400/70' : 'text-gray-500'
+                  }`}
+                >
+                  {o.text}
+                </pre>
+              ))}
+            </div>
+          )}
+          {item.meta?.output && (
+            <pre className="px-4 py-2 text-xs text-green-400/80 font-mono max-h-32 overflow-y-auto border-t border-surface-border whitespace-pre-wrap">
+              {item.meta.output.length > 500
+                ? item.meta.output.slice(0, 500) + '...'
+                : item.meta.output}
+            </pre>
+          )}
+        </>
+      )}
+    </div>
+  );
+
+  if (inline) return card;
+
   return (
     <div className="flex gap-3 animate-fade-in">
       <div className="w-7 h-7 rounded-full flex items-center justify-center shrink-0 mt-0.5 bg-amber-500/20">
         <Code2 className="w-3.5 h-3.5 text-amber-400" />
       </div>
-      <div className="max-w-[85%] rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border overflow-hidden">
-        <div
-          className="flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none"
-          onClick={() => setCollapsed((prev) => !prev)}
-        >
-          {isStart ? (
-            <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
-          ) : (
-            <CheckCircle2 className="w-3.5 h-3.5 text-green-400" />
-          )}
-          <span className="text-sm text-gray-300 flex-1">
-            {isStart
-              ? `${funVerb}...${elapsed > 0 ? ` ${elapsed}s` : ''}`
-              : `${doneLabel} for ${item.meta?.duration || 1}s`}
-          </span>
-          <ChevronRight
-            className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-150 ${
-              !collapsed ? 'rotate-90' : ''
-            }`}
-          />
-        </div>
-        {!collapsed && (
-          <>
-            {item.meta?.code && (
-              <pre className="px-4 py-2 text-xs text-gray-400 font-mono max-h-24 overflow-y-auto border-t border-surface-border whitespace-pre-wrap">
-                {item.meta.code.length > 300
-                  ? item.meta.code.slice(0, 300) + '...'
-                  : item.meta.code}
-              </pre>
-            )}
-            {item.meta?.outputs?.length > 0 && (
-              <div className="px-4 py-2 border-t border-surface-border max-h-32 overflow-y-auto">
-                {item.meta.outputs.map((o: { text: string; stream: string }, i: number) => (
-                  <pre
-                    key={i}
-                    className={`text-xs font-mono whitespace-pre-wrap break-all ${
-                      o.stream === 'stderr' ? 'text-red-400/70' : 'text-gray-500'
-                    }`}
-                  >
-                    {o.text}
-                  </pre>
-                ))}
-              </div>
-            )}
-            {item.meta?.output && (
-              <pre className="px-4 py-2 text-xs text-green-400/80 font-mono max-h-32 overflow-y-auto border-t border-surface-border whitespace-pre-wrap">
-                {item.meta.output.length > 500
-                  ? item.meta.output.slice(0, 500) + '...'
-                  : item.meta.output}
-              </pre>
-            )}
-          </>
-        )}
-      </div>
+      {card}
     </div>
   );
 }
@@ -2151,19 +2259,67 @@ function SubAgentCard({ item }: { item: ChatItem }) {
 }
 
 // ---------------------------------------------------------------------------
+// renderGroupedChatItems — groups consecutive tool items together
+// ---------------------------------------------------------------------------
+
+function isToolItem(item: ChatItem) {
+  return item.type === 'tool_start' || item.type === 'tool_end' || item.type === 'code_output';
+}
+
+function renderGroupedChatItems(items: ChatItem[], streamingItemId?: string | null) {
+  const result: React.ReactNode[] = [];
+  let i = 0;
+
+  while (i < items.length) {
+    if (isToolItem(items[i])) {
+      // Collect consecutive tool items into a group
+      const group: ChatItem[] = [];
+      while (i < items.length && isToolItem(items[i])) {
+        group.push(items[i]);
+        i++;
+      }
+      result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
+    } else {
+      result.push(renderChatItem(items[i], streamingItemId));
+      i++;
+    }
+  }
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
 // renderChatItem
 // ---------------------------------------------------------------------------
 
 function renderChatItem(item: ChatItem, streamingItemId?: string | null) {
   switch (item.type) {
-    case 'user':
+    case 'user': {
+      const files: string[] = item.meta?.files || [];
+      const hasText = item.content && item.content.trim().length > 0;
+      const hasFiles = files.length > 0;
       return (
         <div key={item.id} className="flex justify-end animate-fade-in">
-          <div className="max-w-[80%] px-4 py-2.5 rounded-2xl rounded-br-md bg-primary-600 text-white text-sm">
-            {item.content}
+          <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary-600 text-white text-sm overflow-hidden">
+            {hasFiles && (
+              <div className={`flex flex-wrap gap-1.5 px-4 ${hasText ? 'pt-3 pb-1' : 'py-3'}`}>
+                {files.map((f, i) => (
+                  <span
+                    key={i}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/15 text-xs"
+                  >
+                    <Paperclip className="w-3 h-3 opacity-70" />
+                    <span className="truncate max-w-[150px]">{f}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+            {hasText && <div className="px-4 py-2.5">{item.content}</div>}
+            {!hasText && !hasFiles && <div className="px-4 py-2.5">{item.content}</div>}
           </div>
         </div>
       );
+    }
     case 'assistant': {
       // Color the avatar based on which agent produced this message
       const agentType = item.meta?.agent_type;
