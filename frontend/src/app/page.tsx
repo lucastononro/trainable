@@ -239,14 +239,11 @@ export default function HomePage() {
                 }
               }
               break;
+            case 'agent_token':
             case 'agent_message': {
               // Tag message with the currently active agent type
               const running = activeAgentsRef.current.filter(a => a.status === 'running');
               const currentAgentType = running.length > 0 ? running[running.length - 1].type : undefined;
-              addItem({ type: 'assistant', content: data.text, meta: { agent_type: currentAgentType } });
-              break;
-            }
-            case 'agent_token':
               setChatItems((prev) => {
                 const streamingId = streamingItemIdRef.current;
                 if (streamingId) {
@@ -271,10 +268,12 @@ export default function HomePage() {
                     type: 'assistant',
                     content: data.text,
                     timestamp: Date.now(),
+                    meta: currentAgentType ? { agent_type: currentAgentType } : undefined,
                   },
                 ];
               });
               break;
+            }
             case 'tool_start':
               streamingItemIdRef.current = null;
               addItem({ type: 'tool_start', content: data.tool, meta: data.input });

@@ -24,26 +24,11 @@ from .agents import (
     get_agent_tools,
     render_agent_system_prompt,
 )
-from services.broadcaster import broadcaster
-
 from .events import post_stage_hook, publish_artifacts, save_and_publish
 from .tasks import _silent_aborts
 from .tools import create_mcp_server
 
 logger = logging.getLogger(__name__)
-
-_TOKEN_CHUNK_SIZE = 12
-_TOKEN_DELAY = 0.012  # seconds between chunks
-
-
-async def _stream_text(session_id: str, text: str):
-    """Publish text as small agent_token chunks to simulate streaming."""
-    for i in range(0, len(text), _TOKEN_CHUNK_SIZE):
-        chunk = text[i : i + _TOKEN_CHUNK_SIZE]
-        await broadcaster.publish(
-            session_id, {"type": "agent_token", "data": {"text": chunk}}
-        )
-        await asyncio.sleep(_TOKEN_DELAY)
 
 
 async def _load_conversation_history(session_id: str) -> list[dict]:
@@ -237,15 +222,14 @@ async def run_agent(
                     for block in message.content:
                         if hasattr(block, "text") and block.text:
                             collected_text += block.text
-                            # Stream tokens via SSE
-                            await _stream_text(session_id, block.text)
-                            # Save complete text to DB only (no SSE)
+                            # Publish each text block as a single message —
+                            # the frontend merges consecutive blocks into one
+                            # bubble until a tool call breaks the run.
                             await save_and_publish(
                                 session_id,
                                 "agent_message",
                                 {"text": block.text},
                                 role="assistant",
-                                publish=False,
                             )
                             logger.info("Agent text: %s", block.text[:120])
 
