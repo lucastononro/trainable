@@ -227,8 +227,10 @@ export default function HomePage() {
                 setActiveAgents([]);
               }
               if (data.state.endsWith('_done')) {
-                const stageName = data.state.replace('_done', '').toUpperCase();
-                addItem({ type: 'stage_complete', content: stageName });
+                const stageName = data.state.replace('_done', '');
+                if (stageName !== 'chat') {
+                  addItem({ type: 'stage_complete', content: stageName.toUpperCase() });
+                }
               }
               break;
             case 'agent_message': {
@@ -659,10 +661,12 @@ export default function HomePage() {
             } else if (eventType === 'state_change') {
               const st = msg.metadata?.state as string;
               if (st?.endsWith('_done')) {
-                const stageName = st.replace('_done', '').toUpperCase();
-                restored.push(
-                  mkItem({ type: 'stage_complete', content: stageName }),
-                );
+                const stageName = st.replace('_done', '');
+                if (stageName !== 'chat') {
+                  restored.push(
+                    mkItem({ type: 'stage_complete', content: stageName.toUpperCase() }),
+                  );
+                }
               }
             } else if (eventType === 'agent_error') {
               restored.push(
