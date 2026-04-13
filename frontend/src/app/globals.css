@@ -141,3 +141,15 @@ body {
 .markdown-content hr {
   @apply border-white/[0.08] my-6;
 }
+
+/* Smooth collapse/expand for react-resizable-panels.
+   Animates `flex` on programmatic open/close, but disables the transition
+   while the user is actively dragging the resize handle. */
+[data-panel] {
+  transition: flex 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: flex;
+}
+[data-panel-group]:has([data-resize-handle-state='drag']) [data-panel],
+[data-panel-group]:has([data-resize-handle-active]) [data-panel] {
+  transition: none;
+}
