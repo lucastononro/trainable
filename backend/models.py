@@ -25,16 +25,49 @@ class SessionState(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class Project(Base):
+    __tablename__ = "projects"
+
+    id = Column(String(36), primary_key=True)
+    name = Column(String(255), nullable=False, default="New project")
+    description = Column(Text, default="")
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+    updated_at = Column(String, default=lambda: utcnow().isoformat())
+
+    experiments = relationship(
+        "Experiment",
+        back_populates="project",
+        cascade="all, delete-orphan",
+        lazy="raise",
+    )
+
+    def to_dict(self, experiment_count: int = 0):
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description or "",
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+            "experiment_count": experiment_count,
+            # Placeholders for Phase B/C — populated once those tables exist.
+            "dataset_count": 0,
+            "model_count": 0,
+        }
+
+
 class Experiment(Base):
     __tablename__ = "experiments"
 
     id = Column(String(36), primary_key=True)
+    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False)
     name = Column(String(255), nullable=False)
     description = Column(Text, default="")
     dataset_ref = Column(String(512), nullable=False)
     instructions = Column(Text, default="")
     created_at = Column(String, default=lambda: utcnow().isoformat())
+    updated_at = Column(String, default=lambda: utcnow().isoformat())
 
+    project = relationship("Project", back_populates="experiments")
     sessions = relationship(
         "Session",
         back_populates="experiment",
@@ -49,11 +82,13 @@ class Experiment(Base):
         latest_session = latest[-1] if latest else None
         return {
             "id": self.id,
+            "project_id": self.project_id,
             "name": self.name,
             "description": self.description or "",
             "dataset_ref": self.dataset_ref,
             "instructions": self.instructions or "",
             "created_at": self.created_at,
+            "updated_at": self.updated_at,
             "latest_session_id": latest_session.id if latest_session else None,
             "latest_state": latest_session.state if latest_session else None,
         }

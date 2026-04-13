@@ -96,12 +96,18 @@ def render_agent_system_prompt(
     session_id: str,
     instructions: str = "",
     prev_context: str = "(No previous context available)",
+    project_id: str = "",
+    project_name: str = "",
+    project_files: str = "(no data uploaded yet)",
 ) -> str:
     """Load an agent's system prompt template and fill in placeholders."""
     template = get_agent_system_prompt(agent_type)
     return (
         template.replace("{experiment_id}", experiment_id)
         .replace("{session_id}", session_id)
+        .replace("{project_id}", project_id)
+        .replace("{project_name}", project_name)
+        .replace("{project_files}", project_files)
         .replace("{instructions}", instructions or "No specific instructions.")
         .replace("{prev_context}", prev_context)
     )

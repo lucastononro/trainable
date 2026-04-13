@@ -2,9 +2,11 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { api } from './api';
-import type { Experiment, ModelInfo } from './types';
+import type { Experiment, ModelInfo, Project } from './types';
 
 interface AppState {
+  projects: Project[];
+  activeProjectId: string | null;
   experiments: Experiment[];
   activeExperimentId: string | null;
   activeSessionId: string | null;
@@ -13,14 +15,18 @@ interface AppState {
   models: ModelInfo[];
   /** Per-agent model overrides, persisted in localStorage. */
   agentModels: Record<string, string>;
+  refreshProjects: () => Promise<Project[]>;
+  setActiveProject: (id: string | null) => void;
   setActiveExperiment: (id: string | null, sessionId?: string | null) => void;
-  refreshExperiments: () => Promise<void>;
+  refreshExperiments: () => Promise<Experiment[]>;
   setSidebarOpen: (open: boolean) => void;
   setSelectedModel: (model: string) => void;
   setAgentModel: (agentType: string, modelId: string | null) => void;
 }
 
 const AppContext = createContext<AppState | null>(null);
+
+const ACTIVE_PROJECT_STORAGE_KEY = 'trainable:activeProject';
 
 export function useApp(): AppState {
   const ctx = useContext(AppContext);
@@ -29,6 +35,8 @@ export function useApp(): AppState {
 }
 
 export function AppProvider({ children }: { children: ReactNode }) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [activeProjectId, setActiveProjectIdState] = useState<string | null>(null);
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [activeExperimentId, setActiveExperimentId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
@@ -52,6 +60,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         // ignore corrupt value
       }
     }
+    const storedProject = localStorage.getItem(ACTIVE_PROJECT_STORAGE_KEY);
+    if (storedProject) setActiveProjectIdState(storedProject);
     setHydrated(true);
   }, []);
 
@@ -77,19 +87,39 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [agentModels, hydrated]);
 
+  const refreshProjects = useCallback(async () => {
+    try {
+      const list = await api.listProjects();
+      setProjects(list);
+      return list;
+    } catch {
+      return [];
+    }
+  }, []);
+
   const refreshExperiments = useCallback(async () => {
     try {
       const list = await api.listExperiments();
       setExperiments(list);
+      return list;
     } catch {
-      // silent
+      return [];
     }
   }, []);
 
+  // Initial load: projects + experiments + models.
   useEffect(() => {
-    refreshExperiments();
+    (async () => {
+      const list = await refreshProjects();
+      await refreshExperiments();
+      // If the persisted active project no longer exists, clear it.
+      setActiveProjectIdState((prev) => {
+        if (prev && list.some((p) => p.id === prev)) return prev;
+        return null;
+      });
+    })();
     api.listModels().then(setModels).catch(() => {});
-  }, [refreshExperiments]);
+  }, [refreshProjects, refreshExperiments]);
 
   useEffect(() => {
     // Only persist after hydration completes to avoid overwriting stored value
@@ -97,6 +127,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
       localStorage.setItem('trainable:sidebar', String(sidebarOpen));
     }
   }, [sidebarOpen, hydrated]);
+
+  useEffect(() => {
+    if (hydrated && typeof window !== 'undefined') {
+      if (activeProjectId) {
+        localStorage.setItem(ACTIVE_PROJECT_STORAGE_KEY, activeProjectId);
+      } else {
+        localStorage.removeItem(ACTIVE_PROJECT_STORAGE_KEY);
+      }
+    }
+  }, [activeProjectId, hydrated]);
+
+  const setActiveProject = useCallback(
+    (id: string | null) => {
+      setActiveProjectIdState(id);
+      // Clear active experiment/session if they no longer belong to this project.
+      setActiveExperimentId((prev) => {
+        if (!prev) return prev;
+        const exp = experiments.find((e) => e.id === prev);
+        if (exp && exp.project_id === id) return prev;
+        return null;
+      });
+      setActiveSessionId((prev) => {
+        if (!prev) return prev;
+        const exp = experiments.find((e) => e.latest_session_id === prev);
+        if (exp && exp.project_id === id) return prev;
+        return null;
+      });
+    },
+    [experiments],
+  );
 
   const setActiveExperiment = useCallback(
     (id: string | null, sessionId?: string | null) => {
@@ -109,6 +169,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       } else {
         setActiveSessionId(null);
       }
+      // Auto-sync active project to match the experiment's project.
+      if (id) {
+        const exp = experiments.find((e) => e.id === id);
+        if (exp) setActiveProjectIdState(exp.project_id);
+      }
     },
     [experiments],
   );
@@ -116,6 +181,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   return (
     <AppContext.Provider
       value={{
+        projects,
+        activeProjectId,
         experiments,
         activeExperimentId,
         activeSessionId,
@@ -123,6 +190,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         sidebarOpen,
         models,
         agentModels,
+        refreshProjects,
+        setActiveProject,
         setActiveExperiment,
         refreshExperiments,
         setSidebarOpen,

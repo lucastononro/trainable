@@ -120,11 +120,14 @@ export default function HomePage() {
     experiments,
     activeExperimentId,
     activeSessionId,
+    activeProjectId,
     selectedModel,
     sidebarOpen,
     setSidebarOpen,
     setActiveExperiment,
+    setActiveProject,
     refreshExperiments,
+    refreshProjects,
     agentModels,
   } = useApp();
   // Keep a ref for stable access inside async handlers/closures
@@ -660,7 +663,7 @@ export default function HomePage() {
           ]);
 
           for (const msg of sessionData.messages) {
-            const eventType = msg.metadata?.event_type;
+            const eventType = msg.metadata?.event_type as string | undefined;
             if (eventType && NON_VISIBLE_EVENTS.has(eventType)) continue;
             const mkItem = (item: Omit<ChatItem, 'id' | 'timestamp'>): ChatItem => ({
               ...item,
@@ -959,12 +962,30 @@ export default function HomePage() {
     const text = input.trim();
     setInput('');
 
-    // If no active experiment, auto-create one
+    // If no active experiment, we need to create one (and a project if needed).
     if (!activeExperimentId || !activeSessionId) {
       try {
-        const result = await api.quickCreate(undefined, text);
+        let projectId = activeProjectId;
+        let expId: string | null = null;
+        let sesId: string | null = null;
+
+        if (!projectId) {
+          // Bootstrap: create a project (which auto-creates an initial experiment + session)
+          const created = await api.createProject();
+          projectId = created.project.id;
+          expId = created.experiment.id;
+          sesId = created.session_id;
+        } else {
+          // Have a project but no experiment — quick-create one inside it.
+          const created = await api.quickCreate(projectId, undefined, text);
+          expId = created.id;
+          sesId = created.session_id;
+        }
+
+        await refreshProjects();
         await refreshExperiments();
-        setActiveExperiment(result.id, result.session_id);
+        setActiveProject(projectId);
+        setActiveExperiment(expId, sesId);
         // Queue the message to be sent once SSE connects
         pendingMessageRef.current = text;
       } catch (e: any) {
@@ -1007,21 +1028,33 @@ export default function HomePage() {
     const expId = activeExperimentId;
     const sesId = activeSessionId;
 
-    // Auto-create experiment if none active: queue the attachment so it runs
+    // Auto-create project/experiment if needed; queue the attachment so it runs
     // after the load effect has finished resetting state and SSE has connected.
-    // Otherwise the race with resetSessionState wipes the user bubble and
-    // sendMessage fires before SSE is live.
     if (!expId || !sesId) {
       setAttachingFiles(true);
       try {
-        const result = await api.quickCreate();
+        let projectId = activeProjectId;
+        let createdExpId: string | null = null;
+        let createdSesId: string | null = null;
+        if (!projectId) {
+          const created = await api.createProject();
+          projectId = created.project.id;
+          createdExpId = created.experiment.id;
+          createdSesId = created.session_id;
+        } else {
+          const created = await api.quickCreate(projectId);
+          createdExpId = created.id;
+          createdSesId = created.session_id;
+        }
+        await refreshProjects();
         await refreshExperiments();
         pendingAttachmentRef.current = {
           files: filesToSend,
           text: textToSend,
           fileNames,
         };
-        setActiveExperiment(result.id, result.session_id);
+        setActiveProject(projectId);
+        setActiveExperiment(createdExpId, createdSesId);
       } catch (e: any) {
         addItem({ type: 'error', content: e.message });
         setAttachingFiles(false);
@@ -1052,7 +1085,7 @@ export default function HomePage() {
     } finally {
       setAttachingFiles(false);
     }
-  }, [attachedFiles, input, activeExperimentId, activeSessionId, refreshExperiments, setActiveExperiment, addItem]);
+  }, [attachedFiles, input, activeExperimentId, activeSessionId, activeProjectId, refreshExperiments, refreshProjects, setActiveExperiment, setActiveProject, addItem]);
 
   const handleS3Select = useCallback(
     async (s3Path: string) => {
@@ -1062,11 +1095,21 @@ export default function HomePage() {
         let expId = activeExperimentId;
         let sesId = activeSessionId;
         if (!expId || !sesId) {
-          const result = await api.quickCreate();
+          let projectId = activeProjectId;
+          if (!projectId) {
+            const created = await api.createProject();
+            projectId = created.project.id;
+            expId = created.experiment.id;
+            sesId = created.session_id;
+          } else {
+            const created = await api.quickCreate(projectId);
+            expId = created.id;
+            sesId = created.session_id;
+          }
+          await refreshProjects();
           await refreshExperiments();
-          setActiveExperiment(result.id, result.session_id);
-          expId = result.id;
-          sesId = result.session_id;
+          setActiveProject(projectId);
+          setActiveExperiment(expId, sesId);
         }
         if (expId) {
           const s3Name = s3Path.split('/').pop() || s3Path;
@@ -1094,7 +1137,7 @@ export default function HomePage() {
         setAttachingFiles(false);
       }
     },
-    [activeExperimentId, activeSessionId, refreshExperiments, setActiveExperiment, addItem],
+    [activeExperimentId, activeSessionId, activeProjectId, refreshExperiments, refreshProjects, setActiveExperiment, setActiveProject, addItem],
   );
 
   // Close attach menu on outside click

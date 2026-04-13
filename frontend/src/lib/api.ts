@@ -2,6 +2,9 @@ import type {
   Experiment,
   ExperimentDetail,
   CreateExperimentResponse,
+  Project,
+  ProjectDetail,
+  CreateProjectResponse,
   Session,
   SessionDetail,
   Message,
@@ -29,8 +32,40 @@ async function fetchJSON<T>(url: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  // Projects
+  listProjects: () => fetchJSON<Project[]>('/projects'),
+
+  createProject: (name?: string, description?: string) =>
+    fetchJSON<CreateProjectResponse>('/projects', {
+      method: 'POST',
+      body: JSON.stringify({ name, description }),
+    }),
+
+  getProject: (id: string) => fetchJSON<ProjectDetail>(`/projects/${id}`),
+
+  updateProject: (id: string, patch: { name?: string; description?: string }) =>
+    fetchJSON<Project>(`/projects/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+
+  deleteProject: (id: string) =>
+    fetchJSON<DeleteResponse>(`/projects/${id}`, { method: 'DELETE' }),
+
   // Experiments
-  listExperiments: () => fetchJSON<Experiment[]>('/experiments'),
+  listExperiments: (projectId?: string) =>
+    fetchJSON<Experiment[]>(
+      projectId ? `/experiments?project_id=${projectId}` : '/experiments',
+    ),
+
+  updateExperiment: (
+    id: string,
+    patch: { name?: string; description?: string; project_id?: string; instructions?: string },
+  ) =>
+    fetchJSON<Experiment>(`/experiments/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
 
   createExperiment: async (data: FormData): Promise<CreateExperimentResponse> => {
     const res = await fetch(`${API_BASE}/experiments`, {
@@ -107,9 +142,14 @@ export const api = {
   // Models
   listModels: () => fetchJSON<ModelInfo[]>('/models'),
 
-  // Quick create (no files required)
-  quickCreate: async (name?: string, instructions?: string): Promise<CreateExperimentResponse> => {
+  // Quick create (no files required) — requires a project
+  quickCreate: async (
+    projectId: string,
+    name?: string,
+    instructions?: string,
+  ): Promise<CreateExperimentResponse> => {
     const data = new FormData();
+    data.append('project_id', projectId);
     if (name) data.append('name', name);
     if (instructions) data.append('instructions', instructions);
     const res = await fetch(`${API_BASE}/experiments/quick`, {

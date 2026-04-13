@@ -1,10 +1,33 @@
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  experiment_count: number;
+  dataset_count: number;
+  model_count: number;
+}
+
+export interface ProjectDetail extends Project {
+  experiments: Experiment[];
+}
+
+export interface CreateProjectResponse {
+  project: Project;
+  experiment: Experiment;
+  session_id: string;
+}
+
 export interface Experiment {
   id: string;
+  project_id: string;
   name: string;
   description: string;
   dataset_ref: string;
   instructions: string;
   created_at: string;
+  updated_at: string;
   latest_session_id: string | null;
   latest_state: string | null;
 }

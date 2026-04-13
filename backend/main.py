@@ -9,7 +9,16 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db import init_db
 from errors import generic_exception_handler
-from routers import data_explorer, experiments, files, models, s3_browser, sessions, stream
+from routers import (
+    data_explorer,
+    experiments,
+    files,
+    models,
+    projects,
+    s3_browser,
+    sessions,
+    stream,
+)
 from services.s3_client import get_s3_client
 
 logging.basicConfig(
@@ -53,6 +62,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(projects.router, prefix="/api")
 app.include_router(experiments.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
 app.include_router(stream.router, prefix="/api")

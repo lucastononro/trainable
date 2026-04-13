@@ -18,8 +18,8 @@ from sqlalchemy import select
 
 from config import settings
 from db import async_session
-from models import Message
-from services.volume import read_volume_file
+from models import Experiment, Message, Project
+from services.volume import get_volume, read_volume_file
 
 from .agents import (
     get_agent_default_model,
@@ -81,6 +81,58 @@ async def _load_conversation_history(session_id: str) -> list[dict]:
     except Exception as e:
         logger.error("Failed to load history: %s", e)
     return messages
+
+
+async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
+    """Return (project_id, project_name, project_files_listing) for an experiment.
+
+    project_files_listing is a multi-line string describing all files currently
+    present under /projects/{project_id}/datasets/. If the project has no data,
+    returns the placeholder "(no data uploaded yet)".
+    """
+    project_id = ""
+    project_name = ""
+    try:
+        async with async_session() as db:
+            result = await db.execute(
+                select(Experiment).where(Experiment.id == experiment_id)
+            )
+            experiment = result.scalar_one_or_none()
+            if experiment and experiment.project_id:
+                project_id = experiment.project_id
+                proj_result = await db.execute(
+                    select(Project).where(Project.id == project_id)
+                )
+                project = proj_result.scalar_one_or_none()
+                if project:
+                    project_name = project.name
+    except Exception as e:
+        logger.warning("Failed to load project for experiment %s: %s", experiment_id, e)
+
+    files_listing = "(no data uploaded yet)"
+    if project_id:
+        try:
+            vol = get_volume()
+            vol.reload()
+            entries = []
+            datasets_root = f"/projects/{project_id}/datasets"
+            for entry in vol.listdir(datasets_root, recursive=True):
+                if entry.type.name != "FILE":
+                    continue
+                # Display path relative to /data/ mount used inside sandboxes.
+                display = entry.path
+                if display.startswith("/"):
+                    display = display[1:]
+                entries.append(f"- /data/{display}")
+            if entries:
+                files_listing = "\n".join(entries[:50])
+                if len(entries) > 50:
+                    files_listing += f"\n  …({len(entries) - 50} more)"
+        except Exception:
+            # Project has no datasets folder yet — that's fine.
+            pass
+
+    return project_id, project_name, files_listing
 
 
 def _load_prev_context(session_id: str, stage: str) -> str:
@@ -183,6 +235,9 @@ async def run_agent(
 
     try:
         prev_context = _load_prev_context(session_id, stage)
+        project_id, project_name, project_files = await _load_project_context(
+            experiment_id
+        )
 
         system_prompt = render_agent_system_prompt(
             agent_type,
@@ -190,6 +245,9 @@ async def run_agent(
             session_id=session_id,
             instructions=instructions,
             prev_context=prev_context,
+            project_id=project_id,
+            project_name=project_name,
+            project_files=project_files,
         )
 
         # Inject the wall-clock time so the agent can compare its "now" against

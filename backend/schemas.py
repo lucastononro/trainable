@@ -29,3 +29,20 @@ class StageStart(BaseModel):
 
 class ClarificationReply(BaseModel):
     answer: str
+
+
+class ProjectCreate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+
+class ExperimentUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    project_id: Optional[str] = None
+    instructions: Optional[str] = None
