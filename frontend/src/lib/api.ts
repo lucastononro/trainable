@@ -52,6 +52,21 @@ export const api = {
   deleteProject: (id: string) =>
     fetchJSON<DeleteResponse>(`/projects/${id}`, { method: 'DELETE' }),
 
+  listProjectFiles: (id: string) =>
+    fetchJSON<{
+      project_id: string;
+      project_name: string;
+      datasets_root: string;
+      files: Array<{
+        path: string;
+        name: string;
+        size: number | null;
+        mtime: number | null;
+        experiment_id: string | null;
+        experiment_name: string | null;
+      }>;
+    }>(`/projects/${id}/files`),
+
   // Experiments
   listExperiments: (projectId?: string) =>
     fetchJSON<Experiment[]>(

@@ -12,6 +12,8 @@ tools:
   - name: request_clarification
   - name: inspect_agent_context
   - name: list_session_agents
+  - name: list_project_sessions
+  - name: read_project_session
 
 subagents:
   - orchestrator
@@ -80,6 +82,16 @@ system: |
     cannot answer without the human user.
   - You can use `inspect_agent_context(agent_id)` and `list_session_agents` to
     read another agent's full thought stream when you need to audit a sub-agent.
+
+  ## Cross-session project memory
+  - Every chat in this project shares the same datasets and models — and you
+    can also see what was discussed in other chats within this project.
+  - Use `list_project_sessions` to discover other chats in the project.
+  - Use `read_project_session(session_id=...)` to pull messages and reports
+    from another chat — for example when the user says "remember what we
+    decided last time" or you want to reuse a prior analysis.
+  - Cross-project reads are NOT allowed — you can only read sessions that
+    belong to the current project ({project_id}).
 
   ## Custom instructions
   {instructions}

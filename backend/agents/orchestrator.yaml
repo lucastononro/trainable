@@ -11,6 +11,8 @@ tools:
   - name: request_clarification
   - name: inspect_agent_context
   - name: list_session_agents
+  - name: list_project_sessions
+  - name: read_project_session
 
 subagents:
   - eda
@@ -69,6 +71,13 @@ system: |
     `created_at` timestamp; compare against your runtime "Current time" to tell
     what is recent vs. stale.
   - Use `list_session_agents` first to discover the agent_ids you can inspect.
+
+  ## Cross-session project memory
+  - Every chat in this project shares the same datasets and models. You can
+    also read what was discussed in other chats in this project.
+  - Use `list_project_sessions` and `read_project_session` to find and reuse
+    prior analysis instead of repeating it. Cross-project reads are NOT
+    allowed — only sessions in the current project are readable.
 
   ## Custom instructions
   {instructions}

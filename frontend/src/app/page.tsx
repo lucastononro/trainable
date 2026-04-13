@@ -44,6 +44,7 @@ import ModelSelector from '@/components/ModelSelector';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import MetricsTab from '@/components/MetricsTab';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
+import ProjectDataModal from '@/components/ProjectDataModal';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import python from 'react-syntax-highlighter/dist/esm/languages/prism/python';
 import json from 'react-syntax-highlighter/dist/esm/languages/prism/json';
@@ -117,6 +118,7 @@ const SUGGESTIONS = [
 
 export default function HomePage() {
   const {
+    projects,
     experiments,
     activeExperimentId,
     activeSessionId,
@@ -182,6 +184,7 @@ export default function HomePage() {
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
   const [showAttachMenu, setShowAttachMenu] = useState(false);
   const [showS3Browser, setShowS3Browser] = useState(false);
+  const [showProjectData, setShowProjectData] = useState(false);
   const [attachingFiles, setAttachingFiles] = useState(false);
   const fileInputRef2 = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
@@ -1188,6 +1191,15 @@ export default function HomePage() {
 
           {hasActiveSession && (
             <>
+              {activeProjectId && (
+                <button
+                  onClick={() => setShowProjectData(true)}
+                  className="p-1.5 rounded-lg transition-colors hover:bg-surface-hover text-gray-400 hover:text-emerald-400"
+                  title="Project data"
+                >
+                  <Database className="w-4 h-4" />
+                </button>
+              )}
               <button
                 onClick={() => {
                   workspacePanelRef.current?.expand();
@@ -1570,6 +1582,15 @@ export default function HomePage() {
           isOpen={showS3Browser}
           onClose={() => setShowS3Browser(false)}
           onSelect={handleS3Select}
+        />
+      )}
+
+      {activeProjectId && (
+        <ProjectDataModal
+          projectId={activeProjectId}
+          projectName={projects.find((p) => p.id === activeProjectId)?.name ?? ''}
+          isOpen={showProjectData}
+          onClose={() => setShowProjectData(false)}
         />
       )}
     </div>

@@ -19,6 +19,7 @@ from db import get_db
 from models import Experiment, Project
 from models import Session as SessionModel
 from schemas import ProjectCreate, ProjectUpdate
+from services.volume import get_volume
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -153,3 +154,61 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
     await db.delete(project)
     await db.commit()
     return {"deleted": True}
+
+
+@router.get("/projects/{project_id}/files")
+async def list_project_files(
+    project_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """List all files under the project's datasets folder in the Modal Volume.
+
+    Returns a flat list of `{path, name, size, experiment_id, experiment_name, updated_at}`.
+    """
+    # Verify the project exists.
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    # Build a lookup of experiment_id -> name so we can label files.
+    exps_result = await db.execute(
+        select(Experiment).where(Experiment.project_id == project_id)
+    )
+    experiments = list(exps_result.scalars().all())
+    exp_names = {e.id: e.name for e in experiments}
+
+    datasets_root = f"/projects/{project_id}/datasets"
+    files: list[dict] = []
+    try:
+        vol = get_volume()
+        vol.reload()
+        for entry in vol.listdir(datasets_root, recursive=True):
+            if entry.type.name != "FILE":
+                continue
+            # entry.path looks like "projects/{pid}/datasets/{exp_id}/{filename}"
+            rel = entry.path
+            parts = rel.strip("/").split("/")
+            # Expect: ["projects", pid, "datasets", exp_id, ...filename]
+            experiment_id = parts[3] if len(parts) >= 5 else None
+            filename = parts[-1]
+            files.append(
+                {
+                    "path": "/" + rel.lstrip("/"),
+                    "name": filename,
+                    "size": getattr(entry, "size", None),
+                    "mtime": getattr(entry, "mtime", None),
+                    "experiment_id": experiment_id,
+                    "experiment_name": exp_names.get(experiment_id or ""),
+                }
+            )
+    except Exception as e:
+        # Folder likely doesn't exist yet (new project with no uploads).
+        logger.debug("list_project_files volume listdir failed: %s", e)
+
+    return {
+        "project_id": project_id,
+        "project_name": project.name,
+        "datasets_root": datasets_root,
+        "files": files,
+    }
