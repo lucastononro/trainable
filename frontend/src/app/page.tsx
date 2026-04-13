@@ -1257,6 +1257,7 @@ export default function HomePage() {
                       <span className="truncate max-w-[160px]">{f.name}</span>
                       <button
                         onClick={() => removeAttachedFile(i)}
+                        title="Remove file"
                         className="p-0.5 hover:bg-white/[0.1] rounded transition-colors"
                       >
                         <X className="w-3 h-3 text-gray-500" />
@@ -1301,6 +1302,7 @@ export default function HomePage() {
                         />
                         <button
                           onClick={() => fileInputRef2.current?.click()}
+                          title="Upload files from your computer"
                           className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/[0.06] transition-colors"
                         >
                           <Upload className="w-4 h-4 text-gray-500" />
@@ -1308,6 +1310,7 @@ export default function HomePage() {
                         </button>
                         <button
                           onClick={() => folderInputRef.current?.click()}
+                          title="Upload an entire folder"
                           className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/[0.06] transition-colors"
                         >
                           <FolderUp className="w-4 h-4 text-gray-500" />
@@ -1316,6 +1319,7 @@ export default function HomePage() {
                         <div className="border-t border-white/[0.06]" />
                         <button
                           onClick={() => { setShowAttachMenu(false); setShowS3Browser(true); }}
+                          title="Browse existing S3 datasets"
                           className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/[0.06] transition-colors"
                         >
                           <HardDrive className="w-4 h-4 text-gray-500" />
@@ -1337,6 +1341,7 @@ export default function HomePage() {
                   <button
                     onClick={handleSend}
                     disabled={!input.trim() && attachedFiles.length === 0}
+                    title="Send message"
                     className="p-2 bg-primary-600 hover:bg-primary-700 disabled:opacity-30 rounded-xl transition-colors shrink-0"
                   >
                     {attachingFiles ? (
@@ -1356,6 +1361,7 @@ export default function HomePage() {
                     <button
                       key={i}
                       onClick={() => handleSuggestion(s.prompt)}
+                      title={s.prompt}
                       className="flex items-center gap-3 px-4 py-3 rounded-xl bg-surface-elevated border border-surface-border hover:border-gray-600 hover:bg-surface-hover transition-all text-left group"
                     >
                       <SIcon className="w-5 h-5 text-gray-500 group-hover:text-primary-400 transition-colors shrink-0" />
@@ -1507,6 +1513,7 @@ export default function HomePage() {
                         <button
                           onClick={handleSend}
                           disabled={!input.trim() && attachedFiles.length === 0}
+                          title="Send message"
                           className="p-2 bg-primary-600 hover:bg-primary-700 disabled:opacity-30 rounded-xl transition-colors shrink-0"
                         >
                           {attachingFiles ? (

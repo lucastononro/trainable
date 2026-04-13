@@ -33,6 +33,7 @@ export default function ModelSelector() {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
+        title={`Model: ${current.name}`}
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg hover:bg-white/[0.06] transition-colors text-xs"
       >
         <span className={`w-1.5 h-1.5 rounded-full ${tier.dot}`} />
@@ -58,6 +59,7 @@ export default function ModelSelector() {
                   setSelectedModel(m.id);
                   setOpen(false);
                 }}
+                title={`${m.name} — ${m.description}`}
                 className={`w-full flex items-start gap-3 px-3 py-2.5 text-left transition-colors ${
                   isActive ? 'bg-white/[0.06]' : 'hover:bg-white/[0.04]'
                 }`}

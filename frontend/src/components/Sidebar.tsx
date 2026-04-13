@@ -10,6 +10,7 @@ import {
   PanelLeftOpen,
   PanelLeftClose,
   ChevronRight,
+  Pencil,
 } from 'lucide-react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
@@ -36,15 +37,23 @@ function statusDot(state: string | null): string {
 }
 
 // -----------------------------------------------------------------------------
-// EditableName — double-click to rename, Enter saves, Escape cancels
+// EditableName — Finder-style: click an already-selected item's name to rename.
+// Double-click always works as a shortcut. Parents can also trigger rename
+// externally via `startEditing`, or programmatically via a pencil button.
 // -----------------------------------------------------------------------------
-function EditableName({
+export interface EditableNameHandle {
+  startEdit: () => void;
+}
+
+const EditableName = ({
   value,
   onSave,
   className,
   inputClassName,
   startEditing,
   onDoneEditing,
+  clickToEdit,
+  editHandleRef,
 }: {
   value: string;
   onSave: (v: string) => void;
@@ -52,7 +61,11 @@ function EditableName({
   inputClassName?: string;
   startEditing?: boolean;
   onDoneEditing?: () => void;
-}) {
+  /** When true, a single click on the name enters edit mode (and stops propagation). */
+  clickToEdit?: boolean;
+  /** Lets the parent imperatively open edit mode, e.g. from a pencil button. */
+  editHandleRef?: React.MutableRefObject<EditableNameHandle | null>;
+}) => {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -64,6 +77,12 @@ function EditableName({
   useEffect(() => {
     if (startEditing) setEditing(true);
   }, [startEditing]);
+
+  useEffect(() => {
+    if (editHandleRef) {
+      editHandleRef.current = { startEdit: () => setEditing(true) };
+    }
+  }, [editHandleRef]);
 
   useEffect(() => {
     if (editing) {
@@ -92,11 +111,18 @@ function EditableName({
     return (
       <span
         className={className}
+        onClick={(e) => {
+          if (clickToEdit) {
+            e.stopPropagation();
+            setEditing(true);
+          }
+          // Otherwise let the click propagate so the parent row can select.
+        }}
         onDoubleClick={(e) => {
           e.stopPropagation();
           setEditing(true);
         }}
-        title="Double-click to rename"
+        title={clickToEdit ? 'Click to rename' : 'Double-click to rename'}
       >
         {value}
       </span>
@@ -124,10 +150,10 @@ function EditableName({
       className={`bg-white/[0.08] outline-none rounded px-1 min-w-0 ${className ?? ''} ${inputClassName ?? ''}`}
     />
   );
-}
+};
 
 // -----------------------------------------------------------------------------
-// ExperimentRow — draggable chat entry with inline rename + delete
+// ExperimentRow — draggable chat entry with click-to-rename + hover pencil
 // -----------------------------------------------------------------------------
 function ExperimentRow({
   exp,
@@ -146,12 +172,14 @@ function ExperimentRow({
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
+  const editHandle = useRef<EditableNameHandle | null>(null);
   return (
     <div
       draggable
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       onClick={onClick}
+      title={exp.name}
       className={`w-full flex items-center gap-2.5 pl-6 pr-2 py-1.5 rounded-lg text-left transition-colors group cursor-pointer ${
         isActive
           ? 'bg-white/[0.08] text-white'
@@ -164,9 +192,21 @@ function ExperimentRow({
           value={exp.name}
           onSave={onRename}
           className="text-sm truncate block"
+          clickToEdit={isActive}
+          editHandleRef={editHandle}
         />
       </div>
       <span className="text-[10px] text-gray-600 shrink-0">{timeAgo(exp.created_at)}</span>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          editHandle.current?.startEdit();
+        }}
+        className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
+        title="Rename chat"
+      >
+        <Pencil className="w-3 h-3 text-gray-500" />
+      </button>
       <button
         onClick={onDelete}
         className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
@@ -210,6 +250,7 @@ function ProjectSection({
   onDragLeave: () => void;
   children: React.ReactNode;
 }) {
+  const editHandle = useRef<EditableNameHandle | null>(null);
   return (
     <div
       className={`rounded-lg transition-colors ${
@@ -221,6 +262,7 @@ function ProjectSection({
     >
       <div
         onClick={onToggleExpanded}
+        title={project.name}
         className={`flex items-center gap-1.5 px-1.5 py-1.5 rounded-lg cursor-pointer group ${
           isActiveProject ? 'text-white' : 'text-gray-300 hover:bg-white/[0.04]'
         }`}
@@ -237,9 +279,21 @@ function ProjectSection({
             className="text-xs font-semibold truncate block"
             startEditing={startRenaming}
             onDoneEditing={onRenameDone}
+            clickToEdit={isActiveProject}
+            editHandleRef={editHandle}
           />
         </div>
         <span className="text-[10px] text-gray-600 shrink-0">{project.experiment_count}</span>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            editHandle.current?.startEdit();
+          }}
+          className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
+          title="Rename project"
+        >
+          <Pencil className="w-3 h-3 text-gray-500" />
+        </button>
         <button
           onClick={onDelete}
           className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
@@ -518,7 +572,10 @@ export default function Sidebar() {
                   isActiveProject={isActiveProject}
                   startRenaming={pendingRenameProjectId === project.id}
                   onRenameDone={() => setPendingRenameProjectId(null)}
-                  onToggleExpanded={() => toggleExpanded(project.id)}
+                  onToggleExpanded={() => {
+                    toggleExpanded(project.id);
+                    setActiveProject(project.id);
+                  }}
                   onRename={(name) => handleRenameProject(project.id, name)}
                   onDelete={(e) => handleDeleteProject(project.id, e)}
                   isDropTarget={dropTargetProjectId === project.id}
@@ -540,6 +597,7 @@ export default function Sidebar() {
                   ))}
                   <button
                     onClick={(e) => handleNewChatInProject(project.id, e)}
+                    title={`New chat in ${project.name}`}
                     className="w-full flex items-center gap-2 pl-6 pr-2 py-1.5 rounded-lg text-left text-gray-500 hover:bg-white/[0.04] hover:text-gray-300 transition-colors text-xs"
                   >
                     <Plus className="w-3 h-3" />
