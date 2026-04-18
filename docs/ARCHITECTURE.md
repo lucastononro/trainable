@@ -1,6 +1,8 @@
 # Architecture
 
-> Interactive diagram: open [`architecture.excalidraw`](architecture.excalidraw) in [excalidraw.com](https://excalidraw.com) or the VS Code Excalidraw extension.
+> **C4 diagrams:** see [`diagrams/`](diagrams/) for a top-down Excalidraw set (Context → Containers → Components → Code), including a dedicated view of the multi-agent subsystem.
+>
+> Legacy interactive diagram: [`architecture.excalidraw`](architecture.excalidraw) (single-page overview, kept for backwards compatibility).
 
 ## System Overview
 
