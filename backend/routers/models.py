@@ -8,13 +8,22 @@ router = APIRouter()
 
 MODELS = [
     {
+        "id": "claude-opus-4-7",
+        "name": "Claude Opus 4.7",
+        "tier": "premium",
+        "context": "1M",
+        "input_cost": 15,
+        "output_cost": 75,
+        "description": "Latest flagship model. Strongest reasoning and long-horizon planning.",
+    },
+    {
         "id": "claude-opus-4-6",
         "name": "Claude Opus 4.6",
         "tier": "premium",
         "context": "1M",
         "input_cost": 15,
         "output_cost": 75,
-        "description": "Most intelligent model. Best for complex analysis, planning, and multi-step reasoning.",
+        "description": "Previous-generation flagship. Great for complex analysis and multi-step reasoning.",
     },
     {
         "id": "claude-sonnet-4-6",
