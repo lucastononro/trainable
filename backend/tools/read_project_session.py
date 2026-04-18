@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from sqlalchemy import select
 
@@ -21,13 +22,24 @@ from db import async_session
 from models import Experiment, Message
 from models import Session as SessionModel
 
+from ._visible_events import emit_agent_tool_call, new_call_id
+
 logger = logging.getLogger(__name__)
 
 _MAX_RESPONSE_CHARS = 12000
 _DEFAULT_TAIL = 30
 
 
-def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
+def create_handler(
+    session_id: str,
+    experiment_id: str,
+    publish_fn,
+    parent_agent_type: str = "",
+    parent_agent_id: str = "root",
+    parent_parent_agent_id: str | None = None,
+    current_depth: int = 0,
+    **kwargs,
+):
     async def handler(args: dict):
         target_session_id = (args.get("session_id") or "").strip()
         if not target_session_id:
@@ -35,6 +47,8 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
                 "content": [{"type": "text", "text": "session_id is required"}],
                 "is_error": True,
             }
+        call_id = new_call_id()
+        started = time.time()
 
         include_tool_events = bool(args.get("include_tool_events") or False)
         tail = args.get("tail")
@@ -171,6 +185,19 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
             "response_truncated": response_truncated,
         }
         header = json.dumps(envelope, default=str)
+
+        await emit_agent_tool_call(
+            publish_fn,
+            session_id,
+            call_id=call_id,
+            tool_name="read_project_session",
+            asker_agent_type=parent_agent_type,
+            asker_agent_id=parent_agent_id,
+            depth=current_depth,
+            parent_agent_id=parent_parent_agent_id,
+            duration_s=time.time() - started,
+        )
+
         return {
             "content": [{"type": "text", "text": f"{header}\n\n{rendered}"}]
         }

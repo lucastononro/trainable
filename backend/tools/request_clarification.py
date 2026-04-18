@@ -20,6 +20,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+import time
+
 from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, query
 from sqlalchemy import select
 
@@ -27,6 +29,8 @@ from config import settings
 from db import async_session
 from models import Message
 from services.clarifications import get_session_semaphore, register
+
+from ._visible_events import emit_clarification_exchange, new_call_id
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +192,9 @@ def create_handler(
                 "is_error": True,
             }
 
+        call_id = new_call_id()
+        started = time.time()
+
         # 1) Persist the question under the asker.
         await publish_fn(
             session_id,
@@ -313,6 +320,21 @@ def create_handler(
             },
             role="assistant",
             agent_meta=answerer_meta,
+        )
+
+        # User-visible signal: an exchange happened. Carries names not IDs and
+        # NO question/answer text — that's persisted under the respective
+        # agent_ids and recoverable via inspect_agent_context.
+        await emit_clarification_exchange(
+            publish_fn,
+            session_id,
+            call_id=call_id,
+            asker_agent_type=asker_agent_type,
+            asker_agent_id=asker_agent_id,
+            answerer_agent_type=parent_agent_type,
+            answerer_agent_id=answerer_agent_id,
+            depth=current_depth,
+            duration_s=time.time() - started,
         )
 
         return {

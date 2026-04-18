@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from db import async_session
 from models import Message
+
+from ._visible_events import emit_agent_tool_call, new_call_id
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +92,10 @@ def _group_into_turns(blocks: list[dict]) -> list[list[dict]]:
 def create_handler(
     session_id: str,
     publish_fn,
+    parent_agent_type: str = "",
     parent_agent_id: str = "root",
+    parent_parent_agent_id: str | None = None,
+    current_depth: int = 0,
     **kwargs,
 ):
     """Bind an inspector to the current session."""
@@ -101,6 +107,8 @@ def create_handler(
                 "content": [{"type": "text", "text": "agent_id is required"}],
                 "is_error": True,
             }
+        call_id = new_call_id()
+        started = time.time()
 
         mode = args.get("mode") or "blocks"
         if mode not in ("blocks", "chars", "turns"):
@@ -150,6 +158,19 @@ def create_handler(
             blocks.append(_format_block(r))
 
         if not blocks:
+            await emit_agent_tool_call(
+                publish_fn,
+                session_id,
+                call_id=call_id,
+                tool_name="inspect_agent_context",
+                asker_agent_type=parent_agent_type,
+                asker_agent_id=parent_agent_id,
+                target_agent_type=None,
+                depth=current_depth,
+                parent_agent_id=parent_parent_agent_id,
+                duration_s=time.time() - started,
+                is_error=True,
+            )
             return {
                 "content": [{
                     "type": "text",
@@ -255,6 +276,20 @@ def create_handler(
             "now": now.isoformat(),
         }
         header = json.dumps(envelope, default=str)
+
+        await emit_agent_tool_call(
+            publish_fn,
+            session_id,
+            call_id=call_id,
+            tool_name="inspect_agent_context",
+            asker_agent_type=parent_agent_type,
+            asker_agent_id=parent_agent_id,
+            target_agent_type=target_agent_type,
+            depth=current_depth,
+            parent_agent_id=parent_parent_agent_id,
+            duration_s=time.time() - started,
+        )
+
         return {
             "content": [{"type": "text", "text": f"{header}\n\n{content_str}"}]
         }

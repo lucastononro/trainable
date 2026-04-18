@@ -1,0 +1,26 @@
+name: list_session_files
+description: |
+  List files in another session's workspace (same project only). Use this
+  before `read_session_file` to discover what's available to pull — reports,
+  scripts, figures, parquet samples, or trained model files produced in a
+  sibling chat.
+
+  Safeguards: only sessions in the current project are accessible. Output is
+  capped at 200 files; pass a `glob` like "*.md" or "models/*.pkl" to narrow.
+
+  Discover session_ids with `list_project_sessions` first.
+
+input_schema:
+  type: object
+  properties:
+    session_id:
+      type: string
+      description: The session_id to list files from. Must belong to the same project.
+    glob:
+      type: string
+      description: Optional fnmatch pattern to filter by relative path (e.g. "*.md", "figures/*.png", "data/*.parquet").
+    limit:
+      type: integer
+      description: Max number of files to return (default/maximum 200).
+  required:
+    - session_id
