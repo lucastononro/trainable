@@ -20,8 +20,8 @@ const config: Config = {
           900: '#0c4a6e',
         },
         surface: {
-          DEFAULT: '#111111',
-          elevated: '#1a1a1a',
+          DEFAULT: '#000000',
+          elevated: '#000000',
           hover: '#222222',
           border: '#262626',
         },

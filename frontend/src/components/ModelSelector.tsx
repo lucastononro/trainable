@@ -16,12 +16,13 @@ export default function ModelSelector() {
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!open) return;
     const handler = (e: MouseEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, []);
+  }, [open]);
 
   const current = models.find((m) => m.id === selectedModel) || models[0];
   if (!current) return null;
@@ -42,7 +43,7 @@ export default function ModelSelector() {
       </button>
 
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-72 bg-[#1a1a1a] border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
+        <div className="absolute top-full right-0 mt-1 w-72 bg-black border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
           <div className="px-3 py-2 border-b border-white/[0.06]">
             <span className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
               Model

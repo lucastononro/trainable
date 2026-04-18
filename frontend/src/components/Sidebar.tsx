@@ -15,6 +15,7 @@ import {
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
 import type { Experiment, Project } from '@/lib/types';
+import ConfirmModal from './ConfirmModal';
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -327,6 +328,11 @@ export default function Sidebar() {
   const [pendingRenameProjectId, setPendingRenameProjectId] = useState<string | null>(null);
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set());
   const [dropTargetProjectId, setDropTargetProjectId] = useState<string | null>(null);
+  const [confirmTarget, setConfirmTarget] = useState<
+    | { kind: 'project'; id: string }
+    | { kind: 'experiment'; id: string; name: string }
+    | null
+  >(null);
 
   // Expand the active project whenever it changes.
   useEffect(() => {
@@ -411,9 +417,15 @@ export default function Sidebar() {
   );
 
   const handleDeleteProject = useCallback(
-    async (projectId: string, e: React.MouseEvent) => {
+    (projectId: string, e: React.MouseEvent) => {
       e.stopPropagation();
-      if (!confirm('Delete this project and all its chats? This cannot be undone.')) return;
+      setConfirmTarget({ kind: 'project', id: projectId });
+    },
+    [],
+  );
+
+  const confirmDeleteProject = useCallback(
+    async (projectId: string) => {
       try {
         await api.deleteProject(projectId);
         if (activeProjectId === projectId) setActiveProject(null);
@@ -439,8 +451,17 @@ export default function Sidebar() {
   );
 
   const handleDeleteExperiment = useCallback(
-    async (expId: string, e: React.MouseEvent) => {
+    (expId: string, e: React.MouseEvent) => {
       e.stopPropagation();
+      const exp = experiments.find((x) => x.id === expId);
+      const name = exp?.name || 'this chat';
+      setConfirmTarget({ kind: 'experiment', id: expId, name });
+    },
+    [experiments],
+  );
+
+  const confirmDeleteExperiment = useCallback(
+    async (expId: string) => {
       try {
         await api.deleteExperiment(expId);
         if (activeExperimentId === expId) {
@@ -494,7 +515,7 @@ export default function Sidebar() {
 
   return (
     <div
-      className={`shrink-0 h-full flex flex-col bg-[#0f0f0f] border-r border-white/[0.06] transition-all duration-300 ease-in-out overflow-hidden ${
+      className={`shrink-0 h-full flex flex-col bg-black border-r border-white/[0.06] transition-all duration-300 ease-in-out overflow-hidden ${
         sidebarOpen ? 'w-[260px]' : 'w-[52px]'
       }`}
     >
@@ -609,6 +630,24 @@ export default function Sidebar() {
           </>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={confirmTarget !== null}
+        title={confirmTarget?.kind === 'project' ? 'Delete project?' : 'Delete chat?'}
+        message={
+          confirmTarget?.kind === 'project'
+            ? 'Delete this project and all its chats? This cannot be undone.'
+            : `Delete "${confirmTarget?.kind === 'experiment' ? confirmTarget.name : ''}"? This cannot be undone.`
+        }
+        onCancel={() => setConfirmTarget(null)}
+        onConfirm={() => {
+          if (!confirmTarget) return;
+          const target = confirmTarget;
+          setConfirmTarget(null);
+          if (target.kind === 'project') confirmDeleteProject(target.id);
+          else confirmDeleteExperiment(target.id);
+        }}
+      />
     </div>
   );
 }

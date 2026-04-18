@@ -26,9 +26,22 @@ def get_volume():
     return _volume
 
 
-def reload_volume():
-    """Ensure the volume cache reflects the latest sandbox writes."""
-    get_volume().reload()
+def reload_volume() -> bool:
+    """Ensure the volume cache reflects the latest sandbox writes.
+
+    Modal's `Volume.reload()` raises "reload() can only be called from within
+    a running function" on some SDK versions when called from a plain Python
+    process (i.e. the FastAPI backend). We swallow that error because the
+    subsequent `listdir()` still works with the last-known state, which is
+    good enough for the UI. Returns True if reload succeeded, False if it
+    was skipped.
+    """
+    try:
+        get_volume().reload()
+        return True
+    except Exception as e:
+        logger.debug("Volume.reload() skipped: %s", e)
+        return False
 
 
 def read_volume_file(path: str) -> bytes:
@@ -44,7 +57,7 @@ async def upload_to_volume(local_path: str, remote_path: str):
         with vol.batch_upload(force=True) as batch:
             batch.put_file(local_path, remote_path)
 
-    await asyncio.get_event_loop().run_in_executor(None, _sync_upload)
+    await asyncio.get_running_loop().run_in_executor(None, _sync_upload)
     logger.info("Uploaded %s -> %s", local_path, remote_path)
 
 
@@ -62,5 +75,5 @@ async def write_to_volume(content: str, remote_path: str):
         finally:
             os.unlink(tmp)
 
-    await asyncio.get_event_loop().run_in_executor(None, _sync_write)
+    await asyncio.get_running_loop().run_in_executor(None, _sync_write)
     logger.info("Wrote %dB -> %s", len(content), remote_path)

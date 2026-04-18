@@ -5,8 +5,8 @@
 :root {
   --foreground-rgb: 255, 255, 255;
   --background-rgb: 0, 0, 0;
-  --surface-rgb: 17, 17, 17;
-  --surface-elevated-rgb: 26, 26, 26;
+  --surface-rgb: 0, 0, 0;
+  --surface-elevated-rgb: 0, 0, 0;
   --border-rgb: 38, 38, 38;
   --text-secondary-rgb: 163, 163, 163;
 }
@@ -28,7 +28,9 @@ body {
   }
   input:focus-visible,
   textarea:focus-visible,
-  select:focus-visible {
+  select:focus-visible,
+  [contenteditable]:focus-visible,
+  [role='textbox']:focus-visible {
     @apply ring-0 ring-offset-0;
   }
 }
@@ -109,7 +111,7 @@ body {
   @apply bg-white/[0.08] text-gray-200 px-1.5 py-0.5 rounded text-[13px] font-mono;
 }
 .markdown-content pre {
-  @apply bg-[#1a1a1a] text-gray-100 p-4 rounded-xl overflow-x-auto my-4 border border-white/[0.06] text-[13px];
+  @apply bg-black text-gray-100 p-4 rounded-xl overflow-x-auto my-4 border border-white/[0.06] text-[13px];
 }
 .markdown-content pre code {
   @apply bg-transparent p-0;

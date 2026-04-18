@@ -61,7 +61,7 @@ def register(
     prompt encodes.
     """
     question_id = uuid.uuid4().hex[:12]
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     future: asyncio.Future = loop.create_future()
     pending = _Pending(
         future=future,
@@ -116,7 +116,6 @@ def resolve(
         return False
     if pending.timeout_handle and not from_timeout:
         pending.timeout_handle.cancel()
-    # Don't pop on timeout immediately so a late user reply can race-detect.
     _pending.pop(key, None)
     return True
 

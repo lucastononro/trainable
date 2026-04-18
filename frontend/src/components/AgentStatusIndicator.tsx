@@ -121,7 +121,7 @@ export default function AgentStatusIndicator({ agents, isRunning }: Props) {
       </button>
 
       {open && (
-        <div className="absolute top-full right-0 mt-1 w-72 bg-[#1a1a1a] border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
+        <div className="absolute top-full right-0 mt-1 w-72 bg-black border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
           {view === 'status' ? (
             <StatusView
               agents={agents}

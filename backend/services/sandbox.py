@@ -127,34 +127,43 @@ async def run_code(
 
     stderr_task = asyncio.create_task(_drain_stderr())
 
-    async for chunk in sb.stdout:
-        stdout_parts.append(chunk)
-        await broadcaster.publish(
-            session_id,
-            {"type": "code_output", "data": {"stream": "stdout", "text": chunk}},
-        )
+    try:
+        async for chunk in sb.stdout:
+            stdout_parts.append(chunk)
+            await broadcaster.publish(
+                session_id,
+                {"type": "code_output", "data": {"stream": "stdout", "text": chunk}},
+            )
 
-        if stage:
-            line_buffer += chunk
-            lines = line_buffer.split("\n")
-            line_buffer = lines[-1]
-            for line in lines[:-1]:
-                parsed = parse_stdout_line(line)
-                if parsed:
-                    try:
-                        await _dispatch(parsed)
-                    except Exception as e:
-                        logger.warning("Metric/config publish error: %s", e)
+            if stage:
+                line_buffer += chunk
+                lines = line_buffer.split("\n")
+                line_buffer = lines[-1]
+                for line in lines[:-1]:
+                    parsed = parse_stdout_line(line)
+                    if parsed:
+                        try:
+                            await _dispatch(parsed)
+                        except Exception as e:
+                            logger.warning("Metric/config publish error: %s", e)
 
-    if stage and line_buffer.strip():
-        parsed = parse_stdout_line(line_buffer)
-        if parsed:
-            try:
-                await _dispatch(parsed)
-            except Exception as e:
-                logger.warning("Metric/config flush error: %s", e)
+        if stage and line_buffer.strip():
+            parsed = parse_stdout_line(line_buffer)
+            if parsed:
+                try:
+                    await _dispatch(parsed)
+                except Exception as e:
+                    logger.warning("Metric/config flush error: %s", e)
+    finally:
+        # Ensure the stderr drainer doesn't outlive the sandbox call.
+        if not stderr_task.done():
+            stderr_task.cancel()
+        try:
+            await stderr_task
+        except (asyncio.CancelledError, Exception) as e:
+            if not isinstance(e, asyncio.CancelledError):
+                logger.debug("stderr drainer exited with: %s", e)
 
-    await stderr_task
     await sb.wait.aio()
 
     result = {

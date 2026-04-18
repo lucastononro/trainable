@@ -125,6 +125,30 @@ def _run_migrations(connection):
             ))
             logger.info("[DB] Wiped %d experiments", orphans)
 
+    # ------------------------------------------------------------------
+    # Indexes on hot FK columns. `CREATE INDEX IF NOT EXISTS` is supported
+    # by both Postgres and SQLite, so this is a no-op on fresh DBs where
+    # create_all already built them, and fills the gap on DBs upgraded
+    # from the pre-index schema.
+    # ------------------------------------------------------------------
+    indexes = [
+        ("ix_experiments_project_id", "experiments", "project_id"),
+        ("ix_sessions_experiment_id", "sessions", "experiment_id"),
+        ("ix_messages_session_id", "messages", "session_id"),
+        ("ix_artifacts_session_id", "artifacts", "session_id"),
+        ("ix_metrics_session_id", "metrics", "session_id"),
+        ("ix_processed_dataset_meta_session_id", "processed_dataset_meta", "session_id"),
+        ("ix_processed_dataset_meta_experiment_id", "processed_dataset_meta", "experiment_id"),
+    ]
+    for idx_name, table, column in indexes:
+        if insp.has_table(table):
+            try:
+                connection.execute(
+                    text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({column})")
+                )
+            except Exception as e:
+                logger.debug("Index %s create skipped: %s", idx_name, e)
+
 
 async def init_db():
     from models import (  # noqa: F401
