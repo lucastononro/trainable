@@ -1,14 +1,14 @@
-"""Session lifecycle, messages, and stage orchestration routes."""
+"""Session lifecycle and chat routes. Stage orchestration is handled by the
+chat agent itself — it delegates to specialists as needed."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
-import traceback
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,9 +16,9 @@ from sqlalchemy.orm import selectinload
 from db import async_session, get_db
 from models import Artifact, Experiment, Message, Metric
 from models import Session as SessionModel
-from schemas import ClarificationReply, MessageCreate, StageStart
+from schemas import ClarificationReply, MessageCreate
 from services.agent import abort_agent, run_agent
-from services.agent.tasks import _running_tasks
+from services.agent.tasks import register_task
 from services.broadcaster import broadcaster
 from services.clarifications import list_pending, resolve as resolve_clarification
 
@@ -36,6 +36,9 @@ async def create_session(experiment_id: str, db: AsyncSession = Depends(get_db))
     session = SessionModel(id=str(uuid.uuid4()), experiment_id=experiment_id)
     db.add(session)
     await db.commit()
+    # No need to seed a visible intro — the chat agent's system prompt
+    # already receives the project's data listing via _load_project_context
+    # at the start of every run.
     return session.to_dict()
 
 
@@ -81,7 +84,17 @@ async def send_message(
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
 
-    msg = Message(session_id=session_id, role="user", content=body.content)
+    mention_dicts = [m.model_dump() for m in (body.mentions or [])]
+    message_metadata = None
+    if mention_dicts:
+        message_metadata = {"event_type": "user_message", "mentions": mention_dicts}
+
+    msg = Message(
+        session_id=session_id,
+        role="user",
+        content=body.content,
+        metadata_=message_metadata,
+    )
     db.add(msg)
     await db.commit()
 
@@ -89,7 +102,7 @@ async def send_message(
         session_id,
         {
             "type": "user_message",
-            "data": {"content": body.content},
+            "data": {"content": body.content, "mentions": mention_dicts},
         },
     )
 
@@ -111,6 +124,7 @@ async def send_message(
         user_content = body.content
         selected_model = body.model or session.model
         agent_models = body.agent_models or {}
+        mentions_payload = mention_dicts or None
 
         async def _run_followup():
             try:
@@ -123,11 +137,12 @@ async def send_message(
                     user_prompt=user_content,
                     model=selected_model,
                     agent_models=agent_models,
+                    mentions=mentions_payload,
                 )
                 async with async_session() as fresh_db:
                     s = await fresh_db.get(SessionModel, session_id)
                     if s:
-                        s.state = f"{stage}_done"
+                        s.state = "done"
                         await fresh_db.commit()
             except asyncio.CancelledError:
                 async with async_session() as fresh_db:
@@ -143,19 +158,18 @@ async def send_message(
                         await fresh_db.commit()
 
         task = asyncio.create_task(_run_followup())
-        _running_tasks[session_id] = task
+        await register_task(session_id, task)
 
     return msg.to_dict()
 
 
 def _infer_stage(state: str, dataset_ref: str = "") -> str:
-    """Infer the agent/stage from session state for follow-up messages.
+    """Entry-point agent for follow-up user messages.
 
-    Always defaults to 'chat' — the chat agent decides when to delegate
-    to orchestrator or specialist agents on its own.
+    The chat agent decides when to delegate to orchestrator or specialist
+    agents, so this always returns 'chat' in the multi-agent world.
     """
     return "chat"
-    return "eda"
 
 
 @router.get("/sessions/{session_id}/messages")
@@ -179,115 +193,6 @@ async def abort_session(session_id: str, db: AsyncSession = Depends(get_db)):
         await db.commit()
         return {"status": "cancelled"}
     return {"status": "not_running"}
-
-
-@router.post("/sessions/{session_id}/stages/{stage}/start")
-async def start_stage(
-    session_id: str,
-    stage: str,
-    body: StageStart = StageStart(),
-    background_tasks: BackgroundTasks = BackgroundTasks(),
-    db: AsyncSession = Depends(get_db),
-):
-    if stage not in ("eda", "prep", "train"):
-        raise HTTPException(status_code=400, detail=f"Invalid stage: {stage}")
-
-    result = await db.execute(
-        select(SessionModel)
-        .where(SessionModel.id == session_id)
-        .options(selectinload(SessionModel.experiment))
-    )
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    # Guard: don't start if already running
-    existing = _running_tasks.get(session_id)
-    if existing and not existing.done():
-        raise HTTPException(
-            status_code=409, detail="Agent already running for this session"
-        )
-
-    # Guard: enforce stage prerequisites
-    current_state = session.state or "created"
-    REQUIRED_PREV = {"prep": "eda_done", "train": "prep_done"}
-    ALLOWED_EDA = {"created", "failed", "cancelled"}
-    if stage == "eda" and current_state not in ALLOWED_EDA:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot start EDA: current state is '{current_state}'",
-        )
-    required = REQUIRED_PREV.get(stage)
-    if required and current_state not in {required, "failed", "cancelled"}:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot start {stage}: requires '{required}', current is '{current_state}'",
-        )
-
-    # Capture values before db session closes
-    experiment_id = session.experiment_id
-    exp_instructions = session.experiment.instructions or ""
-    dataset_ref = session.experiment.dataset_ref or ""
-    stage_instructions = body.instructions or ""
-    selected_model = body.model or session.model
-
-    # Merge experiment-level + stage-specific instructions
-    instructions = exp_instructions
-    if stage_instructions:
-        instructions = f"{exp_instructions}\n\nAdditional instructions for this stage:\n{stage_instructions}".strip()
-
-    # Persist model selection if provided
-    if body.model:
-        session.model = body.model
-
-    # Update state
-    session.state = f"{stage}_running"
-    await db.commit()
-
-    # Run agent in background
-    async def _run_agent():
-        try:
-            await run_agent(
-                session_id=session_id,
-                experiment_id=experiment_id,
-                stage=stage,
-                instructions=instructions,
-                dataset_ref=dataset_ref,
-                gpu=body.gpu,
-                model=selected_model,
-            )
-            # Agent saves messages directly via _save_and_publish
-            # Just update the session state
-            async with async_session() as fresh_db:
-                s = await fresh_db.get(SessionModel, session_id)
-                if s:
-                    s.state = f"{stage}_done"
-                    await fresh_db.commit()
-        except asyncio.CancelledError:
-            # Agent handles its own cleanup + SSE events
-            async with async_session() as fresh_db:
-                s = await fresh_db.get(SessionModel, session_id)
-                if s and s.state != "cancelled":
-                    s.state = "cancelled"
-                    await fresh_db.commit()
-        except Exception as e:
-            logger.error(
-                "Stage '%s' failed for session %s: %s",
-                stage,
-                session_id,
-                e,
-            )
-            traceback.print_exc()
-            async with async_session() as fresh_db:
-                s = await fresh_db.get(SessionModel, session_id)
-                if s:
-                    s.state = "failed"
-                    await fresh_db.commit()
-
-    task = asyncio.create_task(_run_agent())
-    _running_tasks[session_id] = task
-
-    return {"status": "started", "state": f"{stage}_running"}
 
 
 @router.get("/sessions/{session_id}/clarifications")

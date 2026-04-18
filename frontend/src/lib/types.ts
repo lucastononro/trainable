@@ -90,6 +90,19 @@ export interface ChartConfig {
 
 export type Stage = 'eda' | 'prep' | 'train';
 
+export type MentionKind = 'file' | 'session';
+export interface Mention {
+  kind: MentionKind;
+  ref: string;
+  label: string;
+  sandbox_path?: string;
+  experiment_id?: string;
+}
+export type DraftToken =
+  | { kind: 'text'; value: string }
+  | { kind: 'mention'; mention: Mention };
+export type Draft = DraftToken[];
+
 export interface SSEEvent {
   type: string;
   data: Record<string, unknown>;
@@ -117,10 +130,6 @@ export interface FileTreeNode {
 export interface CreateExperimentResponse extends Experiment {
   session_id: string;
   uploaded_files?: string[];
-}
-export interface StageStartResponse {
-  status: string;
-  state: string;
 }
 export interface DeleteResponse {
   status: string;

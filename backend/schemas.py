@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -26,18 +26,21 @@ class ExperimentCreate(BaseModel):
     instructions: str = Field(default="", max_length=_INSTRUCTIONS_MAX)
 
 
+class Mention(BaseModel):
+    kind: Literal["file", "session"]
+    ref: str = Field(..., max_length=2048)
+    label: str = Field(..., max_length=_NAME_MAX)
+    sandbox_path: Optional[str] = Field(default=None, max_length=2048)
+    experiment_id: Optional[str] = Field(default=None, max_length=_UUID_MAX)
+
+
 class MessageCreate(BaseModel):
     content: str = Field(..., max_length=_MESSAGE_MAX)
     run_agent: bool = False
     model: Optional[str] = Field(default=None, max_length=_MODEL_ID_MAX)
     # Per-agent model overrides: {"eda": "claude-haiku-4-5", "trainer": "claude-opus-4-6"}
     agent_models: Optional[dict[str, str]] = Field(default=None)
-
-
-class StageStart(BaseModel):
-    gpu: Optional[str] = Field(default=None, max_length=_GPU_MAX)
-    instructions: Optional[str] = Field(default=None, max_length=_INSTRUCTIONS_MAX)
-    model: Optional[str] = Field(default=None, max_length=_MODEL_ID_MAX)
+    mentions: Optional[list[Mention]] = Field(default=None, max_length=64)
 
 
 class ClarificationReply(BaseModel):

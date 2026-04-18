@@ -8,11 +8,11 @@ import type {
   Session,
   SessionDetail,
   Message,
+  Mention,
   Artifact,
   MetricPoint,
   ModelInfo,
   FileTreeNode,
-  StageStartResponse,
   DeleteResponse,
   AbortResponse,
 } from './types';
@@ -60,11 +60,17 @@ export const api = {
       files: Array<{
         path: string;
         name: string;
+        relative_path?: string;
         size: number | null;
         mtime: number | null;
-        experiment_id: string | null;
-        experiment_name: string | null;
+        s3_key?: string;
+        /** true = in sandbox, false = missing, null = couldn't verify */
+        in_sandbox?: boolean | null;
       }>;
+      s3_error?: string | null;
+      sandbox_error?: string | null;
+      sandbox_checked?: boolean;
+      sandbox_missing_count?: number;
     }>(`/projects/${id}/files`),
 
   // Experiments
@@ -116,6 +122,7 @@ export const api = {
     content: string,
     runAgent: boolean = false,
     agentModels?: Record<string, string>,
+    mentions?: Mention[],
   ) =>
     fetchJSON<Message>(`/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -123,16 +130,11 @@ export const api = {
         content,
         run_agent: runAgent,
         ...(agentModels && Object.keys(agentModels).length > 0 ? { agent_models: agentModels } : {}),
+        ...(mentions && mentions.length > 0 ? { mentions } : {}),
       }),
     }),
 
   getMessages: (sessionId: string) => fetchJSON<Message[]>(`/sessions/${sessionId}/messages`),
-
-  startStage: (sessionId: string, stage: string, gpu?: string, instructions?: string) =>
-    fetchJSON<StageStartResponse>(`/sessions/${sessionId}/stages/${stage}/start`, {
-      method: 'POST',
-      body: JSON.stringify({ gpu: gpu || null, instructions: instructions || null }),
-    }),
 
   getArtifacts: (sessionId: string) => fetchJSON<Artifact[]>(`/sessions/${sessionId}/artifacts`),
 
@@ -181,7 +183,13 @@ export const api = {
     if (s3Path) data.append('s3_path', s3Path);
     if (sessionId) data.append('session_id', sessionId);
     if (files) {
-      for (const f of files) data.append('files', f);
+      for (const f of files) {
+        // Folder uploads expose `webkitRelativePath` (e.g. "mydata/train/x.csv").
+        // Pass it as the part filename so the backend can preserve folder
+        // structure instead of flattening everything to basename.
+        const name = (f as File & { webkitRelativePath?: string }).webkitRelativePath || f.name;
+        data.append('files', f, name);
+      }
     }
     const res = await fetch(`${API_BASE}/experiments/${experimentId}/attach`, {
       method: 'POST',

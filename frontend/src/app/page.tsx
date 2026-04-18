@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
-import { SSEEvent, FileTreeNode, MetricPoint, ChartConfig } from '@/lib/types';
+import { SSEEvent, FileTreeNode, MetricPoint, ChartConfig, Mention, Draft } from '@/lib/types';
+import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
 import { ImperativePanelHandle, Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
 import {
   Bot,
@@ -38,6 +39,10 @@ import {
   FolderUp,
   HardDrive,
   Paperclip,
+  Search,
+  ListChecks,
+  FileSearch,
+  Wrench,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import ModelSelector from '@/components/ModelSelector';
@@ -45,6 +50,8 @@ import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndic
 import MetricsTab from '@/components/MetricsTab';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
 import ProjectDataModal from '@/components/ProjectDataModal';
+import MentionInput, { MentionInputHandle } from '@/components/MentionInput';
+import MentionPill from '@/components/MentionPill';
 import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
 import python from 'react-syntax-highlighter/dist/esm/languages/prism/python';
 import json from 'react-syntax-highlighter/dist/esm/languages/prism/json';
@@ -54,7 +61,6 @@ import remarkGfm from 'remark-gfm';
 import {
   buildTreeFromFlatList,
   insertNodeIntoTree,
-  ensureStageFolders,
   unwrapTree,
   countFiles,
   fileBreadcrumb,
@@ -95,7 +101,8 @@ interface ChatItem {
     | 'stage_complete'
     | 'subagent_start'
     | 'subagent_end'
-    | 'clarification';
+    | 'clarification'
+    | 'agent_tool';
   content: string;
   meta?: any;
   timestamp: number;
@@ -140,7 +147,7 @@ export default function HomePage() {
 
   // Chat / session state
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
-  const [input, setInput] = useState('');
+  const [draft, setDraft] = useState<Draft>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [sessionState, setSessionState] = useState('created');
   const [loading, setLoading] = useState(false);
@@ -153,14 +160,12 @@ export default function HomePage() {
   const [canvasContent, setCanvasContent] = useState('');
   const [canvasTitle, setCanvasTitle] = useState('Report');
   const [generatedFiles, setGeneratedFiles] = useState<any[]>([]);
-  const [fileTree, setFileTree] = useState<FileTreeNode>(() =>
-    ensureStageFolders({
-      name: 'workspace',
-      path: '/',
-      type: 'directory',
-      children: [],
-    }),
-  );
+  const [fileTree, setFileTree] = useState<FileTreeNode>({
+    name: 'workspace',
+    path: '/',
+    type: 'directory',
+    children: [],
+  });
 
   // Metrics state
   const [metricPoints, setMetricPoints] = useState<MetricPoint[]>([]);
@@ -169,7 +174,7 @@ export default function HomePage() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const sseRef = useRef<EventSource | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<MentionInputHandle | null>(null);
   const prevExperimentIdRef = useRef<string | null>(null);
   const streamingItemIdRef = useRef<string | null>(null);
   const workspacePanelRef = useRef<ImperativePanelHandle>(null);
@@ -191,7 +196,7 @@ export default function HomePage() {
   const attachMenuRef = useRef<HTMLDivElement>(null);
 
   // Pending message ref: when we auto-create an experiment, we queue the message
-  const pendingMessageRef = useRef<string | null>(null);
+  const pendingMessageRef = useRef<{ content: string; mentions: Mention[] } | null>(null);
   // Pending attachment ref: when we auto-create an experiment with files, queue the upload+send
   const pendingAttachmentRef = useRef<{
     files: File[];
@@ -234,7 +239,20 @@ export default function HomePage() {
           switch (event.type) {
             case 'state_change':
               setSessionState(data.state);
-              if (data.state.includes('running')) setIsRunning(true);
+              if (data.state.includes('running')) {
+                setIsRunning(true);
+                // A fresh ROOT-level run is starting. Wipe any leftover
+                // sub-agent indicators from previous runs in this session
+                // (or from the previous session if the user just switched
+                // before the reset propagated). Sub-agents (depth > 0) must
+                // NOT trigger this reset, otherwise they'd wipe their own
+                // siblings mid-flight.
+                const depth = (data.depth as number | undefined) ?? 0;
+                if (depth === 0) {
+                  setActiveAgents([]);
+                  activeAgentsRef.current = [];
+                }
+              }
               if (
                 data.state.includes('done') ||
                 data.state === 'failed' ||
@@ -254,9 +272,15 @@ export default function HomePage() {
               break;
             case 'agent_token':
             case 'agent_message': {
-              // Tag message with the currently active agent type
+              // Prefer the agent_type carried on the event itself — the
+              // backend stamps it via agent_meta in save_and_publish, so it's
+              // always the authoritative source for which agent produced the
+              // text. Fall back to the activeAgents heuristic only when the
+              // event is missing the field (legacy events).
+              const eventAgentType = (data.agent_type as string | undefined) || undefined;
               const running = activeAgentsRef.current.filter(a => a.status === 'running');
-              const currentAgentType = running.length > 0 ? running[running.length - 1].type : undefined;
+              const fallbackType = running.length > 0 ? running[running.length - 1].type : undefined;
+              const currentAgentType = eventAgentType || fallbackType;
               setChatItems((prev) => {
                 const streamingId = streamingItemIdRef.current;
                 if (streamingId) {
@@ -341,8 +365,19 @@ export default function HomePage() {
                   };
                   return updated;
                 }
-                addItem({ type: 'code_output', content: data.text, meta: { stream: data.stream } });
-                return prev;
+                // Fallback: no tool_start found — append a standalone code_output item.
+                // Build inline instead of calling addItem() inside the updater (which
+                // would nest setChatItems and double-fire under React Strict Mode).
+                return [
+                  ...prev,
+                  {
+                    id: `${Date.now()}-${Math.random()}`,
+                    type: 'code_output',
+                    content: data.text,
+                    meta: { stream: data.stream },
+                    timestamp: Date.now(),
+                  },
+                ];
               });
               break;
             case 'agent_error':
@@ -376,7 +411,7 @@ export default function HomePage() {
                     stage,
                   );
                 }
-                return ensureStageFolders(merged);
+                return merged;
               });
               break;
             }
@@ -567,6 +602,46 @@ export default function HomePage() {
               );
               break;
             }
+            // Generic auxiliary-tool event (inspect_agent_context, list_session_agents,
+            // read_project_session). Single event per call. NO content preview is
+            // surfaced — the user only sees that the agent did something.
+            case 'agent_tool_call': {
+              addItem({
+                type: 'agent_tool',
+                content: data.tool_name || 'tool',
+                meta: {
+                  call_id: data.call_id,
+                  tool_name: data.tool_name,
+                  asker_agent_type: data.asker_agent_type,
+                  target_agent_type: data.target_agent_type,
+                  answerer_agent_type: data.answerer_agent_type,
+                  depth: data.depth || 0,
+                  duration_s: data.duration_s,
+                  is_error: !!data.is_error,
+                  variant: 'tool',
+                },
+              });
+              break;
+            }
+            // Inter-agent clarification that was answered directly by the
+            // parent (no escalation). User sees only the fact that an
+            // exchange happened — neither question nor answer text.
+            case 'clarification_exchange': {
+              addItem({
+                type: 'agent_tool',
+                content: 'request_clarification',
+                meta: {
+                  call_id: data.call_id,
+                  tool_name: 'request_clarification',
+                  asker_agent_type: data.asker_agent_type,
+                  answerer_agent_type: data.answerer_agent_type,
+                  depth: data.depth || 0,
+                  duration_s: data.duration_s,
+                  variant: 'clarification_exchange',
+                },
+              });
+              break;
+            }
           }
         } catch {
           /* ignore parse errors */
@@ -584,7 +659,7 @@ export default function HomePage() {
 
   const resetSessionState = useCallback(() => {
     setChatItems([]);
-    setInput('');
+    setDraft([]);
     setIsRunning(false);
     streamingItemIdRef.current = null;
     setSessionState('created');
@@ -592,18 +667,23 @@ export default function HomePage() {
     setCanvasContent('');
     setCanvasTitle('Report');
     setGeneratedFiles([]);
-    setFileTree(
-      ensureStageFolders({
-        name: 'workspace',
-        path: '/',
-        type: 'directory',
-        children: [],
-      }),
-    );
+    setFileTree({
+      name: 'workspace',
+      path: '/',
+      type: 'directory',
+      children: [],
+    });
     setMetricPoints([]);
     setChartConfig(null);
     metricKeysRef.current = new Set();
     setExperimentName('');
+    // Critical: clear per-session agent indicators. If we don't, the previous
+    // session's running sub-agents leak into the new one and `agent_message`
+    // events get mis-tagged with the wrong agent_type (the stale entry from
+    // the previous session). Reset both the state AND the ref synchronously
+    // so the SSE handler closure sees an empty list immediately.
+    setActiveAgents([]);
+    activeAgentsRef.current = [];
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -668,6 +748,8 @@ export default function HomePage() {
           for (const msg of sessionData.messages) {
             const eventType = msg.metadata?.event_type as string | undefined;
             if (eventType && NON_VISIBLE_EVENTS.has(eventType)) continue;
+            // Legacy seeded intro messages (pre-dated system-prompt injection) — hide.
+            if (msg.metadata?.session_intro) continue;
             const mkItem = (item: Omit<ChatItem, 'id' | 'timestamp'>): ChatItem => ({
               ...item,
               id: `${msg.id || Date.now()}-${Math.random()}`,
@@ -792,6 +874,45 @@ export default function HomePage() {
                   }),
                 );
               }
+            } else if (eventType === 'agent_tool_call') {
+              restored.push(
+                mkItem({
+                  type: 'agent_tool',
+                  content: (msg.metadata?.tool_name as string) || 'tool',
+                  meta: {
+                    call_id: msg.metadata?.call_id,
+                    tool_name: msg.metadata?.tool_name,
+                    asker_agent_type: msg.metadata?.asker_agent_type,
+                    target_agent_type: msg.metadata?.target_agent_type,
+                    answerer_agent_type: msg.metadata?.answerer_agent_type,
+                    depth: msg.metadata?.depth || 0,
+                    duration_s: msg.metadata?.duration_s,
+                    is_error: !!msg.metadata?.is_error,
+                    variant: 'tool',
+                  },
+                }),
+              );
+            } else if (eventType === 'clarification_exchange') {
+              restored.push(
+                mkItem({
+                  type: 'agent_tool',
+                  content: 'request_clarification',
+                  meta: {
+                    call_id: msg.metadata?.call_id,
+                    tool_name: 'request_clarification',
+                    asker_agent_type: msg.metadata?.asker_agent_type,
+                    answerer_agent_type: msg.metadata?.answerer_agent_type,
+                    depth: msg.metadata?.depth || 0,
+                    duration_s: msg.metadata?.duration_s,
+                    variant: 'clarification_exchange',
+                  },
+                }),
+              );
+            } else if (eventType === 'clarification_q' || eventType === 'clarification_a') {
+              // Persisted under their respective agent_ids and recoverable via
+              // inspect_agent_context. Don't render as chat bubbles — the
+              // agent_tool_call / clarification_exchange events are the UI surface.
+              continue;
             } else if (msg.role === 'user') {
               if (msg.metadata?.event_type === 'file_attached') {
                 // Show file attachment as a user bubble with file chips
@@ -805,7 +926,14 @@ export default function HomePage() {
                 );
                 continue;
               }
-              restored.push(mkItem({ type: 'user', content: msg.content }));
+              const mentions = (msg.metadata?.mentions as Mention[] | undefined) ?? undefined;
+              restored.push(
+                mkItem({
+                  type: 'user',
+                  content: msg.content,
+                  meta: mentions && mentions.length > 0 ? { mentions } : undefined,
+                }),
+              );
             } else if (msg.role === 'assistant') {
               restored.push(mkItem({ type: 'assistant', content: msg.content }));
             }
@@ -845,9 +973,9 @@ export default function HomePage() {
         api
           .getFileTree(sid)
           .then((tree) => {
-            if (!cancelled) setFileTree(ensureStageFolders(unwrapTree(tree)));
+            if (!cancelled) setFileTree(unwrapTree(tree));
           })
-          .catch(() => {});
+          .catch((e) => console.error('Failed to load file tree', e));
 
         // Load historical metrics
         api
@@ -861,7 +989,7 @@ export default function HomePage() {
               }
             }
           })
-          .catch(() => {});
+          .catch((e) => console.error('Failed to load historical metrics', e));
 
         // Set running state from session
         if (sessionData.state) setSessionState(sessionData.state);
@@ -890,11 +1018,17 @@ export default function HomePage() {
 
   useEffect(() => {
     if (pendingMessageRef.current && activeSessionId && sseConnected) {
-      const text = pendingMessageRef.current;
+      const pending = pendingMessageRef.current;
       pendingMessageRef.current = null;
-      addItem({ type: 'user', content: text });
+      addItem({
+        type: 'user',
+        content: pending.content,
+        meta: pending.mentions.length > 0 ? { mentions: pending.mentions } : undefined,
+      });
       setIsRunning(true);
-      api.sendMessage(activeSessionId, text, true, agentModelsRef.current).catch((e: any) => {
+      api
+        .sendMessage(activeSessionId, pending.content, true, agentModelsRef.current, pending.mentions)
+        .catch((e: any) => {
         addItem({ type: 'error', content: e.message });
         setIsRunning(false);
       });
@@ -961,9 +1095,9 @@ export default function HomePage() {
       return;
     }
 
-    if (!input.trim()) return;
-    const text = input.trim();
-    setInput('');
+    if (isDraftEmpty(draft)) return;
+    const { content, mentions } = draftToWire(draft);
+    setDraft([]);
 
     // If no active experiment, we need to create one (and a project if needed).
     if (!activeExperimentId || !activeSessionId) {
@@ -980,7 +1114,7 @@ export default function HomePage() {
           sesId = created.session_id;
         } else {
           // Have a project but no experiment — quick-create one inside it.
-          const created = await api.quickCreate(projectId, undefined, text);
+          const created = await api.quickCreate(projectId, undefined, draftToPlainText(draft));
           expId = created.id;
           sesId = created.session_id;
         }
@@ -990,18 +1124,22 @@ export default function HomePage() {
         setActiveProject(projectId);
         setActiveExperiment(expId, sesId);
         // Queue the message to be sent once SSE connects
-        pendingMessageRef.current = text;
+        pendingMessageRef.current = { content, mentions };
       } catch (e: any) {
         addItem({ type: 'error', content: `Failed to create: ${e.message}` });
       }
       return;
     }
 
-    addItem({ type: 'user', content: text });
+    addItem({
+      type: 'user',
+      content,
+      meta: mentions.length > 0 ? { mentions } : undefined,
+    });
     setIsRunning(true);
 
     try {
-      await api.sendMessage(activeSessionId, text, true, agentModelsRef.current);
+      await api.sendMessage(activeSessionId, content, true, agentModelsRef.current, mentions);
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
       setIsRunning(false);
@@ -1020,13 +1158,13 @@ export default function HomePage() {
   }, []);
 
   const handleAttachAndSend = useCallback(async () => {
-    if (attachedFiles.length === 0 && !input.trim()) return;
+    if (attachedFiles.length === 0 && isDraftEmpty(draft)) return;
 
     const filesToSend = [...attachedFiles];
-    const textToSend = input.trim();
+    const { content: textToSend, mentions: draftMentions } = draftToWire(draft);
     const fileNames = filesToSend.map((f) => f.name);
     setAttachedFiles([]);
-    setInput('');
+    setDraft([]);
 
     const expId = activeExperimentId;
     const sesId = activeSessionId;
@@ -1070,7 +1208,10 @@ export default function HomePage() {
       addItem({
         type: 'user',
         content: textToSend,
-        meta: { files: fileNames },
+        meta: {
+          files: fileNames,
+          ...(draftMentions.length > 0 ? { mentions: draftMentions } : {}),
+        },
       });
 
       if (filesToSend.length > 0) {
@@ -1082,13 +1223,13 @@ export default function HomePage() {
         ? textToSend
         : `I've attached ${fileNames.length} file${fileNames.length > 1 ? 's' : ''}: ${fileNames.join(', ')}. What can you tell me about this data?`;
       setIsRunning(true);
-      await api.sendMessage(sesId, agentPrompt, true, agentModelsRef.current);
+      await api.sendMessage(sesId, agentPrompt, true, agentModelsRef.current, draftMentions);
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
     } finally {
       setAttachingFiles(false);
     }
-  }, [attachedFiles, input, activeExperimentId, activeSessionId, activeProjectId, refreshExperiments, refreshProjects, setActiveExperiment, setActiveProject, addItem]);
+  }, [attachedFiles, draft, activeExperimentId, activeSessionId, activeProjectId, refreshExperiments, refreshProjects, setActiveExperiment, setActiveProject, addItem]);
 
   const handleS3Select = useCallback(
     async (s3Path: string) => {
@@ -1156,9 +1297,29 @@ export default function HomePage() {
 
   // Handle welcome-screen suggestion click
   const handleSuggestion = (prompt: string) => {
-    setInput(prompt);
+    setDraft([{ kind: 'text', value: prompt }]);
     inputRef.current?.focus();
   };
+
+  // Files attached earlier in this session — surfaced at the top of the `@` picker.
+  const sessionAttachedFiles = useMemo(() => {
+    const seen = new Set<string>();
+    const out: { name: string; sandboxPath: string }[] = [];
+    for (const it of chatItems) {
+      const files = (it.meta?.files as string[] | undefined) ?? [];
+      for (const name of files) {
+        if (seen.has(name)) continue;
+        seen.add(name);
+        out.push({
+          name,
+          sandboxPath: activeSessionId
+            ? `/sessions/${activeSessionId}/${name}`
+            : name,
+        });
+      }
+    }
+    return out;
+  }, [chatItems, activeSessionId]);
 
   // ---------------------------------------------------------------------------
   // Render
@@ -1281,7 +1442,7 @@ export default function HomePage() {
 
               {/* Input bar */}
               <div className="relative">
-                <div className="flex items-center gap-2 bg-surface-elevated border border-surface-border rounded-2xl px-3 py-3 focus-within:border-primary-500 transition-colors">
+                <div className="flex items-center gap-2 bg-[#1e1f22] rounded-2xl px-3 py-3 transition-colors">
                   {/* Attach button */}
                   <div className="relative" ref={attachMenuRef}>
                     <button
@@ -1294,7 +1455,7 @@ export default function HomePage() {
                       <Plus className="w-5 h-5" />
                     </button>
                     {showAttachMenu && (
-                      <div className="absolute bottom-full left-0 mb-2 w-52 bg-[#1a1a1a] border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
+                      <div className="absolute bottom-full left-0 mb-2 w-52 bg-black border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
                         <input
                           ref={fileInputRef2}
                           type="file"
@@ -1341,18 +1502,20 @@ export default function HomePage() {
                     )}
                   </div>
 
-                  <input
+                  <MentionInput
                     ref={inputRef}
-                    type="text"
-                    value={input}
-                    onChange={(e) => setInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+                    draft={draft}
+                    onChange={setDraft}
+                    onSubmit={handleSend}
                     placeholder="Describe your task, ask a question, or upload data..."
-                    className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 focus:outline-none py-1"
+                    className="flex-1 py-1"
+                    projectId={activeProjectId}
+                    experiments={experiments}
+                    attachedFilesInSession={sessionAttachedFiles}
                   />
                   <button
                     onClick={handleSend}
-                    disabled={!input.trim() && attachedFiles.length === 0}
+                    disabled={isDraftEmpty(draft) && attachedFiles.length === 0}
                     title="Send message"
                     className="p-2 bg-primary-600 hover:bg-primary-700 disabled:opacity-30 rounded-xl transition-colors shrink-0"
                   >
@@ -1420,7 +1583,7 @@ export default function HomePage() {
                 </div>
 
                 {/* Input bar */}
-                <div className="border-t border-surface-border bg-surface px-4 py-3">
+                <div className="bg-black px-4 py-3">
                   <div className={`mx-auto ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}>
                     {/* Attached files preview */}
                     {attachedFiles.length > 0 && (
@@ -1443,7 +1606,7 @@ export default function HomePage() {
                       </div>
                     )}
 
-                    <div className="flex items-center gap-1 bg-surface-elevated border border-surface-border rounded-2xl px-2 py-1.5 focus-within:border-primary-500 transition-colors">
+                    <div className="flex items-center gap-1 bg-[#1e1f22] rounded-2xl px-2 py-1.5 transition-colors">
                       {/* Attach menu */}
                       <div className="relative" ref={attachMenuRef}>
                         <button
@@ -1457,7 +1620,7 @@ export default function HomePage() {
                           <Plus className="w-4 h-4" />
                         </button>
                         {showAttachMenu && (
-                          <div className="absolute bottom-full left-0 mb-2 w-52 bg-[#1a1a1a] border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
+                          <div className="absolute bottom-full left-0 mb-2 w-52 bg-black border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
                             <input
                               ref={fileInputRef2}
                               type="file"
@@ -1501,19 +1664,21 @@ export default function HomePage() {
                         )}
                       </div>
 
-                      <input
-                        type="text"
-                        value={input}
-                        onChange={(e) => setInput(e.target.value)}
-                        onKeyDown={(e) =>
-                          e.key === 'Enter' &&
-                          !e.shiftKey &&
-                          (isRunning && !input.trim() && attachedFiles.length === 0 ? handleStop() : handleSend())
+                      <MentionInput
+                        draft={draft}
+                        onChange={setDraft}
+                        onSubmit={() =>
+                          isRunning && isDraftEmpty(draft) && attachedFiles.length === 0
+                            ? handleStop()
+                            : handleSend()
                         }
                         placeholder="Ask anything"
-                        className="flex-1 bg-transparent text-white text-sm placeholder-gray-500 focus:outline-none py-1.5"
+                        className="flex-1 py-1.5"
+                        projectId={activeProjectId}
+                        experiments={experiments}
+                        attachedFilesInSession={sessionAttachedFiles}
                       />
-                      {isRunning && !input.trim() && attachedFiles.length === 0 ? (
+                      {isRunning && isDraftEmpty(draft) && attachedFiles.length === 0 ? (
                         <button
                           onClick={handleStop}
                           className="p-2 bg-red-600 hover:bg-red-700 rounded-xl transition-colors shrink-0"
@@ -1524,7 +1689,7 @@ export default function HomePage() {
                       ) : (
                         <button
                           onClick={handleSend}
-                          disabled={!input.trim() && attachedFiles.length === 0}
+                          disabled={isDraftEmpty(draft) && attachedFiles.length === 0}
                           title="Send message"
                           className="p-2 bg-primary-600 hover:bg-primary-700 disabled:opacity-30 rounded-xl transition-colors shrink-0"
                         >
@@ -1738,7 +1903,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
   }, [filePath]);
 
   return (
-    <div className="h-full flex flex-col bg-[#0d1117]">
+    <div className="h-full flex flex-col bg-black">
       <div className="flex-1 overflow-auto">
         {loading ? (
           <div className="flex items-center justify-center h-32">
@@ -1747,7 +1912,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
         ) : error ? (
           <div className="p-4 text-sm text-red-400">{error}</div>
         ) : isImage ? (
-          <div className="p-6 flex items-center justify-center bg-[#0d1117]">
+          <div className="p-6 flex items-center justify-center bg-black">
             <img
               src={`${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(filePath)}`}
               alt={fileName}
@@ -1980,7 +2145,7 @@ function WorkspaceSidebar({
   const breadcrumb = activeTab?.type === 'file' ? fileBreadcrumb(activeTab.id) : [];
 
   return (
-    <div className="h-full border-l border-surface-border flex flex-row bg-[#0d1117]">
+    <div className="h-full border-l border-surface-border flex flex-row bg-black">
       {/* Left: file tree sidebar */}
       <div className="w-[220px] shrink-0 flex flex-col border-r border-white/[0.06] bg-surface">
         {/* Tree header */}
@@ -2064,16 +2229,27 @@ function WorkspaceSidebar({
                   onClick={() => setActiveTabId(tab.id)}
                   className={`flex items-center gap-1.5 px-3 h-[34px] text-xs border-r border-white/[0.04] shrink-0 transition-colors ${
                     isActive
-                      ? 'bg-[#0d1117] text-gray-200 border-t-2 border-t-primary-500'
+                      ? 'bg-black text-gray-200 border-t-2 border-t-primary-500'
                       : 'bg-surface text-gray-500 hover:text-gray-300 border-t-2 border-t-transparent'
                   }`}
                 >
                   <TabIcon className={`w-3.5 h-3.5 shrink-0 ${tab.iconColor}`} />
                   <span className="truncate max-w-[120px]">{tab.label}</span>
                   <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Close ${tab.label} tab`}
+                    title="Close tab"
                     onClick={(e) => {
                       e.stopPropagation();
                       closeTab(tab.id);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        closeTab(tab.id);
+                      }
                     }}
                     className="ml-1 p-0.5 rounded hover:bg-white/[0.1] transition-colors"
                   >
@@ -2087,7 +2263,7 @@ function WorkspaceSidebar({
 
         {/* Breadcrumb (for file tabs) */}
         {activeTab?.type === 'file' && breadcrumb.length > 0 && (
-          <div className="flex items-center gap-1 px-3 h-6 bg-[#0d1117] border-b border-white/[0.04] shrink-0">
+          <div className="flex items-center gap-1 px-3 h-6 bg-black border-b border-white/[0.04] shrink-0">
             {breadcrumb.map((seg, i) => (
               <span key={i} className="flex items-center gap-1 text-[11px]">
                 {i > 0 && <ChevronRight className="w-2.5 h-2.5 text-gray-700" />}
@@ -2104,7 +2280,7 @@ function WorkspaceSidebar({
           {activeTab?.type === 'file' ? (
             <FileViewer filePath={activeTab.id} sessionId={sessionId} />
           ) : activeTab?.type === 'report' && canvasContent ? (
-            <div className="h-full overflow-y-auto p-6 bg-[#0d1117]">
+            <div className="h-full overflow-y-auto p-6 bg-black">
               <div className="markdown-content">
                 <ReactMarkdown
                   remarkPlugins={[remarkGfm]}
@@ -2132,7 +2308,7 @@ function WorkspaceSidebar({
               </div>
             </div>
           ) : activeTab?.type === 'metrics' ? (
-            <div className="h-full overflow-hidden bg-[#0d1117]">
+            <div className="h-full overflow-hidden bg-black">
               <MetricsTab
                 metricPoints={metricPoints}
                 chartConfig={chartConfig}
@@ -2140,7 +2316,7 @@ function WorkspaceSidebar({
               />
             </div>
           ) : (
-            <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-[#0d1117]">
+            <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-black">
               <Code2 className="w-8 h-8 mb-2 text-gray-700" />
               <p className="text-xs">Select a file to view</p>
             </div>
@@ -2230,8 +2406,10 @@ function ToolGroupCard({ items }: { items: ChatItem[] }) {
         <Code2 className="w-3.5 h-3.5 text-amber-400" />
       </div>
       <div className="flex-1 min-w-0 rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border overflow-hidden">
-        <div
-          className="flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none"
+        <button
+          type="button"
+          aria-expanded={expanded}
+          className="w-full flex items-center gap-2 px-4 py-2.5 cursor-pointer select-none text-left"
           onClick={() => setExpanded((prev) => !prev)}
         >
           {hasRunning ? (
@@ -2249,7 +2427,7 @@ function ToolGroupCard({ items }: { items: ChatItem[] }) {
               expanded ? 'rotate-90' : ''
             }`}
           />
-        </div>
+        </button>
         {expanded && (
           <div className="border-t border-surface-border px-2 py-2 space-y-1">
             {toolItems.map((item) => (
@@ -2284,8 +2462,10 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
 
   const card = (
     <div className={`${inline ? '' : 'max-w-[85%] '}rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border overflow-hidden`}>
-      <div
-        className={`flex items-center gap-2 ${inline ? 'px-3 py-1.5' : 'px-4 py-2.5'} cursor-pointer select-none`}
+      <button
+        type="button"
+        aria-expanded={!collapsed}
+        className={`w-full flex items-center gap-2 ${inline ? 'px-3 py-1.5' : 'px-4 py-2.5'} cursor-pointer select-none text-left`}
         onClick={() => setCollapsed((prev) => !prev)}
       >
         {isStart ? (
@@ -2303,7 +2483,7 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
             !collapsed ? 'rotate-90' : ''
           }`}
         />
-      </div>
+      </button>
       {!collapsed && (
         <>
           {item.meta?.code && (
@@ -2565,6 +2745,76 @@ function ClarificationCard({ item, sessionId }: { item: ChatItem; sessionId: str
 }
 
 // ---------------------------------------------------------------------------
+// AgentToolCard -- one-line surface for auxiliary tools (inspect, list, read,
+// inter-agent clarification exchanges). Strict UX rules:
+//   - ALWAYS use friendly agent names (never agent_id strings) in the headline.
+//   - NEVER show tool input arguments or tool result content. The user only
+//     needs to know that the agent ran the tool. Content is queryable via
+//     inspect_agent_context for agents themselves.
+// ---------------------------------------------------------------------------
+
+const AGENT_TOOL_META: Record<
+  string,
+  { icon: typeof Search; verb: string; targetVerb?: string; color: keyof typeof AGENT_COLORS }
+> = {
+  inspect_agent_context: { icon: Search, verb: 'inspected', targetVerb: "'s context", color: 'teal' },
+  list_session_agents: { icon: ListChecks, verb: 'listed agents in this session', color: 'teal' },
+  read_project_session: { icon: FileSearch, verb: 'read another session in this project', color: 'teal' },
+  request_clarification: { icon: AlertCircle, verb: 'asked', targetVerb: 'for clarification (answered internally)', color: 'violet' },
+};
+
+function _agentLabel(agentType: string | undefined | null): string {
+  if (!agentType) return 'an agent';
+  return AGENT_META[agentType]?.label || agentType;
+}
+
+function AgentToolCard({ item }: { item: ChatItem }) {
+  const meta = item.meta || {};
+  const toolName: string = meta.tool_name || item.content || 'tool';
+  const config = AGENT_TOOL_META[toolName] || {
+    icon: Wrench as typeof Search,
+    verb: 'used a tool',
+    color: 'gray' as const,
+  };
+  const Icon = config.icon;
+  const colors = AGENT_COLORS[config.color] || AGENT_COLORS.gray;
+  const isError = !!meta.is_error;
+
+  const askerLabel = _agentLabel(meta.asker_agent_type);
+  const targetType =
+    meta.target_agent_type ||
+    (meta.variant === 'clarification_exchange' ? meta.answerer_agent_type : null);
+  const targetLabel = targetType ? _agentLabel(targetType) : null;
+
+  // Build the headline. NO ids, NO input args, NO result content.
+  const headline = targetLabel
+    ? `${askerLabel} ${config.verb} ${targetLabel}${config.targetVerb || ''}`
+    : `${askerLabel} ${config.verb}`;
+
+  const depth = Math.min(meta.depth || 0, 3);
+  const duration = meta.duration_s;
+
+  return (
+    <div className="animate-fade-in my-1" style={{ marginLeft: `${depth * 12}px` }}>
+      <div
+        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border ${
+          isError ? 'bg-red-500/10 border-red-500/20' : `${colors.bg} ${colors.border}`
+        }`}
+      >
+        <Icon className={`w-3.5 h-3.5 shrink-0 ${isError ? 'text-red-400' : colors.text}`} />
+        <span className={`text-xs ${isError ? 'text-red-300' : 'text-gray-300'}`}>
+          {headline}
+          {isError && ' — failed'}
+        </span>
+        {typeof duration === 'number' && duration > 0 && (
+          <span className="text-[10px] text-gray-600 font-mono">{duration.toFixed(1)}s</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // renderGroupedChatItems — groups consecutive tool items together
 // ---------------------------------------------------------------------------
 
@@ -2610,8 +2860,12 @@ function renderChatItem(
   switch (item.type) {
     case 'user': {
       const files: string[] = item.meta?.files || [];
+      const mentions: Mention[] | undefined = item.meta?.mentions;
       const hasText = item.content && item.content.trim().length > 0;
       const hasFiles = files.length > 0;
+      const tokens = mentions && mentions.length > 0
+        ? wireToDraft(item.content, mentions)
+        : null;
       return (
         <div key={item.id} className="flex justify-end animate-fade-in">
           <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary-600 text-white text-sm overflow-hidden">
@@ -2628,7 +2882,19 @@ function renderChatItem(
                 ))}
               </div>
             )}
-            {hasText && <div className="px-4 py-2.5">{item.content}</div>}
+            {hasText && (
+              <div className="px-4 py-2.5 whitespace-pre-wrap break-words">
+                {tokens
+                  ? tokens.map((t, i) =>
+                      t.kind === 'text' ? (
+                        <span key={i}>{t.value}</span>
+                      ) : (
+                        <MentionPill key={i} mention={t.mention} />
+                      ),
+                    )
+                  : item.content}
+              </div>
+            )}
             {!hasText && !hasFiles && <div className="px-4 py-2.5">{item.content}</div>}
           </div>
         </div>
@@ -2670,6 +2936,8 @@ function renderChatItem(
       return <SubAgentCard key={item.id} item={item} />;
     case 'clarification':
       return <ClarificationCard key={item.id} item={item} sessionId={sessionId ?? null} />;
+    case 'agent_tool':
+      return <AgentToolCard key={item.id} item={item} />;
     case 'error':
       return (
         <div
