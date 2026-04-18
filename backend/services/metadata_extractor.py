@@ -14,7 +14,7 @@ import pyarrow.parquet as pq
 from sqlalchemy import select as sa_select
 
 from db import async_session
-from models import ProcessedDatasetMeta
+from models import Artifact, ProcessedDatasetMeta
 from services.volume import get_volume, reload_volume
 
 logger = logging.getLogger(__name__)
@@ -26,17 +26,47 @@ async def extract_and_store_metadata(session_id: str, experiment_id: str):
     reload_volume()
     vol = get_volume()
 
-    data_dir = f"/sessions/{session_id}/prep/data"
+    # Discover parquet split paths via Artifact DB, falling back to a session scan.
+    wanted = {"train.parquet", "val.parquet", "test.parquet", "metadata.json"}
+    paths: dict[str, str] = {}
+    try:
+        async with async_session() as db:
+            rows = await db.execute(
+                sa_select(Artifact.name, Artifact.path).where(
+                    Artifact.session_id == session_id,
+                    Artifact.name.in_(list(wanted)),
+                )
+            )
+            for name, p in rows.all():
+                paths.setdefault(name, p)
+    except Exception as e:
+        logger.debug(f"[META] Artifact lookup failed: {e}")
+
+    missing = wanted - set(paths.keys())
+    if missing:
+        try:
+            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+                if entry.type.name != "FILE":
+                    continue
+                base = entry.path.rsplit("/", 1)[-1]
+                if base in missing and base not in paths:
+                    paths[base] = entry.path
+        except Exception as e:
+            logger.debug(f"[META] Session scan failed: {e}")
 
     # Read parquet splits
     splits = {}
     for split_name in ["train", "val", "test"]:
-        path = f"{data_dir}/{split_name}.parquet"
+        key = f"{split_name}.parquet"
+        path = paths.get(key)
+        if not path:
+            logger.info(f"[META] {key} not found in session {session_id}")
+            continue
         try:
             raw = b"".join(vol.read_file(path))
             splits[split_name] = {"path": path, "data": raw}
         except Exception:
-            logger.info(f"[META] {split_name}.parquet not found at {path}")
+            logger.info(f"[META] {key} not readable at {path}")
 
     if not splits:
         logger.warning(f"[META] No parquet splits found for session {session_id}")
@@ -85,11 +115,15 @@ async def extract_and_store_metadata(session_id: str, experiment_id: str):
 
     # Try to read agent-produced metadata.json
     agent_meta = None
-    try:
-        meta_raw = b"".join(vol.read_file(f"{data_dir}/metadata.json"))
-        agent_meta = json.loads(meta_raw.decode("utf-8", errors="replace"))
-        logger.info(f"[META] Loaded agent metadata.json for session {session_id}")
-    except Exception:
+    meta_path = paths.get("metadata.json")
+    if meta_path:
+        try:
+            meta_raw = b"".join(vol.read_file(meta_path))
+            agent_meta = json.loads(meta_raw.decode("utf-8", errors="replace"))
+            logger.info(f"[META] Loaded agent metadata.json for session {session_id}")
+        except Exception:
+            logger.info("[META] metadata.json unreadable, using heuristics")
+    else:
         logger.info("[META] No agent metadata.json found, using heuristics")
 
     # Determine target and features from agent metadata or heuristics

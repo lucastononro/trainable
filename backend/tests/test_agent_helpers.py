@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from services.agent.tools import _code_counter, _extract_slug, _script_filename
+from tools.execute_code import _code_counter, _extract_slug, _script_filename
 
 # ---------------------------------------------------------------------------
 # _extract_slug

@@ -11,9 +11,9 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from db import get_db
-from models import ProcessedDatasetMeta
-from services.volume import read_volume_file, reload_volume
+from db import async_session, get_db
+from models import Artifact, ProcessedDatasetMeta
+from services.volume import get_volume, read_volume_file, reload_volume
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -58,6 +58,60 @@ def _load_parquet_to_duckdb(
     con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM arrow_table")
 
 
+async def _resolve_split_paths(session_id: str) -> dict[str, str]:
+    """Find {train,val,test}.parquet paths for a session.
+
+    Authoritative source is ProcessedDatasetMeta.output_files (populated by
+    metadata_extractor.py). Fallbacks: Artifact DB by name, then a recursive
+    volume scan. Agents write these files wherever makes sense under
+    /sessions/{session_id}/ — callers should not hardcode paths.
+    """
+    paths: dict[str, str] = {}
+
+    try:
+        async with async_session() as db:
+            meta_row = await db.execute(
+                select(ProcessedDatasetMeta).where(
+                    ProcessedDatasetMeta.session_id == session_id
+                )
+            )
+            meta = meta_row.scalar_one_or_none()
+            if meta and meta.output_files:
+                for entry in meta.output_files:
+                    name = entry.get("name")
+                    path = entry.get("path")
+                    if name and path:
+                        paths.setdefault(name, path)
+
+            if not paths:
+                rows = await db.execute(
+                    select(Artifact.name, Artifact.path).where(
+                        Artifact.session_id == session_id,
+                        Artifact.name.in_(["train.parquet", "val.parquet", "test.parquet"]),
+                    )
+                )
+                for name, path in rows.all():
+                    paths.setdefault(name, path)
+    except Exception:
+        pass
+
+    missing = {"train.parquet", "val.parquet", "test.parquet"} - set(paths.keys())
+    if missing:
+        try:
+            reload_volume()
+            vol = get_volume()
+            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+                if entry.type.name != "FILE":
+                    continue
+                base = entry.path.rsplit("/", 1)[-1]
+                if base in missing and base not in paths:
+                    paths[base] = entry.path
+        except Exception:
+            pass
+
+    return paths
+
+
 @router.post("/sessions/{session_id}/prep/query")
 async def query_prep_data(session_id: str, body: QueryRequest):
     """Run a read-only DuckDB SQL query against the processed parquet files.
@@ -68,13 +122,15 @@ async def query_prep_data(session_id: str, body: QueryRequest):
 
     reload_volume()
 
-    data_dir = f"/sessions/{session_id}/prep/data"
+    split_paths = await _resolve_split_paths(session_id)
     con = duckdb.connect(":memory:")
 
     try:
         # Load available splits into DuckDB via pyarrow (before disabling external access)
         for split in ["train", "val", "test"]:
-            path = f"{data_dir}/{split}.parquet"
+            path = split_paths.get(f"{split}.parquet")
+            if not path:
+                continue
             try:
                 raw = read_volume_file(path)
                 _load_parquet_to_duckdb(con, raw, split)
@@ -130,11 +186,14 @@ async def preview_prep_data(
 
     reload_volume()
 
-    path = f"/sessions/{session_id}/prep/data/{split}.parquet"
+    split_paths = await _resolve_split_paths(session_id)
+    path = split_paths.get(f"{split}.parquet")
+    if not path:
+        raise HTTPException(status_code=404, detail=f"{split}.parquet not found")
     try:
         raw = read_volume_file(path)
     except Exception:
-        raise HTTPException(status_code=404, detail=f"{split}.parquet not found")
+        raise HTTPException(status_code=404, detail=f"{split}.parquet not readable")
 
     con = duckdb.connect(":memory:")
     try:

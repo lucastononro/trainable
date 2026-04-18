@@ -14,6 +14,7 @@ async def test_preview_prep_data(client, sample_csv, mock_volume_with_prep):
 
     with (
         patch("routers.data_explorer.reload_volume"),
+        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
         patch(
             "routers.data_explorer.read_volume_file",
             side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
@@ -53,6 +54,7 @@ async def test_preview_not_found(client, sample_csv):
 async def test_query_prep_data(client, sample_csv, mock_volume_with_prep):
     with (
         patch("routers.data_explorer.reload_volume"),
+        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
         patch(
             "routers.data_explorer.read_volume_file",
             side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
@@ -75,6 +77,7 @@ async def test_query_prep_data(client, sample_csv, mock_volume_with_prep):
 async def test_query_prep_data_with_filter(client, sample_csv, mock_volume_with_prep):
     with (
         patch("routers.data_explorer.reload_volume"),
+        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
         patch(
             "routers.data_explorer.read_volume_file",
             side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
@@ -100,6 +103,7 @@ async def test_query_prep_data_with_filter(client, sample_csv, mock_volume_with_
 async def test_query_prep_data_all_data_view(client, sample_csv, mock_volume_with_prep):
     with (
         patch("routers.data_explorer.reload_volume"),
+        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
         patch(
             "routers.data_explorer.read_volume_file",
             side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
@@ -123,6 +127,7 @@ async def test_query_prep_data_all_data_view(client, sample_csv, mock_volume_wit
 async def test_query_prep_data_invalid_sql(client, sample_csv, mock_volume_with_prep):
     with (
         patch("routers.data_explorer.reload_volume"),
+        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
         patch(
             "routers.data_explorer.read_volume_file",
             side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
@@ -167,16 +172,16 @@ async def test_get_prep_metadata_after_extraction(
     # Build a mock volume with the actual session/experiment IDs
     vol = MockVolume(
         {
-            f"/sessions/{session_id}/prep/data/train.parquet": sample_parquet_splits[
+            f"/sessions/{session_id}/data/train.parquet": sample_parquet_splits[
                 "train"
             ],
-            f"/sessions/{session_id}/prep/data/val.parquet": sample_parquet_splits[
+            f"/sessions/{session_id}/data/val.parquet": sample_parquet_splits[
                 "val"
             ],
-            f"/sessions/{session_id}/prep/data/test.parquet": sample_parquet_splits[
+            f"/sessions/{session_id}/data/test.parquet": sample_parquet_splits[
                 "test"
             ],
-            f"/sessions/{session_id}/prep/data/metadata.json": sample_metadata_json,
+            f"/sessions/{session_id}/data/metadata.json": sample_metadata_json,
             f"/datasets/{exp_id}/iris.csv": b"a,b,target\n1,2,0\n",
         }
     )

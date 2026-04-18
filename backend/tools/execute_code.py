@@ -44,8 +44,13 @@ def _script_filename(code: str, session_id: str) -> str:
 
 
 async def detect_new_files(session_id: str, stage: str, publish_fn):
-    """Scan the stage workspace and emit file_created for any new files."""
-    workspace = f"/sessions/{session_id}/{stage}"
+    """Scan the session workspace and emit file_created for any new files.
+
+    `stage` is the producer agent_type, carried on the event so the UI can
+    attribute files to a specific agent. It no longer constrains the scan
+    to a subfolder — the agent writes anywhere under /sessions/{sid}/.
+    """
+    workspace = f"/sessions/{session_id}"
     try:
         reload_volume()
         vol = get_volume()
@@ -66,7 +71,7 @@ async def detect_new_files(session_id: str, stage: str, publish_fn):
             )
 
         if new_files:
-            logger.info("Detected %d new files in %s/", len(new_files), stage)
+            logger.info("Detected %d new files in session %s", len(new_files), session_id)
     except Exception as e:
         logger.warning("File detection error: %s", e)
 
@@ -89,9 +94,9 @@ def create_handler(
             role="tool",
         )
 
-        # Auto-save code as a .py file
+        # Auto-save code as a .py file under a shared session scripts/ dir.
         filename = _script_filename(code, session_id)
-        script_path = f"/sessions/{session_id}/{stage}/scripts/{filename}"
+        script_path = f"/sessions/{session_id}/scripts/{filename}"
         try:
             await write_to_volume(code, script_path)
             _known_files.setdefault(session_id, set()).add(script_path)

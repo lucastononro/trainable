@@ -1,6 +1,4 @@
-"""Session, message, and stage endpoint tests."""
-
-from unittest.mock import AsyncMock, patch
+"""Session and message endpoint tests."""
 
 import pytest
 
@@ -80,35 +78,6 @@ async def test_get_messages(client, sample_csv):
     assert len(msgs) == 2
     assert msgs[0]["content"] == "First"
     assert msgs[1]["content"] == "Second"
-
-
-@pytest.mark.asyncio
-async def test_start_stage_invalid(client, sample_csv):
-    _, session_id = await _create_experiment(client, sample_csv)
-
-    resp = await client.post(
-        f"/api/sessions/{session_id}/stages/invalid/start",
-        json={},
-    )
-    assert resp.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_start_eda_stage(client, sample_csv):
-    _, session_id = await _create_experiment(client, sample_csv)
-
-    # Mock the agent so it doesn't actually call Claude
-    with patch(
-        "routers.sessions.run_agent", new_callable=AsyncMock, return_value="EDA done"
-    ):
-        resp = await client.post(
-            f"/api/sessions/{session_id}/stages/eda/start",
-            json={},
-        )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "started"
-    assert body["state"] == "eda_running"
 
 
 @pytest.mark.asyncio

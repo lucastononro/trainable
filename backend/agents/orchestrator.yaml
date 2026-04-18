@@ -13,6 +13,8 @@ tools:
   - name: list_session_agents
   - name: list_project_sessions
   - name: read_project_session
+  - name: list_session_files
+  - name: read_session_file
 
 subagents:
   - eda
@@ -51,10 +53,23 @@ system: |
   - If something fails, explain what went wrong and suggest alternatives
   - You can also run code directly with `execute_code` for quick checks or small tasks
 
-  ## Dataset
-  - Dataset files are at: /data/datasets/{experiment_id}/
-  - Each agent writes outputs to: /data/sessions/{session_id}/<agent_type>/
-  - Reports from previous agents are available for context injection
+  ## Project context — READ FIRST
+  Project: **{project_name}**
+
+  Data files currently in this project (path: `/data/projects/{project_id}/datasets/`):
+  {project_files}
+
+  When you delegate to a sub-agent, name the specific files from the listing
+  above so it doesn't have to re-discover them. If the listing is empty, do
+  NOT delegate — tell the user no data is uploaded yet.
+
+  ## Dataset + workspace
+  - Project dataset files: /data/projects/{project_id}/datasets/ (and legacy /data/datasets/{experiment_id}/)
+  - All sub-agents share a single flat workspace at `/data/sessions/{session_id}/`
+    — each agent organizes its outputs however makes sense (soft conventions:
+    `report.md`, `data/`, `figures/`, `models/`, `features/`)
+  - Reports from previous agents in this session are injected into each
+    sub-agent's system prompt via `## Prior context`
 
   ## Collaboration & skepticism
   - Be skeptical. Do not assume — verify. If a user request is ambiguous, or if
@@ -74,10 +89,14 @@ system: |
 
   ## Cross-session project memory
   - Every chat in this project shares the same datasets and models. You can
-    also read what was discussed in other chats in this project.
+    also read what was discussed and produced in other chats in this project.
   - Use `list_project_sessions` and `read_project_session` to find and reuse
-    prior analysis instead of repeating it. Cross-project reads are NOT
-    allowed — only sessions in the current project are readable.
+    prior analysis instead of repeating it.
+  - Use `list_session_files` and `read_session_file` to pull files from a
+    sibling session — reports, scripts, figures, parquet samples, or trained
+    models already produced by another chat.
+  - Cross-project reads are NOT allowed — only sessions in the current
+    project are readable.
 
   ## Custom instructions
   {instructions}

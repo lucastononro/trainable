@@ -18,8 +18,8 @@ from sqlalchemy import select
 
 from config import settings
 from db import async_session
-from models import Experiment, Message, Project
-from services.volume import get_volume, read_volume_file
+from models import Artifact, Experiment, Message, ProcessedDatasetMeta, Project
+from services.volume import get_volume, read_volume_file, reload_volume
 
 from .agents import (
     get_agent_default_model,
@@ -37,6 +37,65 @@ logger = logging.getLogger(__name__)
 # characters. Tool results from execute_code can be megabytes — never store the
 # raw blob, just enough for an inspector to understand what happened.
 _THOUGHT_BLOCK_MAX_CHARS = 1500
+
+
+_MENTION_SENTINEL_START = "\ue000"
+_MENTION_SENTINEL_END = "\ue001"
+
+
+def _apply_mentions(user_prompt: str, mentions: list[dict] | None) -> str:
+    """Strip mention sentinels (\\uE000<index>\\uE001) and append a references block.
+
+    Frontend stores mentions inline via private-use-area sentinels so the human
+    text stays linear. The agent only needs the structured reference list, so
+    we flatten the sentinels to the label and append a trailing block with
+    canonical paths / session ids.
+    """
+    if not user_prompt:
+        return user_prompt
+
+    cleaned = user_prompt
+    if mentions:
+
+        def _replace(match):
+            try:
+                idx = int(match.group(1))
+            except (ValueError, TypeError):
+                return ""
+            if 0 <= idx < len(mentions):
+                return f"@{mentions[idx].get('label', '')}"
+            return ""
+
+        import re
+
+        cleaned = re.sub(
+            f"{_MENTION_SENTINEL_START}(\\d+){_MENTION_SENTINEL_END}", _replace, cleaned
+        )
+    else:
+        cleaned = (
+            cleaned.replace(_MENTION_SENTINEL_START, "")
+            .replace(_MENTION_SENTINEL_END, "")
+        )
+
+    if not mentions:
+        return cleaned
+
+    lines = ["", "[Mentioned references:"]
+    for m in mentions:
+        kind = m.get("kind")
+        label = m.get("label", "")
+        ref = m.get("ref", "")
+        if kind == "file":
+            path = m.get("sandbox_path") or ref
+            lines.append(f'- file "{label}" at {path}')
+        elif kind == "session":
+            lines.append(
+                f'- session "{label}" (id: {ref}) — inspect with read_project_session'
+            )
+        else:
+            lines.append(f'- {kind} "{label}" ref={ref}')
+    lines.append("]")
+    return cleaned + "\n".join(lines) if cleaned.endswith("\n") else cleaned + "\n" + "\n".join(lines)
 
 
 def _truncate(text: str, limit: int = _THOUGHT_BLOCK_MAX_CHARS) -> tuple[str, bool, int]:
@@ -73,7 +132,13 @@ async def _load_conversation_history(session_id: str) -> list[dict]:
                 .order_by(Message.id)
             )
             for msg in result.scalars().all():
-                event_type = (msg.metadata_ or {}).get("event_type", "")
+                meta = msg.metadata_ or {}
+                event_type = meta.get("event_type", "")
+                # Legacy seeded intros lived in assistant agent_message rows.
+                # They duplicate the project-files injection in the system
+                # prompt, so skip them.
+                if meta.get("session_intro"):
+                    continue
                 if msg.role == "user":
                     messages.append({"role": "user", "content": msg.content})
                 elif msg.role == "assistant" and event_type == "agent_message":
@@ -111,9 +176,14 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
 
     files_listing = "(no data uploaded yet)"
     if project_id:
+        # Use the safe wrapper — `vol.reload()` raises "reload() can only be
+        # called from within a running function" when invoked from the
+        # FastAPI process on some Modal SDK versions, and silently swallowing
+        # that here would (and did) make every agent think the project is
+        # empty even when files are present.
+        reload_volume()
         try:
             vol = get_volume()
-            vol.reload()
             entries = []
             datasets_root = f"/projects/{project_id}/datasets"
             for entry in vol.listdir(datasets_root, recursive=True):
@@ -128,52 +198,109 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
                 files_listing = "\n".join(entries[:50])
                 if len(entries) > 50:
                     files_listing += f"\n  …({len(entries) - 50} more)"
-        except Exception:
-            # Project has no datasets folder yet — that's fine.
-            pass
+                logger.info(
+                    "Project context: %d data files for project %s",
+                    len(entries),
+                    project_id,
+                )
+            else:
+                logger.info(
+                    "Project context: project %s datasets dir is empty", project_id
+                )
+        except FileNotFoundError:
+            # Datasets folder genuinely hasn't been created yet — leave the
+            # placeholder. Distinguish from real errors below.
+            logger.info(
+                "Project context: no datasets folder yet for project %s", project_id
+            )
+        except Exception as e:
+            # Don't swallow silently. If listdir really fails (transient
+            # Modal hiccup, malformed path, etc.) the agent should at least
+            # know the listing was unavailable rather than be confidently
+            # told the project is empty.
+            logger.warning(
+                "Project context: failed to list datasets for %s: %s",
+                project_id,
+                e,
+            )
+            files_listing = (
+                "(could not list project files — listing unavailable, but the "
+                "project may still have data; check `/data/projects/" + project_id + "/datasets/` directly)"
+            )
 
     return project_id, project_name, files_listing
 
 
-def _load_prev_context(session_id: str, stage: str) -> str:
-    """Load reports from previous stages for context injection."""
+async def _load_prev_context(session_id: str, stage: str) -> str:
+    """Load reports from previous agents for context injection.
+
+    Sources of truth are now the DB (Artifact table for reports,
+    ProcessedDatasetMeta for prep schema) — agents no longer need to live
+    in fixed stage subfolders.
+    """
     prev_context = "(No previous context available)"
 
-    # Try loading reports from common prior stages
-    prior_stages = []
-    if stage in ("prep", "data_prep"):
-        prior_stages = ["eda"]
-    elif stage in ("train", "trainer"):
-        prior_stages = ["prep", "data_prep", "eda"]
-    elif stage == "feature_eng":
-        prior_stages = ["prep", "data_prep", "eda"]
-    elif stage == "reviewer":
-        prior_stages = ["train", "prep", "data_prep", "eda"]
+    # Which prior producers does the current agent care about?
+    relevance = {
+        "prep": {"eda"},
+        "data_prep": {"eda"},
+        "train": {"data_prep", "prep", "eda", "feature_eng"},
+        "trainer": {"data_prep", "prep", "eda", "feature_eng"},
+        "feature_eng": {"data_prep", "prep", "eda"},
+        "reviewer": {"trainer", "train", "data_prep", "prep", "eda", "feature_eng"},
+    }
+    wanted = relevance.get(stage)
 
-    loaded = []
-    for prev_stage in prior_stages:
-        report_path = f"/sessions/{session_id}/{prev_stage}/report.md"
-        try:
-            text = read_volume_file(report_path).decode("utf-8", errors="replace")
-            if text.strip():
-                loaded.append(f"## {prev_stage.upper()} Report\n{text}")
-                logger.info("Loaded %s report (%d chars)", prev_stage, len(text))
-        except Exception:
-            pass
+    loaded: list[str] = []
+    prep_metadata_text: str | None = None
+    try:
+        async with async_session() as db:
+            q = (
+                select(Artifact)
+                .where(
+                    Artifact.session_id == session_id,
+                    Artifact.artifact_type == "report",
+                )
+                .order_by(Artifact.created_at.desc())
+            )
+            reports = list((await db.execute(q)).scalars().all())
+
+            seen_producers: set[str] = set()
+            for art in reports:
+                producer = (art.stage or "").lower()
+                if wanted is not None and producer not in wanted:
+                    continue
+                if producer in seen_producers:
+                    continue
+                seen_producers.add(producer)
+                try:
+                    text = read_volume_file(art.path).decode("utf-8", errors="replace")
+                except Exception:
+                    continue
+                if text.strip():
+                    header = (producer.upper() if producer else "PRIOR") + " Report"
+                    loaded.append(f"## {header}\n{text}")
+                    logger.info(
+                        "Loaded %s report from %s (%d chars)", producer, art.path, len(text)
+                    )
+
+            if stage in ("train", "trainer"):
+                meta_row = await db.execute(
+                    select(ProcessedDatasetMeta).where(
+                        ProcessedDatasetMeta.session_id == session_id
+                    )
+                )
+                meta = meta_row.scalar_one_or_none()
+                if meta:
+                    prep_metadata_text = json.dumps(meta.to_dict(), default=str, indent=2)
+    except Exception as e:
+        logger.warning("Failed to load prior context from DB: %s", e)
 
     if loaded:
         prev_context = "\n\n---\n\n".join(loaded)
 
-    # For train stages, also inject prep metadata.json
-    if stage in ("train", "trainer"):
-        metadata_path = f"/sessions/{session_id}/prep/data/metadata.json"
-        try:
-            metadata_text = read_volume_file(metadata_path).decode(
-                "utf-8", errors="replace"
-            )
-            prev_context += f"\n\n## Prep Metadata\n```json\n{metadata_text}\n```"
-        except Exception:
-            pass
+    if prep_metadata_text:
+        prev_context += f"\n\n## Prep Metadata\n```json\n{prep_metadata_text}\n```"
 
     return prev_context
 
@@ -192,6 +319,7 @@ async def run_agent(
     agent_models: dict | None = None,
     agent_id: str = "root",
     parent_agent_id: str | None = None,
+    mentions: list[dict] | None = None,
 ):
     """Run an agent. agent_type maps to a YAML in agents/. Falls back to stage name.
 
@@ -234,7 +362,7 @@ async def run_agent(
     collected_text = ""
 
     try:
-        prev_context = _load_prev_context(session_id, stage)
+        prev_context = await _load_prev_context(session_id, stage)
         project_id, project_name, project_files = await _load_project_context(
             experiment_id
         )
@@ -266,7 +394,7 @@ async def run_agent(
         )
 
         if user_prompt:
-            prompt = user_prompt
+            prompt = _apply_mentions(user_prompt, mentions)
         else:
             prompt = get_agent_opener(agent_type)
 
