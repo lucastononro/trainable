@@ -40,19 +40,45 @@ async def _require_project(db: AsyncSession, project_id: str) -> Project:
     return project
 
 
-def _dataset_s3_key(project_id: str, exp_id: str, filename: str) -> str:
-    return f"datasets/projects/{project_id}/{exp_id}/{filename}"
+def _safe_relative_path(raw: str) -> str:
+    """Sanitize a user-supplied relative path so it can be safely used as part
+    of an S3 key / volume path.
+
+    - Strips leading / and whitespace.
+    - Normalises backslashes to forward slashes.
+    - Rejects any segment that equals '..' (path-traversal guard).
+    - Collapses empty segments (// becomes /).
+    - Falls back to "file" if the input is empty after cleanup.
+    """
+    if not raw:
+        return "file"
+    raw = raw.replace("\\", "/").strip()
+    # Drop any leading slashes (we never want an absolute path on S3 side).
+    while raw.startswith("/"):
+        raw = raw[1:]
+    parts = [p for p in raw.split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        # Don't allow escaping the project root.
+        raise HTTPException(status_code=400, detail=f"Invalid path segment in: {raw!r}")
+    cleaned = "/".join(parts)
+    return cleaned or "file"
 
 
-def _dataset_volume_path(project_id: str, exp_id: str, filename: str) -> str:
-    return f"/projects/{project_id}/datasets/{exp_id}/{filename}"
+def _dataset_s3_key(project_id: str, relative_path: str) -> str:
+    """Data is owned by the project. Every chat in the project sees the same
+    files at the same path, so we don't scope by experiment_id anymore."""
+    return f"datasets/projects/{project_id}/{_safe_relative_path(relative_path)}"
 
 
-def _dataset_ref_for(project_id: str, exp_id: str, uploaded: list[str]) -> str:
-    """Return single-file path when there's one upload, else the folder prefix."""
+def _dataset_volume_path(project_id: str, relative_path: str) -> str:
+    return f"/projects/{project_id}/datasets/{_safe_relative_path(relative_path)}"
+
+
+def _dataset_ref_for(project_id: str, uploaded: list[str]) -> str:
+    """Return single-file path when there's one upload, else the project prefix."""
     if len(uploaded) == 1:
         return uploaded[0]
-    return f"s3://datasets/projects/{project_id}/{exp_id}/"
+    return f"s3://datasets/projects/{project_id}/"
 
 
 @router.get("/experiments")
@@ -84,8 +110,12 @@ async def create_experiment(
     uploaded_files = []
 
     for f in files:
-        filename = f.filename or "file"
-        key = _dataset_s3_key(project_id, exp_id, filename)
+        # The browser may send a relative path for folder uploads (e.g.
+        # "mydataset/train/x.csv"). Preserve it so folder structure survives
+        # in S3 and the Modal Volume.
+        raw_name = f.filename or "file"
+        rel_path = _safe_relative_path(raw_name)
+        key = _dataset_s3_key(project_id, rel_path)
 
         content = b""
         chunk = await f.read(1024 * 1024)
@@ -94,10 +124,10 @@ async def create_experiment(
             if len(content) > settings.max_upload_size_bytes:
                 raise HTTPException(
                     status_code=413,
-                    detail=f"File '{filename}' exceeds max upload size of {settings.max_upload_size_bytes // (1024 * 1024)}MB",
+                    detail=f"File '{rel_path}' exceeds max upload size of {settings.max_upload_size_bytes // (1024 * 1024)}MB",
                 )
             chunk = await f.read(1024 * 1024)
-        logger.info("Read %s: %d bytes", filename, len(content))
+        logger.info("Read %s: %d bytes", rel_path, len(content))
 
         # Upload to S3 (for browser / S3 explorer)
         s3.put_object(
@@ -113,17 +143,17 @@ async def create_experiment(
             tmp_path = tmp.name
         try:
             await upload_to_volume(
-                tmp_path, _dataset_volume_path(project_id, exp_id, filename)
+                tmp_path, _dataset_volume_path(project_id, rel_path)
             )
         except Exception as e:
-            logger.warning(f"Modal Volume upload failed for {filename}: {e}")
+            logger.warning(f"Modal Volume upload failed for {rel_path}: {e}")
         finally:
             os.unlink(tmp_path)
 
         uploaded_files.append(f"s3://datasets/{key}")
-        logger.info(f"Uploaded {filename} ({len(content)} bytes) → S3 + Modal Volume")
+        logger.info(f"Uploaded {rel_path} ({len(content)} bytes) → S3 + Modal Volume")
 
-    dataset_ref = _dataset_ref_for(project_id, exp_id, uploaded_files)
+    dataset_ref = _dataset_ref_for(project_id, uploaded_files)
     now = _now()
     experiment = Experiment(
         id=exp_id,
@@ -179,26 +209,31 @@ async def create_experiment_from_s3(
     key_or_prefix = match.group(2)
     s3 = get_s3_client()
 
-    # Sync files from S3 to Modal Volume so sandboxes can access them
+    # Sync files from S3 to Modal Volume so sandboxes can access them.
+    # Preserve folder structure relative to the source prefix so a nested
+    # dataset like s3://.../mydata/train/x.csv lands at
+    # /projects/{pid}/datasets/train/x.csv, not a flattened x.csv.
     if key_or_prefix.endswith("/"):
-        response = s3.list_objects_v2(Bucket=bucket, Prefix=key_or_prefix)
-        for obj in response.get("Contents", []):
-            obj_key = obj["Key"]
-            filename = obj_key.split("/")[-1]
-            if not filename:
-                continue
-            data = s3.get_object(Bucket=bucket, Key=obj_key)["Body"].read()
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(data)
-                tmp_path = tmp.name
-            try:
-                await upload_to_volume(
-                    tmp_path, _dataset_volume_path(project_id, exp_id, filename)
-                )
-            except Exception as e:
-                logger.warning(f"Modal Volume upload failed for {filename}: {e}")
-            finally:
-                os.unlink(tmp_path)
+        prefix = key_or_prefix
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+            for obj in page.get("Contents", []):
+                obj_key = obj["Key"]
+                rel_path = obj_key[len(prefix):] if obj_key.startswith(prefix) else obj_key
+                if not rel_path or rel_path.endswith("/"):
+                    continue
+                data = s3.get_object(Bucket=bucket, Key=obj_key)["Body"].read()
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp.write(data)
+                    tmp_path = tmp.name
+                try:
+                    await upload_to_volume(
+                        tmp_path, _dataset_volume_path(project_id, rel_path)
+                    )
+                except Exception as e:
+                    logger.warning(f"Modal Volume upload failed for {rel_path}: {e}")
+                finally:
+                    os.unlink(tmp_path)
     else:
         filename = key_or_prefix.split("/")[-1]
         data = s3.get_object(Bucket=bucket, Key=key_or_prefix)["Body"].read()
@@ -207,7 +242,7 @@ async def create_experiment_from_s3(
             tmp_path = tmp.name
         try:
             await upload_to_volume(
-                tmp_path, _dataset_volume_path(project_id, exp_id, filename)
+                tmp_path, _dataset_volume_path(project_id, filename)
             )
         except Exception as e:
             logger.warning(f"Modal Volume upload failed for {filename}: {e}")
@@ -309,7 +344,8 @@ async def attach_data(
         raise HTTPException(status_code=404, detail="Experiment not found")
 
     project_id = experiment.project_id
-    project_data_root = f"/data/projects/{project_id}/datasets/{experiment_id}/"
+    # Data is owned by the project — every chat in the project sees the same path.
+    project_data_root = f"/data/projects/{project_id}/datasets/"
 
     if s3_path:
         # Same logic as create_experiment_from_s3 for syncing to volume
@@ -322,25 +358,27 @@ async def attach_data(
         s3 = get_s3_client()
 
         if key_or_prefix.endswith("/"):
-            response = s3.list_objects_v2(Bucket=bucket, Prefix=key_or_prefix)
-            for obj in response.get("Contents", []):
-                obj_key = obj["Key"]
-                filename = obj_key.split("/")[-1]
-                if not filename:
-                    continue
-                data = s3.get_object(Bucket=bucket, Key=obj_key)["Body"].read()
-                with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp.write(data)
-                    tmp_path = tmp.name
-                try:
-                    await upload_to_volume(
-                        tmp_path,
-                        _dataset_volume_path(project_id, experiment_id, filename),
-                    )
-                except Exception as e:
-                    logger.warning(f"Modal Volume upload failed for {filename}: {e}")
-                finally:
-                    os.unlink(tmp_path)
+            prefix = key_or_prefix
+            paginator = s3.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+                for obj in page.get("Contents", []):
+                    obj_key = obj["Key"]
+                    rel_path = obj_key[len(prefix):] if obj_key.startswith(prefix) else obj_key
+                    if not rel_path or rel_path.endswith("/"):
+                        continue
+                    data = s3.get_object(Bucket=bucket, Key=obj_key)["Body"].read()
+                    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                        tmp.write(data)
+                        tmp_path = tmp.name
+                    try:
+                        await upload_to_volume(
+                            tmp_path,
+                            _dataset_volume_path(project_id, rel_path),
+                        )
+                    except Exception as e:
+                        logger.warning(f"Modal Volume upload failed for {rel_path}: {e}")
+                    finally:
+                        os.unlink(tmp_path)
         else:
             filename = key_or_prefix.split("/")[-1]
             data = s3.get_object(Bucket=bucket, Key=key_or_prefix)["Body"].read()
@@ -350,7 +388,7 @@ async def attach_data(
             try:
                 await upload_to_volume(
                     tmp_path,
-                    _dataset_volume_path(project_id, experiment_id, filename),
+                    _dataset_volume_path(project_id, filename),
                 )
             except Exception as e:
                 logger.warning(f"Modal Volume upload failed for {filename}: {e}")
@@ -375,11 +413,12 @@ async def attach_data(
         s3 = get_s3_client()
         uploaded = []
         for f in files:
-            filename = f.filename or "file"
-            key = _dataset_s3_key(project_id, experiment_id, filename)
+            raw_name = f.filename or "file"
+            rel_path = _safe_relative_path(raw_name)
+            key = _dataset_s3_key(project_id, rel_path)
             content = await f.read()
             if len(content) > settings.max_upload_size_bytes:
-                raise HTTPException(status_code=413, detail=f"File '{filename}' too large")
+                raise HTTPException(status_code=413, detail=f"File '{rel_path}' too large")
 
             s3.put_object(
                 Bucket="datasets",
@@ -394,16 +433,16 @@ async def attach_data(
             try:
                 await upload_to_volume(
                     tmp_path,
-                    _dataset_volume_path(project_id, experiment_id, filename),
+                    _dataset_volume_path(project_id, rel_path),
                 )
             except Exception as e:
-                logger.warning(f"Modal Volume upload failed for {filename}: {e}")
+                logger.warning(f"Modal Volume upload failed for {rel_path}: {e}")
             finally:
                 os.unlink(tmp_path)
 
             uploaded.append(f"s3://datasets/{key}")
 
-        dataset_ref = _dataset_ref_for(project_id, experiment_id, uploaded)
+        dataset_ref = _dataset_ref_for(project_id, uploaded)
         experiment.dataset_ref = dataset_ref
         experiment.updated_at = _now()
         if session_id:
@@ -445,6 +484,9 @@ async def update_experiment(
     if body.project_id is not None and body.project_id != experiment.project_id:
         await _require_project(db, body.project_id)
         experiment.project_id = body.project_id
+        # Data stays with the old project; the new project has its own data folder.
+        # Runner uses /projects/{pid}/datasets/, so clear the stale dataset_ref.
+        experiment.dataset_ref = ""
 
     experiment.updated_at = _now()
     await db.commit()
