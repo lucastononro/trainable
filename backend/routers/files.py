@@ -10,7 +10,7 @@ import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from services.volume import get_volume
+from services.volume import listdir_async, read_volume_file_async
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -42,9 +42,8 @@ async def list_files(path: str = "/"):
     """List files/dirs in Modal Volume at given path."""
     try:
         path = _validate_path(path)
-        vol = get_volume()
         entries = []
-        for entry in vol.listdir(path, recursive=False):
+        for entry in await listdir_async(path, recursive=False):
             entries.append(
                 {
                     "path": entry.path,
@@ -62,8 +61,7 @@ async def read_file(path: str):
     """Read a text file from Modal Volume."""
     try:
         path = _validate_path(path)
-        vol = get_volume()
-        data = b"".join(vol.read_file(path))
+        data = await read_volume_file_async(path)
         return {"path": path, "content": data.decode("utf-8", errors="replace")}
     except Exception as e:
         logger.error(f"read_file error: {e}")
@@ -75,8 +73,7 @@ async def raw_file(path: str):
     """Serve a raw file from Modal Volume (images, etc.)."""
     try:
         path = _validate_path(path)
-        vol = get_volume()
-        data = b"".join(vol.read_file(path))
+        data = await read_volume_file_async(path)
         mime, _ = mimetypes.guess_type(path)
         return Response(content=data, media_type=mime or "application/octet-stream")
     except Exception as e:
@@ -93,11 +90,8 @@ async def file_tree(root: str = "/"):
     """
     try:
         root = _validate_path(root)
-        vol = get_volume()
-        entries = list(vol.listdir(root, recursive=True))
+        entries = await listdir_async(root, recursive=True)
         tree = _build_tree(root, entries)
-        # Unwrap single-child directory chains at the top
-        # e.g. sessions > {uuid} > eda  →  just show eda at top level
         tree = _unwrap_tree(tree)
         tree["name"] = "workspace"
         return tree
@@ -108,7 +102,6 @@ async def file_tree(root: str = "/"):
 
 def _build_tree(root: str, entries) -> dict:
     """Convert flat file listing into nested tree structure."""
-    # Normalize: strip leading slashes for consistent comparison
     root_clean = root.strip("/")
     tree = {
         "name": root_clean.split("/")[-1] or "workspace",
@@ -118,7 +111,6 @@ def _build_tree(root: str, entries) -> dict:
     }
 
     for entry in entries:
-        # Get path relative to root (normalize both sides)
         rel = entry.path.lstrip("/")
         if rel.startswith(root_clean + "/"):
             rel = rel[len(root_clean) + 1 :]
@@ -131,7 +123,6 @@ def _build_tree(root: str, entries) -> dict:
         is_file = entry.type.name == "FILE"
         segments = rel.split("/")
 
-        # Walk/create intermediate directories
         current = tree
         for i, seg in enumerate(segments):
             is_last = i == len(segments) - 1
@@ -144,7 +135,6 @@ def _build_tree(root: str, entries) -> dict:
                     }
                 )
             else:
-                # Find or create directory node
                 child = next(
                     (
                         c
@@ -163,7 +153,6 @@ def _build_tree(root: str, entries) -> dict:
                     current["children"].append(child)
                 current = child
 
-    # Sort: directories first, then files, alphabetically
     _sort_tree(tree)
     return tree
 
@@ -180,17 +169,11 @@ def _sort_tree(node: dict):
 
 
 def _is_infra_name(name: str) -> bool:
-    """Check if a directory name is infrastructure (sessions, UUIDs) not a stage."""
-
     return name == "sessions" or bool(re.match(r"^[0-9a-f]{8}-[0-9a-f]{4}-", name))
 
 
 def _unwrap_tree(tree: dict) -> dict:
-    """Strip infrastructure directories (sessions, UUIDs) from tree root.
-
-    sessions > {uuid} > eda, prep, train  →  eda, prep, train at top level.
-    Never unwraps stage dirs (eda, prep, train) even if they're the only child.
-    """
+    """Strip infrastructure directories (sessions, UUIDs) from tree root."""
     while (
         tree.get("children")
         and len(tree["children"]) == 1

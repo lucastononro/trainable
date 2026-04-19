@@ -11,6 +11,8 @@ import {
   PanelLeftClose,
   ChevronRight,
   Pencil,
+  Check,
+  AlertCircle,
 } from 'lucide-react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
@@ -35,6 +37,35 @@ function statusDot(state: string | null): string {
   if (state.includes('done') || state === 'train_done') return 'bg-green-400';
   if (state === 'failed') return 'bg-red-400';
   return 'bg-gray-600';
+}
+
+function StatusIcon({ state }: { state: string | null }) {
+  if (state && state.includes('running')) {
+    return (
+      <Loader2
+        className="w-3 h-3 shrink-0 text-amber-400 animate-spin"
+        aria-label="running"
+      />
+    );
+  }
+  if (state === 'failed') {
+    return (
+      <AlertCircle
+        className="w-3 h-3 shrink-0 text-red-400"
+        aria-label="failed"
+      />
+    );
+  }
+  if (state && (state.includes('done') || state === 'train_done')) {
+    return (
+      <Check className="w-3 h-3 shrink-0 text-green-400" aria-label="done" />
+    );
+  }
+  // Idle / unknown — fall back to the original dot so brand-new chats don't
+  // shout "completed" before they've run.
+  return (
+    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(state)}`} />
+  );
 }
 
 // -----------------------------------------------------------------------------
@@ -187,7 +218,7 @@ function ExperimentRow({
           : 'text-gray-400 hover:bg-white/[0.04] hover:text-gray-300'
       }`}
     >
-      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(exp.latest_state)}`} />
+      <StatusIcon state={exp.latest_state} />
       <div className="flex-1 min-w-0">
         <EditableName
           value={exp.name}

@@ -45,8 +45,48 @@ def reload_volume() -> bool:
 
 
 def read_volume_file(path: str) -> bytes:
-    """Read a complete file from the Modal Volume."""
+    """Read a complete file from the Modal Volume (sync — thread-only)."""
     return b"".join(get_volume().read_file(path))
+
+
+async def read_volume_file_async(path: str) -> bytes:
+    """Read a file from the Modal Volume without blocking the event loop.
+
+    Wraps the sync `vol.read_file(...)` generator on the default thread pool.
+    Modal's `read_file.aio(...)` shape varies across SDK versions, so we
+    defer to the well-tested sync path and just keep it off the loop.
+    """
+    def _sync() -> bytes:
+        return b"".join(get_volume().read_file(path))
+
+    return await asyncio.get_running_loop().run_in_executor(None, _sync)
+
+
+async def listdir_async(path: str, recursive: bool = False) -> list:
+    """List a directory on the Modal Volume without blocking the event loop.
+
+    Modal's `Volume.listdir` returns a plain generator that is awkward to
+    iterate off-loop natively (`.aio` isn't uniformly available across SDK
+    versions). Wrapping it on the default executor keeps the event loop
+    free while relying on the well-tested sync call.
+    """
+    def _sync() -> list:
+        return list(get_volume().listdir(path, recursive=recursive))
+
+    return await asyncio.get_running_loop().run_in_executor(None, _sync)
+
+
+async def reload_volume_async() -> bool:
+    """Async version of `reload_volume` — thread-pool wrapped for safety."""
+    def _sync() -> bool:
+        try:
+            get_volume().reload()
+            return True
+        except Exception as e:
+            logger.debug("Volume.reload() skipped: %s", e)
+            return False
+
+    return await asyncio.get_running_loop().run_in_executor(None, _sync)
 
 
 async def upload_to_volume(local_path: str, remote_path: str):

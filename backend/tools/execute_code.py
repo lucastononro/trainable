@@ -50,12 +50,12 @@ async def detect_new_files(session_id: str, stage: str, publish_fn):
     attribute files to a specific agent. It no longer constrains the scan
     to a subfolder — the agent writes anywhere under /sessions/{sid}/.
     """
+    from services.volume import listdir_async, reload_volume_async
     workspace = f"/sessions/{session_id}"
     try:
-        reload_volume()
-        vol = get_volume()
+        await reload_volume_async()
         current_files = set()
-        for entry in vol.listdir(workspace, recursive=True):
+        for entry in await listdir_async(workspace, recursive=True):
             if entry.type.name == "FILE":
                 current_files.add(entry.path)
 

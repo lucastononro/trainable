@@ -117,6 +117,7 @@ export interface SessionDetail extends Session {
   messages: Message[];
   artifacts: Artifact[];
   processed_meta: Record<string, unknown> | null;
+  is_running?: boolean;
 }
 
 export interface FileTreeNode {

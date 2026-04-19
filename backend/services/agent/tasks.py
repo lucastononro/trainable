@@ -35,6 +35,17 @@ async def register_task(session_id: str, task: asyncio.Task) -> None:
         _running_tasks[session_id] = task
 
 
+def is_agent_running(session_id: str) -> bool:
+    """Return True iff there's an in-flight agent task for this session.
+
+    Source of truth for the frontend's "is the session still working?" check —
+    session.state in the DB only transitions on completion, so a mid-run reload
+    can't rely on it alone.
+    """
+    task = _running_tasks.get(session_id)
+    return task is not None and not task.done()
+
+
 async def abort_agent(session_id: str, silent: bool = False) -> bool:
     """Cancel a running agent task. Returns True if a task was cancelled.
 

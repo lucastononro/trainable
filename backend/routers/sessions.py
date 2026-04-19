@@ -18,7 +18,7 @@ from models import Artifact, Experiment, Message, Metric
 from models import Session as SessionModel
 from schemas import ClarificationReply, MessageCreate
 from services.agent import abort_agent, run_agent
-from services.agent.tasks import register_task
+from services.agent.tasks import is_agent_running, register_task
 from services.broadcaster import broadcaster
 from services.clarifications import list_pending, resolve as resolve_clarification
 
@@ -66,6 +66,10 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db)):
         "processed_meta": session.processed_meta.to_dict()
         if session.processed_meta
         else None,
+        # Ephemeral liveness flag: True iff an agent task is actually executing
+        # in-process right now. `state` in the DB only transitions at completion,
+        # so the frontend uses this to restore spinners after a tab switch.
+        "is_running": is_agent_running(session_id),
     }
 
 
@@ -125,6 +129,12 @@ async def send_message(
         selected_model = body.model or session.model
         agent_models = body.agent_models or {}
         mentions_payload = mention_dicts or None
+
+        # Mark the session "running" eagerly so the sidebar spinner + the
+        # restore-on-tab-switch path both see the live state. Completion /
+        # failure / cancellation paths below overwrite this.
+        session.state = f"{stage}_running"
+        await db.commit()
 
         async def _run_followup():
             try:
