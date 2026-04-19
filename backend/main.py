@@ -14,11 +14,13 @@ from routers import (
     experiments,
     files,
     models,
+    notebook,
     projects,
     s3_browser,
     sessions,
     stream,
 )
+from services.kernel_manager import kernel_manager
 from services.s3_client import get_s3_client
 
 logging.basicConfig(
@@ -48,7 +50,11 @@ def _init_s3_buckets():
 async def lifespan(app: FastAPI):
     await init_db()
     _init_s3_buckets()
-    yield
+    kernel_manager.start_idle_reaper()
+    try:
+        yield
+    finally:
+        await kernel_manager.shutdown_all()
 
 
 app = FastAPI(title="Trainable v2", lifespan=lifespan)
@@ -70,6 +76,7 @@ app.include_router(s3_browser.router, prefix="/api/s3")
 app.include_router(files.router, prefix="/api")
 app.include_router(data_explorer.router, prefix="/api")
 app.include_router(models.router, prefix="/api")
+app.include_router(notebook.router, prefix="/api")
 
 
 @app.get("/api/health")

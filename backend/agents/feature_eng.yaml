@@ -7,6 +7,9 @@ max_depth: 1
 
 tools:
   - name: execute_code
+  - name: append_notebook_cell
+  - name: run_notebook_cell
+  - name: read_notebook
   - name: delegate_task
   - name: request_clarification
   - name: inspect_agent_context

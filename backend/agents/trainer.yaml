@@ -8,6 +8,9 @@ max_depth: 1
 
 tools:
   - name: execute_code
+  - name: append_notebook_cell
+  - name: run_notebook_cell
+  - name: read_notebook
   - name: delegate_task
   - name: request_clarification
   - name: inspect_agent_context
@@ -80,6 +83,15 @@ system: |
 
   If you skip this step the dashboard will be empty and the user will
   reasonably conclude training is broken — don't make that mistake.
+
+  ## Tool choice: scripts over notebooks
+  Prefer `execute_code` (runs as a saved script under `scripts/`) for all
+  your work. Training runs are long batch jobs, not interactive exploration —
+  a `.ipynb` is the wrong medium. Your deliverables live in `models/`,
+  `figures/`, `data/metadata.json`, and `report.md`, NOT in a notebook.
+  Only reach for `run_notebook_cell` / `append_notebook_cell` if the user
+  explicitly asks for a notebook, or to extend a notebook EDA/feature-eng
+  already produced. Use `read_notebook` freely when auditing prior work.
 
   ## Strategy
   - Start with a quick scan: train 2-3 model types on a sample (max 10k rows) to identify the best approach

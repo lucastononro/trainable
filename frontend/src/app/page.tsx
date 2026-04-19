@@ -46,6 +46,7 @@ import {
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import ModelSelector from '@/components/ModelSelector';
+import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import MetricsTab from '@/components/MetricsTab';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
@@ -178,6 +179,19 @@ export default function HomePage() {
   const prevExperimentIdRef = useRef<string | null>(null);
   const streamingItemIdRef = useRef<string | null>(null);
   const workspacePanelRef = useRef<ImperativePanelHandle>(null);
+
+  // Opens the canvas and forces the panel to its intended default width —
+  // `.expand()` alone restores the last drag-size (which may be smaller than
+  // we want), so we always `.resize(...)` to the same target the PanelGroup
+  // uses on first mount.
+  const CANVAS_DEFAULT_SIZE = 70;
+  const openCanvas = useCallback(() => {
+    const p = workspacePanelRef.current;
+    if (!p) return;
+    p.expand();
+    // Run on the next frame so the expand takes effect before we resize.
+    requestAnimationFrame(() => p.resize(CANVAS_DEFAULT_SIZE));
+  }, []);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -388,7 +402,7 @@ export default function HomePage() {
             case 'report_ready':
               setCanvasContent(data.content);
               setCanvasTitle(`${(data.stage || 'EDA').toUpperCase()} Report`);
-              workspacePanelRef.current?.expand();
+              openCanvas();
               break;
             case 'files_ready': {
               const stage = (data.stage as string) || '';
@@ -456,7 +470,7 @@ export default function HomePage() {
               }
               if (newPoints.length > 0) {
                 setMetricPoints((prev) => {
-                  if (prev.length === 0) workspacePanelRef.current?.expand();
+                  if (prev.length === 0) openCanvas();
                   return [...prev, ...newPoints];
                 });
               }
@@ -467,7 +481,7 @@ export default function HomePage() {
               if (!metricKeysRef.current.has(key)) {
                 metricKeysRef.current.add(key);
                 setMetricPoints((prev) => {
-                  if (prev.length === 0) workspacePanelRef.current?.expand();
+                  if (prev.length === 0) openCanvas();
                   return [
                     ...prev,
                     {
@@ -640,6 +654,18 @@ export default function HomePage() {
                   variant: 'clarification_exchange',
                 },
               });
+              break;
+            }
+            // Agent created a new notebook — auto-expand workspace + open it
+            // so the user watches cells appear live.
+            case 'notebook.created': {
+              const path = data.notebook_path as string | undefined;
+              if (path) {
+                openCanvas();
+                window.dispatchEvent(
+                  new CustomEvent('trainable:open-file', { detail: { path } }),
+                );
+              }
               break;
             }
           }
@@ -949,10 +975,25 @@ export default function HomePage() {
           }
         }
 
-        // Convert orphaned subagent_start to subagent_end
+        // Orphaned subagent_start events (no matching subagent_end in the DB)
+        // mean that sub-agent was still running when the user navigated away.
+        // We keep them as in-flight entries in `activeAgents` so the header
+        // pulse comes back, but still flip the chat bubble to a completed
+        // state — we don't have the mid-run text yet and the SSE reconnection
+        // below will pick up subsequent events.
+        const inFlightSubAgents: ActiveAgent[] = [];
         for (let i = 0; i < restored.length; i++) {
           if (restored[i].type === 'subagent_start') {
-            restored[i] = { ...restored[i], type: 'subagent_end' };
+            const it = restored[i];
+            inFlightSubAgents.push({
+              id: (it.meta?.agent_id as string) || `${it.id}`,
+              type: (it.content as string) || 'sub-agent',
+              status: 'running',
+              task: (it.meta?.task as string) || '',
+              depth: (it.meta?.depth as number) || 1,
+              startedAt: it.timestamp,
+            });
+            restored[i] = { ...it, type: 'subagent_end' };
           }
         }
 
@@ -961,7 +1002,7 @@ export default function HomePage() {
         setCanvasTitle(restoredCanvasTitle);
         if (restoredCanvasOpen) {
           // Delay expand to next tick so panel ref is mounted
-          setTimeout(() => workspacePanelRef.current?.expand(), 0);
+          setTimeout(() => openCanvas(), 0);
         }
         setGeneratedFiles(restoredFiles);
 
@@ -983,7 +1024,7 @@ export default function HomePage() {
           .then((metrics) => {
             if (!cancelled && metrics.length > 0) {
               setMetricPoints(metrics);
-              workspacePanelRef.current?.expand();
+              openCanvas();
               for (const m of metrics) {
                 metricKeysRef.current.add(`${m.step}:${m.name}:${m.run_tag || ''}`);
               }
@@ -991,10 +1032,17 @@ export default function HomePage() {
           })
           .catch((e) => console.error('Failed to load historical metrics', e));
 
-        // Set running state from session
+        // Set running state from session. `state` in the DB is only a stage
+        // marker (e.g. "eda_done"), so the definitive "is this session still
+        // working right now?" answer comes from the backend's in-memory task
+        // registry, exposed as `is_running` on the session payload.
         if (sessionData.state) setSessionState(sessionData.state);
-        if (sessionData.state?.includes('running')) {
+        const stillRunning =
+          sessionData.is_running === true ||
+          (sessionData.state?.includes('running') ?? false);
+        if (stillRunning) {
           setIsRunning(true);
+          if (inFlightSubAgents.length > 0) setActiveAgents(inFlightSubAgents);
         }
 
         connectSSE(sid);
@@ -1326,6 +1374,12 @@ export default function HomePage() {
   // ---------------------------------------------------------------------------
 
   const hasActiveSession = !!activeExperimentId && !!activeSessionId;
+  const hasUserMessage = chatItems.some((i) => i.type === 'user');
+  // Welcome screen is the default whenever the chat has no user turn yet —
+  // including inside a freshly-created session that only has a seeded intro.
+  // The chat view is gated on hasActiveSession so nested components can rely on
+  // non-null experiment/session ids.
+  const showWelcome = !loading && (!hasActiveSession || (!hasUserMessage && !isRunning));
 
   return (
     <div className="h-screen flex bg-black" id="main-content">
@@ -1363,7 +1417,7 @@ export default function HomePage() {
               )}
               <button
                 onClick={() => {
-                  workspacePanelRef.current?.expand();
+                  openCanvas();
                   window.dispatchEvent(new CustomEvent('trainable:open-metrics-tab'));
                 }}
                 className={`p-1.5 rounded-lg transition-colors relative ${
@@ -1379,7 +1433,7 @@ export default function HomePage() {
                 )}
               </button>
               <button
-                onClick={() => canvasOpen ? workspacePanelRef.current?.collapse() : workspacePanelRef.current?.expand()}
+                onClick={() => canvasOpen ? workspacePanelRef.current?.collapse() : openCanvas()}
                 className={`p-1.5 rounded-lg transition-colors ${
                   canvasOpen
                     ? 'bg-primary-600/20 text-primary-400'
@@ -1401,11 +1455,11 @@ export default function HomePage() {
           <div className="flex-1 flex items-center justify-center">
             <Loader2 className="w-6 h-6 text-gray-500 animate-spin" />
           </div>
-        ) : !hasActiveSession ? (
+        ) : showWelcome ? (
           // -------------------------------------------------------------------
-          // Welcome screen
+          // Welcome screen — shown whenever the chat has no user turn yet
           // -------------------------------------------------------------------
-          <div className="flex-1 flex flex-col items-center justify-center px-4">
+          <div className="flex-1 flex flex-col items-center justify-center px-4 animate-fade-in">
             <div className="w-full max-w-2xl space-y-8">
               {/* Logo + title */}
               <div className="text-center space-y-3">
@@ -1553,9 +1607,9 @@ export default function HomePage() {
           // -------------------------------------------------------------------
           // Studio view: chat + workspace
           // -------------------------------------------------------------------
-          <PanelGroup direction="horizontal" className="flex-1" autoSaveId="trainable-layout">
+          <PanelGroup direction="horizontal" className="flex-1 animate-slide-up" autoSaveId="trainable-layout-v2">
             {/* Chat panel */}
-            <Panel defaultSize={canvasOpen ? 25 : 100} minSize={15}>
+            <Panel defaultSize={canvasOpen ? 30 : 100} minSize={20}>
               <div className="h-full flex flex-col min-w-0">
                 <div className="flex-1 overflow-y-auto px-4 py-4">
                   <div
@@ -1716,8 +1770,8 @@ export default function HomePage() {
             </PanelResizeHandle>
             <Panel
               ref={workspacePanelRef}
-              defaultSize={canvasOpen ? 75 : 0}
-              minSize={20}
+              defaultSize={canvasOpen ? 70 : 0}
+              minSize={30}
               collapsible
               collapsedSize={0}
               onCollapse={() => setCanvasOpen(false)}
@@ -1725,8 +1779,8 @@ export default function HomePage() {
             >
               {canvasOpen && (
                 <WorkspaceSidebar
-                  experimentId={activeExperimentId}
-                  sessionId={activeSessionId}
+                  experimentId={activeExperimentId || ''}
+                  sessionId={activeSessionId || ''}
                   canvasContent={canvasContent}
                   canvasTitle={canvasTitle}
                   generatedFiles={generatedFiles}
@@ -1758,6 +1812,7 @@ export default function HomePage() {
           onClose={() => setShowProjectData(false)}
         />
       )}
+
     </div>
   );
 }
@@ -1881,10 +1936,19 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
   const isPython = fileName.endsWith('.py');
   const isMarkdown = fileName.endsWith('.md');
   const isJSON = fileName.endsWith('.json');
+  const isNotebook = fileName.endsWith('.ipynb');
   const isBinary = /\.(pkl|joblib|parquet|h5|hdf5|pt|pth|onnx)$/i.test(fileName);
 
+  // Notebook files are rendered inline by a dedicated component — skip the
+  // regular read-file flow entirely (it would fetch the raw JSON as text).
+  const notebookName = useMemo(() => {
+    if (!isNotebook) return null;
+    const m = filePath.match(/\/notebooks\/([^/]+)\.ipynb$/);
+    return m ? m[1] : null;
+  }, [filePath, isNotebook]);
+
   useEffect(() => {
-    if (isImage || isBinary) {
+    if (isImage || isBinary || isNotebook) {
       setLoading(false);
       return;
     }
@@ -1900,7 +1964,11 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
         setError(err.message);
         setLoading(false);
       });
-  }, [filePath]);
+  }, [filePath, isImage, isBinary, isNotebook]);
+
+  if (isNotebook && notebookName) {
+    return <Notebook sessionId={sessionId} notebookName={notebookName} variant="inline" />;
+  }
 
   return (
     <div className="h-full flex flex-col bg-black">
@@ -2124,6 +2192,18 @@ function WorkspaceSidebar({
       return [...prev, { id: filePath, label: name, icon, iconColor: color, type: 'file' }];
     });
   }, []);
+
+  // Listen for top-level requests to open a specific workspace file
+  // (e.g. an agent creating a notebook → auto-open it).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const path = (e as CustomEvent).detail?.path as string | undefined;
+      if (path) openFile(path);
+    };
+    window.addEventListener('trainable:open-file', handler as EventListener);
+    return () =>
+      window.removeEventListener('trainable:open-file', handler as EventListener);
+  }, [openFile]);
 
   const closeTab = useCallback((tabId: string) => {
     setOpenTabs((prev) => {

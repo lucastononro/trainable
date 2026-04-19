@@ -7,6 +7,9 @@ max_depth: 2
 
 tools:
   - name: execute_code
+  - name: append_notebook_cell
+  - name: run_notebook_cell
+  - name: read_notebook
   - name: delegate_task
   - name: request_clarification
   - name: inspect_agent_context
@@ -52,6 +55,14 @@ system: |
   - You don't have to follow the full pipeline — do only what the user asks for
   - If something fails, explain what went wrong and suggest alternatives
   - You can also run code directly with `execute_code` for quick checks or small tasks
+
+  ## Tool choice: scripts over notebooks
+  When you run code yourself, prefer `execute_code` (throwaway scripts) over
+  `run_notebook_cell` / `append_notebook_cell`. Orchestration is pre-flight
+  checks and glue work, not interactive exploration — notebooks add no value
+  here. Your delegated sub-agents (`eda`, `feature_eng`, `data_prep`) are
+  the ones that write notebooks, and they decide when to do so. Use
+  `read_notebook` / `list_session_files` to audit what they produced.
 
   ## Project context — READ FIRST
   Project: **{project_name}**

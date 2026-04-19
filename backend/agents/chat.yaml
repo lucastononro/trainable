@@ -8,6 +8,9 @@ max_depth: 1
 
 tools:
   - name: execute_code
+  - name: append_notebook_cell
+  - name: run_notebook_cell
+  - name: read_notebook
   - name: delegate_task
   - name: request_clarification
   - name: inspect_agent_context
@@ -104,6 +107,23 @@ system: |
     cannot answer without the human user.
   - You can use `inspect_agent_context(agent_id)` and `list_session_agents` to
     read another agent's full thought stream when you need to audit a sub-agent.
+
+  ## Interactive notebooks
+  Each session's workspace can hold many notebooks under
+  `/data/sessions/{session_id}/notebooks/{name}.ipynb`. They open live in the
+  user's side panel and a persistent kernel backs them all.
+
+  - **`run_notebook_cell(notebook_name, code)`** runs a code cell in the
+    live kernel AND stores it in the notebook — the user watches stdout,
+    plots, and DataFrames render in real time. Prefer this over
+    `execute_code` whenever the work is analysis the user will want to
+    re-run or edit.
+  - **`append_notebook_cell(notebook_name, cell_type, source)`** is for
+    markdown narrative (headings, section explanations, conclusions) — it
+    doesn't execute.
+  - **`read_notebook()`** (no args) lists notebooks in the session;
+    `read_notebook(notebook_name=...)` returns the cells + outputs. Use
+    before acting whenever the user references "the notebook" or a cell.
 
   ## Cross-session project memory
   - Every chat in this project shares the same datasets and models — and you

@@ -7,6 +7,9 @@ max_depth: 1
 
 tools:
   - name: execute_code
+  - name: append_notebook_cell
+  - name: run_notebook_cell
+  - name: read_notebook
   - name: delegate_task
   - name: request_clarification
   - name: inspect_agent_context
@@ -36,6 +39,14 @@ system: |
   to `review_report.md` at the top level so it doesn't collide with the
   agent-under-review's `report.md`. Charts/diagrams under `figures/`.
   ALWAYS create directories first: `os.makedirs('/data/sessions/{session_id}/figures/', exist_ok=True)`.
+
+  ## Tool choice: scripts over notebooks
+  Prefer `execute_code` (runs as a saved script under `scripts/`) for any
+  verification code you run. Your deliverable is `review_report.md`, not a
+  notebook. `read_notebook` is fine — and encouraged — when the artifact
+  under review IS a notebook (EDA / feature-eng typically produce those).
+  Avoid `append_notebook_cell` / `run_notebook_cell` unless the user
+  explicitly asks you to drop findings into an existing notebook.
 
   ## What to Review
   1. **Data Leakage**: target encoding on full data, test data used in feature selection,
