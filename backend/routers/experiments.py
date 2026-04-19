@@ -34,9 +34,7 @@ async def _require_project(db: AsyncSession, project_id: str) -> Project:
     result = await db.execute(select(Project).where(Project.id == project_id))
     project = result.scalar_one_or_none()
     if not project:
-        raise HTTPException(
-            status_code=400, detail=f"Project {project_id} not found"
-        )
+        raise HTTPException(status_code=400, detail=f"Project {project_id} not found")
     return project
 
 
@@ -142,9 +140,7 @@ async def create_experiment(
             tmp.write(content)
             tmp_path = tmp.name
         try:
-            await upload_to_volume(
-                tmp_path, _dataset_volume_path(project_id, rel_path)
-            )
+            await upload_to_volume(tmp_path, _dataset_volume_path(project_id, rel_path))
         except Exception as e:
             logger.warning(f"Modal Volume upload failed for {rel_path}: {e}")
         finally:
@@ -219,7 +215,9 @@ async def create_experiment_from_s3(
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
                 obj_key = obj["Key"]
-                rel_path = obj_key[len(prefix):] if obj_key.startswith(prefix) else obj_key
+                rel_path = (
+                    obj_key[len(prefix) :] if obj_key.startswith(prefix) else obj_key
+                )
                 if not rel_path or rel_path.endswith("/"):
                     continue
                 data = s3.get_object(Bucket=bucket, Key=obj_key)["Body"].read()
@@ -241,9 +239,7 @@ async def create_experiment_from_s3(
             tmp.write(data)
             tmp_path = tmp.name
         try:
-            await upload_to_volume(
-                tmp_path, _dataset_volume_path(project_id, filename)
-            )
+            await upload_to_volume(tmp_path, _dataset_volume_path(project_id, filename))
         except Exception as e:
             logger.warning(f"Modal Volume upload failed for {filename}: {e}")
         finally:
@@ -363,7 +359,11 @@ async def attach_data(
             for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
                 for obj in page.get("Contents", []):
                     obj_key = obj["Key"]
-                    rel_path = obj_key[len(prefix):] if obj_key.startswith(prefix) else obj_key
+                    rel_path = (
+                        obj_key[len(prefix) :]
+                        if obj_key.startswith(prefix)
+                        else obj_key
+                    )
                     if not rel_path or rel_path.endswith("/"):
                         continue
                     data = s3.get_object(Bucket=bucket, Key=obj_key)["Body"].read()
@@ -376,7 +376,9 @@ async def attach_data(
                             _dataset_volume_path(project_id, rel_path),
                         )
                     except Exception as e:
-                        logger.warning(f"Modal Volume upload failed for {rel_path}: {e}")
+                        logger.warning(
+                            f"Modal Volume upload failed for {rel_path}: {e}"
+                        )
                     finally:
                         os.unlink(tmp_path)
         else:
@@ -403,7 +405,11 @@ async def attach_data(
                     session_id=session_id,
                     role="user",
                     content=f"User attached data from S3: {s3_path}. Data is now available at {project_data_root}",
-                    metadata_={"event_type": "file_attached", "hidden": True, "files": [s3_path]},
+                    metadata_={
+                        "event_type": "file_attached",
+                        "hidden": True,
+                        "files": [s3_path],
+                    },
                 )
             )
         await db.commit()
@@ -418,7 +424,9 @@ async def attach_data(
             key = _dataset_s3_key(project_id, rel_path)
             content = await f.read()
             if len(content) > settings.max_upload_size_bytes:
-                raise HTTPException(status_code=413, detail=f"File '{rel_path}' too large")
+                raise HTTPException(
+                    status_code=413, detail=f"File '{rel_path}' too large"
+                )
 
             s3.put_object(
                 Bucket="datasets",
@@ -452,11 +460,19 @@ async def attach_data(
                     session_id=session_id,
                     role="user",
                     content=f"User attached file(s): {', '.join(filenames)}. Data is now available at {project_data_root}",
-                    metadata_={"event_type": "file_attached", "hidden": True, "files": filenames},
+                    metadata_={
+                        "event_type": "file_attached",
+                        "hidden": True,
+                        "files": filenames,
+                    },
                 )
             )
         await db.commit()
-        return {"status": "attached", "dataset_ref": dataset_ref, "uploaded_files": uploaded}
+        return {
+            "status": "attached",
+            "dataset_ref": dataset_ref,
+            "uploaded_files": uploaded,
+        }
 
     raise HTTPException(status_code=400, detail="Provide either files or s3_path")
 
@@ -468,9 +484,7 @@ async def update_experiment(
     db: AsyncSession = Depends(get_db),
 ):
     """Rename an experiment, move it to another project, or update metadata."""
-    result = await db.execute(
-        select(Experiment).where(Experiment.id == experiment_id)
-    )
+    result = await db.execute(select(Experiment).where(Experiment.id == experiment_id))
     experiment = result.scalar_one_or_none()
     if not experiment:
         raise HTTPException(status_code=404, detail="Experiment not found")

@@ -217,11 +217,7 @@ async def append_cell(
     async with _lock(key):
         if after_cell_id:
             idx = next(
-                (
-                    i
-                    for i, c in enumerate(nb.cells)
-                    if c.get("id") == after_cell_id
-                ),
+                (i for i, c in enumerate(nb.cells) if c.get("id") == after_cell_id),
                 None,
             )
             if idx is not None:

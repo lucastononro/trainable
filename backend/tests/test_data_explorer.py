@@ -8,9 +8,13 @@ from tests.conftest import MockVolume
 
 
 @pytest.mark.asyncio
-async def test_preview_prep_data(client, sample_csv, mock_volume_with_prep, default_project_id):
+async def test_preview_prep_data(
+    client, sample_csv, mock_volume_with_prep, default_project_id
+):
     # Create experiment to have a session
-    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
+    exp_id, session_id = await _create_experiment(
+        client, sample_csv, default_project_id
+    )
 
     with (
         patch("routers.data_explorer.reload_volume"),
@@ -157,7 +161,9 @@ async def test_query_no_data(client, sample_csv):
 
 @pytest.mark.asyncio
 async def test_get_prep_metadata_not_found(client, sample_csv, default_project_id):
-    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
+    exp_id, session_id = await _create_experiment(
+        client, sample_csv, default_project_id
+    )
 
     resp = await client.get(f"/api/sessions/{session_id}/prep/metadata")
     assert resp.status_code == 404
@@ -167,7 +173,9 @@ async def test_get_prep_metadata_not_found(client, sample_csv, default_project_i
 async def test_get_prep_metadata_after_extraction(
     client, sample_csv, sample_parquet_splits, sample_metadata_json, default_project_id
 ):
-    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
+    exp_id, session_id = await _create_experiment(
+        client, sample_csv, default_project_id
+    )
 
     # Build a mock volume with the actual session/experiment IDs
     vol = MockVolume(
@@ -175,12 +183,8 @@ async def test_get_prep_metadata_after_extraction(
             f"/sessions/{session_id}/data/train.parquet": sample_parquet_splits[
                 "train"
             ],
-            f"/sessions/{session_id}/data/val.parquet": sample_parquet_splits[
-                "val"
-            ],
-            f"/sessions/{session_id}/data/test.parquet": sample_parquet_splits[
-                "test"
-            ],
+            f"/sessions/{session_id}/data/val.parquet": sample_parquet_splits["val"],
+            f"/sessions/{session_id}/data/test.parquet": sample_parquet_splits["test"],
             f"/sessions/{session_id}/data/metadata.json": sample_metadata_json,
             f"/datasets/{exp_id}/iris.csv": b"a,b,target\n1,2,0\n",
         }

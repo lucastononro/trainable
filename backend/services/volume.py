@@ -56,6 +56,7 @@ async def read_volume_file_async(path: str) -> bytes:
     Modal's `read_file.aio(...)` shape varies across SDK versions, so we
     defer to the well-tested sync path and just keep it off the loop.
     """
+
     def _sync() -> bytes:
         return b"".join(get_volume().read_file(path))
 
@@ -70,6 +71,7 @@ async def listdir_async(path: str, recursive: bool = False) -> list:
     versions). Wrapping it on the default executor keeps the event loop
     free while relying on the well-tested sync call.
     """
+
     def _sync() -> list:
         return list(get_volume().listdir(path, recursive=recursive))
 
@@ -78,6 +80,7 @@ async def listdir_async(path: str, recursive: bool = False) -> list:
 
 async def reload_volume_async() -> bool:
     """Async version of `reload_volume` — thread-pool wrapped for safety."""
+
     def _sync() -> bool:
         try:
             get_volume().reload()

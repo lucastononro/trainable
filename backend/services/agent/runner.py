@@ -72,9 +72,8 @@ def _apply_mentions(user_prompt: str, mentions: list[dict] | None) -> str:
             f"{_MENTION_SENTINEL_START}(\\d+){_MENTION_SENTINEL_END}", _replace, cleaned
         )
     else:
-        cleaned = (
-            cleaned.replace(_MENTION_SENTINEL_START, "")
-            .replace(_MENTION_SENTINEL_END, "")
+        cleaned = cleaned.replace(_MENTION_SENTINEL_START, "").replace(
+            _MENTION_SENTINEL_END, ""
         )
 
     if not mentions:
@@ -95,10 +94,16 @@ def _apply_mentions(user_prompt: str, mentions: list[dict] | None) -> str:
         else:
             lines.append(f'- {kind} "{label}" ref={ref}')
     lines.append("]")
-    return cleaned + "\n".join(lines) if cleaned.endswith("\n") else cleaned + "\n" + "\n".join(lines)
+    return (
+        cleaned + "\n".join(lines)
+        if cleaned.endswith("\n")
+        else cleaned + "\n" + "\n".join(lines)
+    )
 
 
-def _truncate(text: str, limit: int = _THOUGHT_BLOCK_MAX_CHARS) -> tuple[str, bool, int]:
+def _truncate(
+    text: str, limit: int = _THOUGHT_BLOCK_MAX_CHARS
+) -> tuple[str, bool, int]:
     """Return (truncated_text, was_truncated, original_bytes)."""
     if text is None:
         return "", False, 0
@@ -225,7 +230,9 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
             )
             files_listing = (
                 "(could not list project files — listing unavailable, but the "
-                "project may still have data; check `/data/projects/" + project_id + "/datasets/` directly)"
+                "project may still have data; check `/data/projects/"
+                + project_id
+                + "/datasets/` directly)"
             )
 
     return project_id, project_name, files_listing
@@ -281,7 +288,10 @@ async def _load_prev_context(session_id: str, stage: str) -> str:
                     header = (producer.upper() if producer else "PRIOR") + " Report"
                     loaded.append(f"## {header}\n{text}")
                     logger.info(
-                        "Loaded %s report from %s (%d chars)", producer, art.path, len(text)
+                        "Loaded %s report from %s (%d chars)",
+                        producer,
+                        art.path,
+                        len(text),
                     )
 
             if stage in ("train", "trainer"):
@@ -292,7 +302,9 @@ async def _load_prev_context(session_id: str, stage: str) -> str:
                 )
                 meta = meta_row.scalar_one_or_none()
                 if meta:
-                    prep_metadata_text = json.dumps(meta.to_dict(), default=str, indent=2)
+                    prep_metadata_text = json.dumps(
+                        meta.to_dict(), default=str, indent=2
+                    )
     except Exception as e:
         logger.warning("Failed to load prior context from DB: %s", e)
 
@@ -349,7 +361,9 @@ async def run_agent(
         "depth": depth,
     }
 
-    async def _publish(event_type: str, data: dict, role: str | None = None, publish: bool = True):
+    async def _publish(
+        event_type: str, data: dict, role: str | None = None, publish: bool = True
+    ):
         await save_and_publish(
             session_id,
             event_type,
@@ -389,8 +403,8 @@ async def run_agent(
             f"- Your depth: {depth}\n"
             + (f"- Parent agent_id: {parent_agent_id}\n" if parent_agent_id else "")
             + "- Every message in this session is timestamped (created_at). When you call "
-              "inspect_agent_context, each block carries its created_at so you can tell what "
-              "is recent vs. stale relative to the time above."
+            "inspect_agent_context, each block carries its created_at so you can tell what "
+            "is recent vs. stale relative to the time above."
         )
 
         if user_prompt:
@@ -407,7 +421,12 @@ async def run_agent(
         # Resolve model: explicit param > agent default > global config
         # Resolution order: explicit param > per-agent override > agent YAML default > global config
         override_model = (agent_models or {}).get(agent_type)
-        model = model or override_model or get_agent_default_model(agent_type) or settings.claude_model
+        model = (
+            model
+            or override_model
+            or get_agent_default_model(agent_type)
+            or settings.claude_model
+        )
 
         # Load conversation history for follow-up messages
         if user_prompt:
@@ -509,7 +528,9 @@ async def run_agent(
                         tool_use_id = getattr(block, "id", None)
                         if tool_name is not None and tool_input is not None:
                             payload_text = _block_to_text(tool_input)
-                            truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
+                            truncated_text, was_trunc, orig_bytes = _truncate(
+                                payload_text
+                            )
                             await _publish(
                                 "agent_thought",
                                 {

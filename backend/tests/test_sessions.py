@@ -22,7 +22,9 @@ async def _create_experiment(client, sample_csv, project_id):
 
 @pytest.mark.asyncio
 async def test_get_session(client, sample_csv, default_project_id):
-    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
+    exp_id, session_id = await _create_experiment(
+        client, sample_csv, default_project_id
+    )
 
     resp = await client.get(f"/api/sessions/{session_id}")
     assert resp.status_code == 200
@@ -105,7 +107,9 @@ async def test_get_metrics_empty(client, sample_csv, default_project_id):
 
 @pytest.mark.asyncio
 async def test_session_shows_in_experiment(client, sample_csv, default_project_id):
-    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
+    exp_id, session_id = await _create_experiment(
+        client, sample_csv, default_project_id
+    )
 
     # Create a second session
     resp = await client.post(f"/api/experiments/{exp_id}/sessions")

@@ -46,7 +46,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
         if cell_type not in ("code", "markdown"):
             msg = "cell_type must be 'code' or 'markdown'."
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "append_notebook_cell", "output": msg},
                 role="tool",
             )
@@ -57,7 +58,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
         if not isinstance(source, str):
             msg = "source must be a string."
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "append_notebook_cell", "output": msg},
                 role="tool",
             )
@@ -78,7 +80,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             logger.exception("append_notebook_cell failed")
             err = f"Failed to append cell: {e}"
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "append_notebook_cell", "output": err},
                 role="tool",
             )
@@ -136,24 +139,29 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             f"{'; new notebook' if info['created_notebook'] else ''})"
         )
         await publish_fn(
-            session_id, "tool_end",
+            session_id,
+            "tool_end",
             {"tool": "append_notebook_cell", "output": summary},
             role="tool",
         )
 
         return {
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "ok": True,
-                    "notebook_name": notebook_name,
-                    "notebook_path": info["notebook_path"],
-                    "cell_id": info["cell_id"],
-                    "cell_type": info["cell_type"],
-                    "total_cells": info["total_cells"],
-                    "created_notebook": info["created_notebook"],
-                }),
-            }]
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps(
+                        {
+                            "ok": True,
+                            "notebook_name": notebook_name,
+                            "notebook_path": info["notebook_path"],
+                            "cell_id": info["cell_id"],
+                            "cell_type": info["cell_type"],
+                            "total_cells": info["total_cells"],
+                            "created_notebook": info["created_notebook"],
+                        }
+                    ),
+                }
+            ]
         }
 
     return handler

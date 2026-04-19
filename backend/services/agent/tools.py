@@ -19,6 +19,7 @@ def create_mcp_server(
     """Create a per-call MCP server with tools determined by the agent's YAML config."""
     # Lazy import to avoid circular dependency
     from tools import build_mcp_server
+
     return build_mcp_server(
         agent_type=agent_type,
         session_id=session_id,

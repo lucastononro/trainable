@@ -48,11 +48,7 @@ async def save_and_publish(
             async with async_session() as db:
                 metadata = {
                     "event_type": event_type,
-                    **{
-                        k: v
-                        for k, v in data.items()
-                        if k not in ("text", "content")
-                    },
+                    **{k: v for k, v in data.items() if k not in ("text", "content")},
                 }
                 if agent_meta:
                     for k, v in agent_meta.items():
@@ -92,7 +88,11 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
         for entry in vol.listdir(workspace, recursive=True):
             if entry.type.name != "FILE" or not entry.path.endswith(".md"):
                 continue
-            rel = entry.path[len(workspace) + 1:] if entry.path.startswith(workspace + "/") else entry.path
+            rel = (
+                entry.path[len(workspace) + 1 :]
+                if entry.path.startswith(workspace + "/")
+                else entry.path
+            )
             if rel == "report.md":
                 report_path = entry.path
                 break
@@ -114,7 +114,9 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
                     {"content": report_text, "stage": stage, "path": report_path},
                     role="assistant",
                 )
-                logger.info("Published report from %s (%d chars)", report_path, len(report_text))
+                logger.info(
+                    "Published report from %s (%d chars)", report_path, len(report_text)
+                )
         except Exception as e:
             logger.debug("Could not read report %s: %s", report_path, e)
 

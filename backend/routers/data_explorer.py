@@ -87,7 +87,9 @@ async def _resolve_split_paths(session_id: str) -> dict[str, str]:
                 rows = await db.execute(
                     select(Artifact.name, Artifact.path).where(
                         Artifact.session_id == session_id,
-                        Artifact.name.in_(["train.parquet", "val.parquet", "test.parquet"]),
+                        Artifact.name.in_(
+                            ["train.parquet", "val.parquet", "test.parquet"]
+                        ),
                     )
                 )
                 for name, path in rows.all():

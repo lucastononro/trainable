@@ -52,13 +52,15 @@ def create_handler(
         # Enforce delegation rules
         if agent_type not in allowed_subagents:
             return {
-                "content": [{
-                    "type": "text",
-                    "text": (
-                        f"Agent '{parent_agent_type}' cannot delegate to '{agent_type}'. "
-                        f"Allowed: {', '.join(allowed_subagents) or 'none'}"
-                    ),
-                }],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Agent '{parent_agent_type}' cannot delegate to '{agent_type}'. "
+                            f"Allowed: {', '.join(allowed_subagents) or 'none'}"
+                        ),
+                    }
+                ],
                 "is_error": True,
             }
 
@@ -71,15 +73,21 @@ def create_handler(
         next_depth = current_depth + 1
         if not can_delegate(parent_agent_type, current_depth):
             return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Max delegation depth reached ({current_depth}).",
-                }],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Max delegation depth reached ({current_depth}).",
+                    }
+                ],
                 "is_error": True,
             }
 
         # Resolution order: user override > agent YAML default > parent's model
-        sub_model = agent_models.get(agent_type) or get_agent_default_model(agent_type) or parent_model
+        sub_model = (
+            agent_models.get(agent_type)
+            or get_agent_default_model(agent_type)
+            or parent_model
+        )
         stage = "train" if agent_type == "trainer" else agent_type
         child_agent_id = str(uuid.uuid4())[:8]
         synthetic_tool_use_id = f"delegate_{child_agent_id}"
@@ -117,7 +125,8 @@ def create_handler(
         )
 
         await publish_fn(
-            session_id, "subagent_start",
+            session_id,
+            "subagent_start",
             {
                 "agent_type": agent_type,
                 "agent_id": child_agent_id,
@@ -175,7 +184,8 @@ def create_handler(
             )
 
             await publish_fn(
-                session_id, "subagent_end",
+                session_id,
+                "subagent_end",
                 {
                     "agent_type": agent_type,
                     "agent_id": child_agent_id,
@@ -188,10 +198,13 @@ def create_handler(
             )
 
             return {
-                "content": [{
-                    "type": "text",
-                    "text": collected_text or "(agent completed with no text output)",
-                }]
+                "content": [
+                    {
+                        "type": "text",
+                        "text": collected_text
+                        or "(agent completed with no text output)",
+                    }
+                ]
             }
 
         except Exception as e:
@@ -214,7 +227,8 @@ def create_handler(
                 agent_meta=parent_meta,
             )
             await publish_fn(
-                session_id, "subagent_end",
+                session_id,
+                "subagent_end",
                 {
                     "agent_type": agent_type,
                     "agent_id": child_agent_id,

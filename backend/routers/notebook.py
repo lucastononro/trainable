@@ -32,18 +32,14 @@ router = APIRouter()
 
 
 async def _require_session(session_id: str, db: AsyncSession) -> SessionModel:
-    result = await db.execute(
-        select(SessionModel).where(SessionModel.id == session_id)
-    )
+    result = await db.execute(select(SessionModel).where(SessionModel.id == session_id))
     session = result.scalar_one_or_none()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
     return session
 
 
-async def _ensure_artifact_row(
-    session_id: str, name: str, db: AsyncSession
-) -> None:
+async def _ensure_artifact_row(session_id: str, name: str, db: AsyncSession) -> None:
     path = notebook_store.notebook_path(session_id, name)
     # Use .first() — prior runs occasionally leave duplicate rows for the
     # same path (e.g. from earlier code paths that didn't scope on path).
@@ -121,7 +117,9 @@ async def open_notebook(
 
     logger.info(
         "open notebook %s/%s in %d ms",
-        session_id[:8], name, int((time.monotonic() - t0) * 1000),
+        session_id[:8],
+        name,
+        int((time.monotonic() - t0) * 1000),
     )
     return nb
 
@@ -135,13 +133,16 @@ async def _safe_save(session_id: str, name: str) -> None:
 
 async def _safe_ensure_artifact(session_id: str, name: str) -> None:
     from db import async_session
+
     try:
         async with async_session() as db:
             await _ensure_artifact_row(session_id, name, db)
     except Exception as e:
         logger.warning(
             "background artifact-row upsert failed for %s/%s: %s",
-            session_id, name, e,
+            session_id,
+            name,
+            e,
         )
 
 
@@ -196,7 +197,9 @@ async def execute_cell(
         raise HTTPException(status_code=400, detail="`code` must be a string")
     try:
         await kernel_manager.execute(
-            session_id, cell_id, code,
+            session_id,
+            cell_id,
+            code,
             notebook_name=notebook_store.sanitize_name(name),
         )
     except Exception as e:
@@ -220,9 +223,7 @@ async def download_notebook(
     return Response(
         content=content,
         media_type="application/x-ipynb+json",
-        headers={
-            "Content-Disposition": f'attachment; filename="{name}.ipynb"'
-        },
+        headers={"Content-Disposition": f'attachment; filename="{name}.ipynb"'},
     )
 
 

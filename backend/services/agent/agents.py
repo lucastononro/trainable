@@ -120,13 +120,17 @@ def list_delegatable_agents(from_agent: str) -> list[dict]:
     for agent_type in allowed:
         try:
             config = get_agent(agent_type)
-            result.append({
-                "type": agent_type,
-                "description": config.get("description", ""),
-                "default_model": config.get("default_model", "claude-sonnet-4-6"),
-            })
+            result.append(
+                {
+                    "type": agent_type,
+                    "description": config.get("description", ""),
+                    "default_model": config.get("default_model", "claude-sonnet-4-6"),
+                }
+            )
         except KeyError:
-            logger.warning("Subagent '%s' referenced by '%s' not found", agent_type, from_agent)
+            logger.warning(
+                "Subagent '%s' referenced by '%s' not found", agent_type, from_agent
+            )
     return result
 
 
@@ -214,15 +218,17 @@ def list_all_agents() -> list[dict]:
     for agent_type in _discover_agents():
         try:
             config = get_agent(agent_type)
-            agents.append({
-                "type": agent_type,
-                "name": config.get("name", agent_type),
-                "description": config.get("description", ""),
-                "default_model": config.get("default_model", ""),
-                "max_depth": config.get("max_depth", 0),
-                "tools": config.get("tools", []),
-                "subagents": config.get("subagents", []),
-            })
+            agents.append(
+                {
+                    "type": agent_type,
+                    "name": config.get("name", agent_type),
+                    "description": config.get("description", ""),
+                    "default_model": config.get("default_model", ""),
+                    "max_depth": config.get("max_depth", 0),
+                    "tools": config.get("tools", []),
+                    "subagents": config.get("subagents", []),
+                }
+            )
         except Exception as e:
             logger.warning("Failed to load agent '%s': %s", agent_type, e)
     return agents

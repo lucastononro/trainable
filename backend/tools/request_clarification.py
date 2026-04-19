@@ -64,7 +64,9 @@ async def _load_parent_thought_stream(session_id: str, parent_agent_id: str) -> 
             continue
         block_type = meta.get("block_type", "text")
         tool_name = meta.get("tool_name") or ""
-        header = f"[{r.created_at}] [{block_type}{':' + tool_name if tool_name else ''}]"
+        header = (
+            f"[{r.created_at}] [{block_type}{':' + tool_name if tool_name else ''}]"
+        )
         chunk = f"{header}\n{r.content or ''}"
         if total + len(chunk) > _PARENT_CONTEXT_BUDGET:
             break
@@ -115,7 +117,11 @@ async def _run_impersonator(
         f"answer yourself."
     )
 
-    model = parent_model or get_agent_default_model(parent_agent_type) or settings.claude_model
+    model = (
+        parent_model
+        or get_agent_default_model(parent_agent_type)
+        or settings.claude_model
+    )
 
     options = ClaudeAgentOptions(
         system_prompt="You are answering a brief clarifying question for one of your sub-agents.",
@@ -231,7 +237,9 @@ def create_handler(
 
         # 3) Branch: direct answer vs escalation.
         if raw_answer.lstrip().startswith(_ESCALATE_PREFIX):
-            user_question = raw_answer.lstrip()[len(_ESCALATE_PREFIX):].strip() or question
+            user_question = (
+                raw_answer.lstrip()[len(_ESCALATE_PREFIX) :].strip() or question
+            )
 
             question_id, future = register(
                 session_id=session_id,
@@ -293,13 +301,15 @@ def create_handler(
             )
 
             return {
-                "content": [{
-                    "type": "text",
-                    "text": (
-                        f"answered_by={answered_by} question_id={question_id}\n"
-                        f"answer: {answer_text}"
-                    ),
-                }]
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"answered_by={answered_by} question_id={question_id}\n"
+                            f"answer: {answer_text}"
+                        ),
+                    }
+                ]
             }
 
         # Direct parent answer.
@@ -338,10 +348,12 @@ def create_handler(
         )
 
         return {
-            "content": [{
-                "type": "text",
-                "text": f"answered_by=parent\nanswer: {raw_answer}",
-            }]
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"answered_by=parent\nanswer: {raw_answer}",
+                }
+            ]
         }
 
     return handler

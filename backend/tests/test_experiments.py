@@ -34,7 +34,9 @@ async def test_create_experiment_single_file(client, sample_csv, default_project
 
 
 @pytest.mark.asyncio
-async def test_create_experiment_multiple_files(client, sample_folder, default_project_id):
+async def test_create_experiment_multiple_files(
+    client, sample_folder, default_project_id
+):
     files = []
     for f_path in sorted(sample_folder.iterdir()):
         files.append(
@@ -178,7 +180,9 @@ async def test_create_experiment_from_s3_invalid_path(client, default_project_id
 
 
 @pytest.mark.asyncio
-async def test_experiment_latest_session_tracking(client, sample_csv, default_project_id):
+async def test_experiment_latest_session_tracking(
+    client, sample_csv, default_project_id
+):
     with open(sample_csv, "rb") as f:
         create_resp = await client.post(
             "/api/experiments",

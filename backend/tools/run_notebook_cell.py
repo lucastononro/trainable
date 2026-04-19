@@ -47,7 +47,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
         if not isinstance(code, str) or not code.strip():
             msg = "`code` must be a non-empty string."
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "run_notebook_cell", "output": msg},
                 role="tool",
             )
@@ -64,7 +65,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             logger.exception("run_notebook_cell: append failed")
             err = f"Failed to append cell: {e}"
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "run_notebook_cell", "output": err},
                 role="tool",
             )
@@ -123,27 +125,33 @@ def create_handler(session_id: str, publish_fn, **kwargs):
         except asyncio.TimeoutError:
             err = f"Cell execution exceeded {timeout}s timeout."
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "run_notebook_cell", "output": err},
                 role="tool",
             )
             return {
-                "content": [{
-                    "type": "text",
-                    "text": json.dumps({
-                        "ok": False,
-                        "notebook_name": notebook_name,
-                        "cell_id": cell_id,
-                        "error": err,
-                    }),
-                }],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(
+                            {
+                                "ok": False,
+                                "notebook_name": notebook_name,
+                                "cell_id": cell_id,
+                                "error": err,
+                            }
+                        ),
+                    }
+                ],
                 "is_error": True,
             }
         except Exception as e:
             logger.exception("run_notebook_cell: execute failed")
             err = f"Failed to execute cell {cell_id}: {e}"
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "run_notebook_cell", "output": err},
                 role="tool",
             )
@@ -159,10 +167,7 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             if cell is not None:
                 outs = notebook_store._format_outputs(cell.get("outputs", []))
                 if len(outs) > _MAX_OUTPUT_CHARS_PER_CELL:
-                    outs = (
-                        outs[:_MAX_OUTPUT_CHARS_PER_CELL]
-                        + "\n… (outputs truncated)"
-                    )
+                    outs = outs[:_MAX_OUTPUT_CHARS_PER_CELL] + "\n… (outputs truncated)"
                 rendered_outputs = outs
 
         envelope = {
@@ -188,7 +193,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             f" · {envelope.get('duration_ms') or 0} ms\n\n{preview}"
         )
         await publish_fn(
-            session_id, "tool_end",
+            session_id,
+            "tool_end",
             {"tool": "run_notebook_cell", "output": chat_out},
             role="tool",
         )

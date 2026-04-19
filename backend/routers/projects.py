@@ -245,7 +245,8 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
 
     logger.info(
         "[DELETE /projects/%s] storage cleanup: %s",
-        project_id, storage,
+        project_id,
+        storage,
     )
 
     await db.delete(project)
@@ -277,7 +278,7 @@ async def list_project_files(
 
     def _strip_prefix(p: str, pre: str) -> str:
         p = p.lstrip("/")
-        return p[len(pre):] if p.startswith(pre) else p
+        return p[len(pre) :] if p.startswith(pre) else p
 
     # --- Modal Volume (primary — what agents see) -----------------------
     files_by_relpath: dict[str, dict] = {}
@@ -350,9 +351,7 @@ async def list_project_files(
     files = sorted(files_by_relpath.values(), key=lambda f: f["relative_path"])
 
     sandbox_missing_count = (
-        sum(1 for f in files if f["in_sandbox"] is False)
-        if sandbox_checked
-        else 0
+        sum(1 for f in files if f["in_sandbox"] is False) if sandbox_checked else 0
     )
 
     return {

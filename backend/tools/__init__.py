@@ -21,13 +21,16 @@ logger = logging.getLogger(__name__)
 def _agents():
     """Lazy import to avoid circular dependency with services.agent."""
     from services.agent import agents as a
+
     return a
 
 
 def _mcp():
     """Lazy import."""
     from services.mcp_tools import create_trainable_mcp_server
+
     return create_trainable_mcp_server
+
 
 _TOOLS_DIR = Path(__file__).parent
 
@@ -96,7 +99,9 @@ def _build_tool_entry(
     if tool_name == "delegate_task":
         agents_info = _agents().list_delegatable_agents(agent_type)
         agent_types = [a["type"] for a in agents_info]
-        agents_desc = "\n".join(f"- {a['type']}: {a['description']}" for a in agents_info)
+        agents_desc = "\n".join(
+            f"- {a['type']}: {a['description']}" for a in agents_info
+        )
         description = description.rstrip() + "\n\nAvailable agents:\n" + agents_desc
 
         if "properties" in input_schema and "agent_type" in input_schema["properties"]:
@@ -153,7 +158,8 @@ def build_mcp_server(
 
     logger.debug(
         "Built MCP server for agent=%s with tools=%s",
-        agent_type, list(tool_entries.keys()),
+        agent_type,
+        list(tool_entries.keys()),
     )
 
     return _mcp()(tool_entries)

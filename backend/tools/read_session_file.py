@@ -28,8 +28,23 @@ logger = logging.getLogger(__name__)
 _MAX_TEXT_CHARS = 12000
 _MAX_BINARY_BYTES = 200_000
 _TEXT_SUFFIXES = {
-    ".md", ".txt", ".py", ".json", ".yaml", ".yml", ".csv", ".tsv",
-    ".html", ".css", ".js", ".ts", ".tsx", ".jsx", ".log", ".sh", ".sql",
+    ".md",
+    ".txt",
+    ".py",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".csv",
+    ".tsv",
+    ".html",
+    ".css",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".log",
+    ".sh",
+    ".sql",
 }
 
 
@@ -44,7 +59,9 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
         path = (args.get("path") or "").strip()
         if not target_session_id or not path:
             return {
-                "content": [{"type": "text", "text": "session_id and path are required"}],
+                "content": [
+                    {"type": "text", "text": "session_id and path are required"}
+                ],
                 "is_error": True,
             }
 
@@ -62,18 +79,22 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
         normalized = path if path.startswith("/") else f"{workspace}/{path}"
         if not normalized.startswith(workspace + "/") and normalized != workspace:
             return {
-                "content": [{
-                    "type": "text",
-                    "text": f"Path must be inside {workspace}/. Got: {path}",
-                }],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Path must be inside {workspace}/. Got: {path}",
+                    }
+                ],
                 "is_error": True,
             }
         if ".." in normalized.split("/"):
             return {
-                "content": [{
-                    "type": "text",
-                    "text": "Path traversal ('..') is not allowed.",
-                }],
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Path traversal ('..') is not allowed.",
+                    }
+                ],
                 "is_error": True,
             }
 
@@ -85,10 +106,12 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
                 cur_exp = cur_exp_row.scalar_one_or_none()
                 if not cur_exp or not cur_exp.project_id:
                     return {
-                        "content": [{
-                            "type": "text",
-                            "text": "Current experiment has no project — cannot cross-reference sessions.",
-                        }],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Current experiment has no project — cannot cross-reference sessions.",
+                            }
+                        ],
                         "is_error": True,
                     }
                 project_id = cur_exp.project_id
@@ -99,26 +122,32 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
                 target_session = target_row.scalar_one_or_none()
                 if not target_session:
                     return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Session {target_session_id} not found.",
-                        }],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Session {target_session_id} not found.",
+                            }
+                        ],
                         "is_error": True,
                     }
 
                 target_exp_row = await db.execute(
-                    select(Experiment).where(Experiment.id == target_session.experiment_id)
+                    select(Experiment).where(
+                        Experiment.id == target_session.experiment_id
+                    )
                 )
                 target_exp = target_exp_row.scalar_one_or_none()
                 if not target_exp or target_exp.project_id != project_id:
                     return {
-                        "content": [{
-                            "type": "text",
-                            "text": (
-                                f"Session {target_session_id} does not belong to the "
-                                f"current project. Cross-project reads are not allowed."
-                            ),
-                        }],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    f"Session {target_session_id} does not belong to the "
+                                    f"current project. Cross-project reads are not allowed."
+                                ),
+                            }
+                        ],
                         "is_error": True,
                     }
         except Exception as e:
@@ -133,7 +162,9 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
             raw = read_volume_file(normalized)
         except Exception as e:
             return {
-                "content": [{"type": "text", "text": f"Could not read {normalized}: {e}"}],
+                "content": [
+                    {"type": "text", "text": f"Could not read {normalized}: {e}"}
+                ],
                 "is_error": True,
             }
 
@@ -141,7 +172,7 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
 
         if _is_text_path(normalized):
             text = raw.decode("utf-8", errors="replace")
-            sliced = text[offset:offset + limit]
+            sliced = text[offset : offset + limit]
             truncated = offset + len(sliced) < len(text)
             envelope = {
                 "session_id": target_session_id,
@@ -156,7 +187,7 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
             return {"content": [{"type": "text", "text": f"{header}\n\n{sliced}"}]}
 
         # Binary — base64-encode a head slice only.
-        head = raw[: _MAX_BINARY_BYTES]
+        head = raw[:_MAX_BINARY_BYTES]
         envelope = {
             "session_id": target_session_id,
             "path": normalized,

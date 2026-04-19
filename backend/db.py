@@ -86,9 +86,12 @@ def _run_migrations(connection):
 
         # 3. Destructive wipe of pre-migration experiments (user decision).
         #    Anything still NULL means it predates the projects schema.
-        orphans = connection.execute(
-            text("SELECT COUNT(*) FROM experiments WHERE project_id IS NULL")
-        ).scalar() or 0
+        orphans = (
+            connection.execute(
+                text("SELECT COUNT(*) FROM experiments WHERE project_id IS NULL")
+            ).scalar()
+            or 0
+        )
         if orphans > 0:
             logger.info(
                 "[DB] Wiping %d pre-migration experiments and their children",
@@ -100,29 +103,37 @@ def _run_migrations(connection):
                 "(SELECT id FROM experiments WHERE project_id IS NULL)"
             )
             if insp.has_table("messages"):
-                connection.execute(text(
-                    f"DELETE FROM messages WHERE session_id IN ({orphan_sessions_subq})"
-                ))
+                connection.execute(
+                    text(
+                        f"DELETE FROM messages WHERE session_id IN ({orphan_sessions_subq})"
+                    )
+                )
             if insp.has_table("artifacts"):
-                connection.execute(text(
-                    f"DELETE FROM artifacts WHERE session_id IN ({orphan_sessions_subq})"
-                ))
+                connection.execute(
+                    text(
+                        f"DELETE FROM artifacts WHERE session_id IN ({orphan_sessions_subq})"
+                    )
+                )
             if insp.has_table("metrics"):
-                connection.execute(text(
-                    f"DELETE FROM metrics WHERE session_id IN ({orphan_sessions_subq})"
-                ))
+                connection.execute(
+                    text(
+                        f"DELETE FROM metrics WHERE session_id IN ({orphan_sessions_subq})"
+                    )
+                )
             if insp.has_table("processed_dataset_meta"):
-                connection.execute(text(
-                    "DELETE FROM processed_dataset_meta WHERE session_id IN "
-                    f"({orphan_sessions_subq})"
-                ))
-            connection.execute(text(
-                "DELETE FROM sessions WHERE experiment_id IN "
-                "(SELECT id FROM experiments WHERE project_id IS NULL)"
-            ))
-            connection.execute(text(
-                "DELETE FROM experiments WHERE project_id IS NULL"
-            ))
+                connection.execute(
+                    text(
+                        "DELETE FROM processed_dataset_meta WHERE session_id IN "
+                        f"({orphan_sessions_subq})"
+                    )
+                )
+            connection.execute(
+                text(
+                    "DELETE FROM sessions WHERE experiment_id IN "
+                    "(SELECT id FROM experiments WHERE project_id IS NULL)"
+                )
+            )
+            connection.execute(text("DELETE FROM experiments WHERE project_id IS NULL"))
             logger.info("[DB] Wiped %d experiments", orphans)
 
     # ------------------------------------------------------------------
@@ -137,8 +148,16 @@ def _run_migrations(connection):
         ("ix_messages_session_id", "messages", "session_id"),
         ("ix_artifacts_session_id", "artifacts", "session_id"),
         ("ix_metrics_session_id", "metrics", "session_id"),
-        ("ix_processed_dataset_meta_session_id", "processed_dataset_meta", "session_id"),
-        ("ix_processed_dataset_meta_experiment_id", "processed_dataset_meta", "experiment_id"),
+        (
+            "ix_processed_dataset_meta_session_id",
+            "processed_dataset_meta",
+            "session_id",
+        ),
+        (
+            "ix_processed_dataset_meta_experiment_id",
+            "processed_dataset_meta",
+            "experiment_id",
+        ),
     ]
     for idx_name, table, column in indexes:
         if insp.has_table(table):

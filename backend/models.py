@@ -62,7 +62,9 @@ class Experiment(Base):
     __tablename__ = "experiments"
 
     id = Column(String(36), primary_key=True)
-    project_id = Column(String(36), ForeignKey("projects.id"), nullable=False, index=True)
+    project_id = Column(
+        String(36), ForeignKey("projects.id"), nullable=False, index=True
+    )
     name = Column(String(255), nullable=False)
     description = Column(Text, default="")
     dataset_ref = Column(String(512), nullable=False)
@@ -101,7 +103,9 @@ class Session(Base):
     __tablename__ = "sessions"
 
     id = Column(String(36), primary_key=True)
-    experiment_id = Column(String(36), ForeignKey("experiments.id"), nullable=False, index=True)
+    experiment_id = Column(
+        String(36), ForeignKey("experiments.id"), nullable=False, index=True
+    )
     state = Column(String(50), default=SessionState.CREATED.value)
     model = Column(String(100), default=None)
     created_at = Column(String, default=lambda: utcnow().isoformat())
@@ -139,7 +143,9 @@ class Message(Base):
     __tablename__ = "messages"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(36), ForeignKey("sessions.id"), nullable=False, index=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+    )
     role = Column(String(50), nullable=False)
     content = Column(Text, nullable=False)
     metadata_ = Column("metadata", JSON, default=dict)
@@ -161,7 +167,9 @@ class Artifact(Base):
     __tablename__ = "artifacts"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(36), ForeignKey("sessions.id"), nullable=False, index=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+    )
     stage = Column(String(50), nullable=False)
     artifact_type = Column(String(50), nullable=False)
     name = Column(String(255), nullable=False)
@@ -189,8 +197,12 @@ class ProcessedDatasetMeta(Base):
     __tablename__ = "processed_dataset_meta"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(36), ForeignKey("sessions.id"), nullable=False, index=True)
-    experiment_id = Column(String(36), ForeignKey("experiments.id"), nullable=False, index=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+    )
+    experiment_id = Column(
+        String(36), ForeignKey("experiments.id"), nullable=False, index=True
+    )
 
     columns = Column(JSON, nullable=False)
     feature_columns = Column(JSON, default=list)
@@ -236,7 +248,9 @@ class Metric(Base):
     __tablename__ = "metrics"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    session_id = Column(String(36), ForeignKey("sessions.id"), nullable=False, index=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+    )
     stage = Column(String(50), nullable=False, default="train")
     step = Column(Integer, nullable=False)
     name = Column(String(100), nullable=False)

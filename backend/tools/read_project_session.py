@@ -68,10 +68,12 @@ def create_handler(
                 cur_exp = cur_exp_row.scalar_one_or_none()
                 if not cur_exp or not cur_exp.project_id:
                     return {
-                        "content": [{
-                            "type": "text",
-                            "text": "Current experiment has no project — cannot cross-reference sessions.",
-                        }],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Current experiment has no project — cannot cross-reference sessions.",
+                            }
+                        ],
                         "is_error": True,
                     }
                 project_id = cur_exp.project_id
@@ -83,26 +85,32 @@ def create_handler(
                 target_session = target_session_row.scalar_one_or_none()
                 if not target_session:
                     return {
-                        "content": [{
-                            "type": "text",
-                            "text": f"Session {target_session_id} not found.",
-                        }],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": f"Session {target_session_id} not found.",
+                            }
+                        ],
                         "is_error": True,
                     }
 
                 target_exp_row = await db.execute(
-                    select(Experiment).where(Experiment.id == target_session.experiment_id)
+                    select(Experiment).where(
+                        Experiment.id == target_session.experiment_id
+                    )
                 )
                 target_exp = target_exp_row.scalar_one_or_none()
                 if not target_exp or target_exp.project_id != project_id:
                     return {
-                        "content": [{
-                            "type": "text",
-                            "text": (
-                                f"Session {target_session_id} does not belong to the "
-                                f"current project. Cross-project reads are not allowed."
-                            ),
-                        }],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": (
+                                    f"Session {target_session_id} does not belong to the "
+                                    f"current project. Cross-project reads are not allowed."
+                                ),
+                            }
+                        ],
                         "is_error": True,
                     }
 
@@ -129,9 +137,17 @@ def create_handler(
                 return False
             if msg.role == "user":
                 return True
-            if msg.role == "assistant" and event_type in ("agent_message", "report_ready"):
+            if msg.role == "assistant" and event_type in (
+                "agent_message",
+                "report_ready",
+            ):
                 return True
-            if include_tool_events and event_type in ("tool_start", "tool_end", "subagent_start", "subagent_end"):
+            if include_tool_events and event_type in (
+                "tool_start",
+                "tool_end",
+                "subagent_start",
+                "subagent_end",
+            ):
                 return True
             return False
 
@@ -170,7 +186,7 @@ def create_handler(
             rendered = (
                 rendered[:_MAX_RESPONSE_CHARS]
                 + f"\n\n…[response capped at {_MAX_RESPONSE_CHARS} chars; "
-                  f"narrow with offset/limit]"
+                f"narrow with offset/limit]"
             )
             response_truncated = True
 
@@ -198,8 +214,6 @@ def create_handler(
             duration_s=time.time() - started,
         )
 
-        return {
-            "content": [{"type": "text", "text": f"{header}\n\n{rendered}"}]
-        }
+        return {"content": [{"type": "text", "text": f"{header}\n\n{rendered}"}]}
 
     return handler

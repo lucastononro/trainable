@@ -51,6 +51,7 @@ async def detect_new_files(session_id: str, stage: str, publish_fn):
     to a subfolder — the agent writes anywhere under /sessions/{sid}/.
     """
     from services.volume import listdir_async, reload_volume_async
+
     workspace = f"/sessions/{session_id}"
     try:
         await reload_volume_async()
@@ -66,12 +67,15 @@ async def detect_new_files(session_id: str, stage: str, publish_fn):
         for path in sorted(new_files):
             name = path.split("/")[-1]
             await publish_fn(
-                session_id, "file_created",
+                session_id,
+                "file_created",
                 {"path": path, "name": name, "type": "file", "stage": stage},
             )
 
         if new_files:
-            logger.info("Detected %d new files in session %s", len(new_files), session_id)
+            logger.info(
+                "Detected %d new files in session %s", len(new_files), session_id
+            )
     except Exception as e:
         logger.warning("File detection error: %s", e)
 
@@ -89,7 +93,8 @@ def create_handler(
         code = args.get("code", "") if isinstance(args, dict) else str(args)
 
         await publish_fn(
-            session_id, "tool_start",
+            session_id,
+            "tool_start",
             {"tool": "execute_code", "input": {"code": code[:500]}},
             role="tool",
         )
@@ -101,7 +106,8 @@ def create_handler(
             await write_to_volume(code, script_path)
             _known_files.setdefault(session_id, set()).add(script_path)
             await publish_fn(
-                session_id, "file_created",
+                session_id,
+                "file_created",
                 {"path": script_path, "name": filename, "type": "file", "stage": stage},
             )
         except Exception as e:
@@ -112,7 +118,8 @@ def create_handler(
         except Exception as e:
             error_msg = f"Sandbox error: {e}"
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "execute_code", "output": error_msg},
                 role="tool",
             )
@@ -131,7 +138,8 @@ def create_handler(
         await detect_new_files(session_id, stage, publish_fn)
 
         await publish_fn(
-            session_id, "tool_end",
+            session_id,
+            "tool_end",
             {"tool": "execute_code", "output": output[:2000]},
             role="tool",
         )

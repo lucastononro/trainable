@@ -39,7 +39,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
                 logger.exception("read_notebook: list failed")
                 err = f"Failed to list notebooks: {e}"
                 await publish_fn(
-                    session_id, "tool_end",
+                    session_id,
+                    "tool_end",
                     {"tool": "read_notebook", "output": err},
                     role="tool",
                 )
@@ -54,7 +55,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
                     "to create one."
                 )
                 await publish_fn(
-                    session_id, "tool_end",
+                    session_id,
+                    "tool_end",
                     {"tool": "read_notebook", "output": "Listed 0 notebooks"},
                     role="tool",
                 )
@@ -65,7 +67,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             )
             summary += "\n\nCall `read_notebook(notebook_name='<name>')` to read a specific one."
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {
                     "tool": "read_notebook",
                     "output": f"Listed {len(items)} notebook(s): "
@@ -87,7 +90,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             logger.exception("read_notebook failed")
             err = f"Failed to read notebook: {e}"
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {"tool": "read_notebook", "output": err},
                 role="tool",
             )
@@ -103,7 +107,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
                 "`run_notebook_cell(notebook_name=..., code=...)` to create."
             )
             await publish_fn(
-                session_id, "tool_end",
+                session_id,
+                "tool_end",
                 {
                     "tool": "read_notebook",
                     "output": f"Notebook `{notebook_name}` not found.",
@@ -115,7 +120,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
         # Summary for the chat card; agent still gets full render.
         first_line = rendered.splitlines()[0] if rendered else ""
         await publish_fn(
-            session_id, "tool_end",
+            session_id,
+            "tool_end",
             {"tool": "read_notebook", "output": first_line},
             role="tool",
         )

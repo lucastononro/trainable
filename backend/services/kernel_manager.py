@@ -58,10 +58,7 @@ def _cap_display_data(data: dict) -> dict:
             # base64-encoded string
             text = value if isinstance(value, str) else "".join(value)
             if len(text) > MAX_PNG_BYTES:
-                out[mime] = (
-                    "[truncated png: "
-                    f"{len(text)} > {MAX_PNG_BYTES} chars]"
-                )
+                out[mime] = f"[truncated png: {len(text)} > {MAX_PNG_BYTES} chars]"
                 # Also drop alt reps that could be just as large.
                 continue
             out[mime] = text
@@ -369,7 +366,9 @@ class KernelManager:
         pending = handle.pending.get(cell_id) if cell_id else None
         # Events arriving before execute() registers are rare — fall back to
         # the default notebook so routing still happens correctly.
-        notebook_name = pending.notebook_name if pending else notebook_store.DEFAULT_NOTEBOOK_NAME
+        notebook_name = (
+            pending.notebook_name if pending else notebook_store.DEFAULT_NOTEBOOK_NAME
+        )
         routed_payload = {**payload, "notebook_name": notebook_name}
 
         if etype == "cell_started":
@@ -391,9 +390,7 @@ class KernelManager:
                 sid, {"type": "notebook.cell.started", "data": routed_payload}
             )
         elif etype == "cell_stream":
-            capped_text = _cap_text(
-                payload.get("text", ""), MAX_STREAM_CHARS, "stream"
-            )
+            capped_text = _cap_text(payload.get("text", ""), MAX_STREAM_CHARS, "stream")
             routed_payload = {**routed_payload, "text": capped_text}
             await notebook_store.on_cell_event(
                 sid, notebook_name, "cell_stream", routed_payload

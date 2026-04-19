@@ -172,13 +172,15 @@ def create_handler(
                 is_error=True,
             )
             return {
-                "content": [{
-                    "type": "text",
-                    "text": (
-                        f"No thought blocks found for agent_id={target_agent_id} "
-                        f"in this session. Use list_session_agents to see what's available."
-                    ),
-                }]
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"No thought blocks found for agent_id={target_agent_id} "
+                            f"in this session. Use list_session_agents to see what's available."
+                        ),
+                    }
+                ]
             }
 
         # Apply block-type / tool-name filters before slicing.
@@ -249,9 +251,7 @@ def create_handler(
             else:
                 content_str = full[offset : offset + limit]
                 used_offset = offset
-                next_offset = (
-                    offset + limit if offset + limit < len(full) else None
-                )
+                next_offset = offset + limit if offset + limit < len(full) else None
             returned = len(content_str)
 
         # Final hard cap so a runaway query can't blow the context window.
@@ -260,7 +260,7 @@ def create_handler(
             content_str = (
                 content_str[:_MAX_RESPONSE_CHARS]
                 + f"\n\n…[response capped at {_MAX_RESPONSE_CHARS} chars; "
-                  f"narrow your slice with offset/limit/filter_block_types]"
+                f"narrow your slice with offset/limit/filter_block_types]"
             )
             response_truncated = True
 
@@ -290,8 +290,6 @@ def create_handler(
             duration_s=time.time() - started,
         )
 
-        return {
-            "content": [{"type": "text", "text": f"{header}\n\n{content_str}"}]
-        }
+        return {"content": [{"type": "text", "text": f"{header}\n\n{content_str}"}]}
 
     return handler

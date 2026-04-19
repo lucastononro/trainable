@@ -29,10 +29,12 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
                 current_exp = exp_row.scalar_one_or_none()
                 if not current_exp or not current_exp.project_id:
                     return {
-                        "content": [{
-                            "type": "text",
-                            "text": "Current experiment has no project — cannot list project sessions.",
-                        }],
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "Current experiment has no project — cannot list project sessions.",
+                            }
+                        ],
                         "is_error": True,
                     }
                 project_id = current_exp.project_id
@@ -44,10 +46,12 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
                 experiments = list(exps_result.scalars().all())
                 if not experiments:
                     return {
-                        "content": [{
-                            "type": "text",
-                            "text": "No sessions found in this project.",
-                        }]
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "No sessions found in this project.",
+                            }
+                        ]
                     }
 
                 exp_by_id = {e.id: e for e in experiments}
@@ -68,18 +72,22 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
                 counts = {sid: count for sid, count in counts_result.all()}
 
             items = []
-            for s in sorted(sessions, key=lambda x: x.updated_at or x.created_at or "", reverse=True):
+            for s in sorted(
+                sessions, key=lambda x: x.updated_at or x.created_at or "", reverse=True
+            ):
                 exp = exp_by_id.get(s.experiment_id)
-                items.append({
-                    "session_id": s.id,
-                    "experiment_id": s.experiment_id,
-                    "chat_name": exp.name if exp else None,
-                    "state": s.state,
-                    "created_at": s.created_at,
-                    "updated_at": s.updated_at,
-                    "message_count": counts.get(s.id, 0),
-                    "is_current": s.id == session_id,
-                })
+                items.append(
+                    {
+                        "session_id": s.id,
+                        "experiment_id": s.experiment_id,
+                        "chat_name": exp.name if exp else None,
+                        "state": s.state,
+                        "created_at": s.created_at,
+                        "updated_at": s.updated_at,
+                        "message_count": counts.get(s.id, 0),
+                        "is_current": s.id == session_id,
+                    }
+                )
 
             envelope = {
                 "project_id": project_id,
@@ -87,10 +95,12 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
                 "sessions": items,
             }
             return {
-                "content": [{
-                    "type": "text",
-                    "text": json.dumps(envelope, default=str, indent=2),
-                }]
+                "content": [
+                    {
+                        "type": "text",
+                        "text": json.dumps(envelope, default=str, indent=2),
+                    }
+                ]
             }
         except Exception as e:
             logger.exception("list_project_sessions failed")

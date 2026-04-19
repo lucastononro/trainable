@@ -74,7 +74,9 @@ def create_handler(
             if entry["parent_agent_id"] is None and meta.get("parent_agent_id"):
                 entry["parent_agent_id"] = meta.get("parent_agent_id")
 
-        ordered = sorted(agents.values(), key=lambda a: (a.get("depth") or 0, a["started_at"] or ""))
+        ordered = sorted(
+            agents.values(), key=lambda a: (a.get("depth") or 0, a["started_at"] or "")
+        )
 
         await emit_agent_tool_call(
             publish_fn,
@@ -90,17 +92,21 @@ def create_handler(
 
         if not ordered:
             return {
-                "content": [{
-                    "type": "text",
-                    "text": "(no agents have produced messages in this session yet)",
-                }]
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "(no agents have produced messages in this session yet)",
+                    }
+                ]
             }
 
         return {
-            "content": [{
-                "type": "text",
-                "text": json.dumps({"agents": ordered}, default=str, indent=2),
-            }]
+            "content": [
+                {
+                    "type": "text",
+                    "text": json.dumps({"agents": ordered}, default=str, indent=2),
+                }
+            ]
         }
 
     return handler
