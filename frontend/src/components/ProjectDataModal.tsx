@@ -160,9 +160,7 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               Loading files…
             </div>
           )}
-          {error && !loading && (
-            <div className="text-sm text-red-400 py-4">Error: {error}</div>
-          )}
+          {error && !loading && <div className="text-sm text-red-400 py-4">Error: {error}</div>}
           {!loading && !error && s3Error && (
             <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-300">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
@@ -177,12 +175,14 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
                 <div className="font-medium">
-                  {sandboxMissingCount} file{sandboxMissingCount === 1 ? '' : 's'} not yet synced to the agent sandbox.
+                  {sandboxMissingCount} file{sandboxMissingCount === 1 ? '' : 's'} not yet synced to
+                  the agent sandbox.
                 </div>
                 <div className="text-amber-400/70 mt-0.5">
-                  The upload reached storage but the Modal Volume didn&apos;t pick it
-                  up — agents won&apos;t see these files yet. Try re-uploading, or
-                  check backend logs for <code className="px-1 bg-black/40 rounded">Modal Volume upload failed</code> entries.
+                  The upload reached storage but the Modal Volume didn&apos;t pick it up — agents
+                  won&apos;t see these files yet. Try re-uploading, or check backend logs for{' '}
+                  <code className="px-1 bg-black/40 rounded">Modal Volume upload failed</code>{' '}
+                  entries.
                 </div>
               </div>
             </div>
@@ -215,9 +215,10 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
                       // Show the sub-path inside the folder (if nested) so
                       // uploads like "folder/sub/file.csv" read naturally.
                       const rel = f.relative_path || f.name;
-                      const subPath = group.folder && rel.startsWith(group.folder + '/')
-                        ? rel.slice(group.folder.length + 1)
-                        : rel;
+                      const subPath =
+                        group.folder && rel.startsWith(group.folder + '/')
+                          ? rel.slice(group.folder.length + 1)
+                          : rel;
                       return (
                         <div
                           key={f.path}

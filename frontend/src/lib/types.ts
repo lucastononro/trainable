@@ -98,9 +98,7 @@ export interface Mention {
   sandbox_path?: string;
   experiment_id?: string;
 }
-export type DraftToken =
-  | { kind: 'text'; value: string }
-  | { kind: 'mention'; mention: Mention };
+export type DraftToken = { kind: 'text'; value: string } | { kind: 'mention'; mention: Mention };
 export type Draft = DraftToken[];
 
 export interface SSEEvent {

@@ -30,7 +30,10 @@ function makeImageResolver(sessionId: string) {
 // classes are no-ops. Explicit per-element styling gives us control anyway.
 const MD_COMPONENTS = (resolveSrc: (s?: string) => string | undefined) => ({
   h1: (p: React.HTMLAttributes<HTMLHeadingElement>) => (
-    <h1 {...p} className="mb-3 mt-1 border-b border-neutral-800 pb-1 text-2xl font-semibold text-white" />
+    <h1
+      {...p}
+      className="mb-3 mt-1 border-b border-neutral-800 pb-1 text-2xl font-semibold text-white"
+    />
   ),
   h2: (p: React.HTMLAttributes<HTMLHeadingElement>) => (
     <h2 {...p} className="mb-2 mt-4 text-xl font-semibold text-white" />
@@ -45,20 +48,22 @@ const MD_COMPONENTS = (resolveSrc: (s?: string) => string | undefined) => ({
     <p {...p} className="my-2 text-[14px] leading-relaxed text-neutral-200" />
   ),
   ul: (p: React.HTMLAttributes<HTMLUListElement>) => (
-    <ul {...p} className="my-2 list-disc space-y-1 pl-6 text-[14px] text-neutral-200 marker:text-neutral-500" />
+    <ul
+      {...p}
+      className="my-2 list-disc space-y-1 pl-6 text-[14px] text-neutral-200 marker:text-neutral-500"
+    />
   ),
   ol: (p: React.HTMLAttributes<HTMLOListElement>) => (
-    <ol {...p} className="my-2 list-decimal space-y-1 pl-6 text-[14px] text-neutral-200 marker:text-neutral-500" />
+    <ol
+      {...p}
+      className="my-2 list-decimal space-y-1 pl-6 text-[14px] text-neutral-200 marker:text-neutral-500"
+    />
   ),
-  li: (p: React.HTMLAttributes<HTMLLIElement>) => (
-    <li {...p} className="leading-relaxed" />
-  ),
+  li: (p: React.HTMLAttributes<HTMLLIElement>) => <li {...p} className="leading-relaxed" />,
   strong: (p: React.HTMLAttributes<HTMLElement>) => (
     <strong {...p} className="font-semibold text-white" />
   ),
-  em: (p: React.HTMLAttributes<HTMLElement>) => (
-    <em {...p} className="italic text-neutral-200" />
-  ),
+  em: (p: React.HTMLAttributes<HTMLElement>) => <em {...p} className="italic text-neutral-200" />,
   a: (p: React.AnchorHTMLAttributes<HTMLAnchorElement>) => (
     <a
       {...p}
@@ -95,7 +100,10 @@ const MD_COMPONENTS = (resolveSrc: (s?: string) => string | undefined) => ({
     </div>
   ),
   th: (p: React.HTMLAttributes<HTMLTableHeaderCellElement>) => (
-    <th {...p} className="border border-neutral-800 bg-neutral-900 px-2 py-1 text-left text-neutral-200" />
+    <th
+      {...p}
+      className="border border-neutral-800 bg-neutral-900 px-2 py-1 text-left text-neutral-200"
+    />
   ),
   td: (p: React.HTMLAttributes<HTMLTableDataCellElement>) => (
     <td {...p} className="border border-neutral-800 px-2 py-1 text-neutral-300" />

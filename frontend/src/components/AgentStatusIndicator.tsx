@@ -23,13 +23,37 @@ export interface ActiveAgent {
 }
 
 const AGENT_META: Record<string, { label: string; color: string; description: string }> = {
-  orchestrator: { label: 'Orchestrator', color: 'violet', description: 'Plans the workflow, delegates to specialists' },
-  eda: { label: 'EDA Agent', color: 'blue', description: 'Exploratory data analysis, profiling, visualization' },
-  data_prep: { label: 'Data Prep Agent', color: 'amber', description: 'Cleans, transforms, splits data' },
-  feature_eng: { label: 'Feature Eng. Agent', color: 'orange', description: 'Creates and selects features' },
+  orchestrator: {
+    label: 'Orchestrator',
+    color: 'violet',
+    description: 'Plans the workflow, delegates to specialists',
+  },
+  eda: {
+    label: 'EDA Agent',
+    color: 'blue',
+    description: 'Exploratory data analysis, profiling, visualization',
+  },
+  data_prep: {
+    label: 'Data Prep Agent',
+    color: 'amber',
+    description: 'Cleans, transforms, splits data',
+  },
+  feature_eng: {
+    label: 'Feature Eng. Agent',
+    color: 'orange',
+    description: 'Creates and selects features',
+  },
   trainer: { label: 'Training Agent', color: 'green', description: 'Trains and tunes models' },
-  reviewer: { label: 'Review Agent', color: 'rose', description: 'Catches bugs, data leakage, methodology issues' },
-  chat: { label: 'Chat Agent', color: 'gray', description: 'Root conversational agent (always main)' },
+  reviewer: {
+    label: 'Review Agent',
+    color: 'rose',
+    description: 'Catches bugs, data leakage, methodology issues',
+  },
+  chat: {
+    label: 'Chat Agent',
+    color: 'gray',
+    description: 'Root conversational agent (always main)',
+  },
 };
 
 const ALL_AGENT_TYPES = [
@@ -43,22 +67,64 @@ const ALL_AGENT_TYPES = [
 ];
 
 const COLOR_MAP: Record<string, { bg: string; text: string; dot: string; ring: string }> = {
-  violet: { bg: 'bg-violet-500/15', text: 'text-violet-400', dot: 'bg-violet-400', ring: 'ring-violet-400/30' },
-  blue: { bg: 'bg-blue-500/15', text: 'text-blue-400', dot: 'bg-blue-400', ring: 'ring-blue-400/30' },
-  amber: { bg: 'bg-amber-500/15', text: 'text-amber-400', dot: 'bg-amber-400', ring: 'ring-amber-400/30' },
-  green: { bg: 'bg-green-500/15', text: 'text-green-400', dot: 'bg-green-400', ring: 'ring-green-400/30' },
-  orange: { bg: 'bg-orange-500/15', text: 'text-orange-400', dot: 'bg-orange-400', ring: 'ring-orange-400/30' },
-  rose: { bg: 'bg-rose-500/15', text: 'text-rose-400', dot: 'bg-rose-400', ring: 'ring-rose-400/30' },
-  gray: { bg: 'bg-gray-500/15', text: 'text-gray-400', dot: 'bg-gray-500', ring: 'ring-gray-400/30' },
-  teal: { bg: 'bg-teal-500/15', text: 'text-teal-400', dot: 'bg-teal-400', ring: 'ring-teal-400/30' },
+  violet: {
+    bg: 'bg-violet-500/15',
+    text: 'text-violet-400',
+    dot: 'bg-violet-400',
+    ring: 'ring-violet-400/30',
+  },
+  blue: {
+    bg: 'bg-blue-500/15',
+    text: 'text-blue-400',
+    dot: 'bg-blue-400',
+    ring: 'ring-blue-400/30',
+  },
+  amber: {
+    bg: 'bg-amber-500/15',
+    text: 'text-amber-400',
+    dot: 'bg-amber-400',
+    ring: 'ring-amber-400/30',
+  },
+  green: {
+    bg: 'bg-green-500/15',
+    text: 'text-green-400',
+    dot: 'bg-green-400',
+    ring: 'ring-green-400/30',
+  },
+  orange: {
+    bg: 'bg-orange-500/15',
+    text: 'text-orange-400',
+    dot: 'bg-orange-400',
+    ring: 'ring-orange-400/30',
+  },
+  rose: {
+    bg: 'bg-rose-500/15',
+    text: 'text-rose-400',
+    dot: 'bg-rose-400',
+    ring: 'ring-rose-400/30',
+  },
+  gray: {
+    bg: 'bg-gray-500/15',
+    text: 'text-gray-400',
+    dot: 'bg-gray-500',
+    ring: 'ring-gray-400/30',
+  },
+  teal: {
+    bg: 'bg-teal-500/15',
+    text: 'text-teal-400',
+    dot: 'bg-teal-400',
+    ring: 'ring-teal-400/30',
+  },
 };
 
 function getAgentMeta(type: string) {
-  return AGENT_META[type] || {
-    label: type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-    color: 'teal',
-    description: '',
-  };
+  return (
+    AGENT_META[type] || {
+      label: type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+      color: 'teal',
+      description: '',
+    }
+  );
 }
 
 function getColors(color: string) {
@@ -89,10 +155,8 @@ export default function AgentStatusIndicator({ agents, isRunning }: Props) {
   }, [open]);
 
   // Find the deepest running agent (the one currently active)
-  const runningAgents = agents.filter(a => a.status === 'running');
-  const currentAgent = runningAgents.length > 0
-    ? runningAgents[runningAgents.length - 1]
-    : null;
+  const runningAgents = agents.filter((a) => a.status === 'running');
+  const currentAgent = runningAgents.length > 0 ? runningAgents[runningAgents.length - 1] : null;
 
   const displayType = currentAgent?.type || 'chat';
   const meta = getAgentMeta(displayType);
@@ -113,11 +177,15 @@ export default function AgentStatusIndicator({ agents, isRunning }: Props) {
         <span className="relative flex items-center justify-center w-3 h-3">
           <span className={`w-2 h-2 rounded-full ${anyRunning ? colors.dot : 'bg-gray-600'}`} />
           {anyRunning && (
-            <span className={`absolute w-3 h-3 rounded-full ${colors.dot} opacity-40 animate-ping`} />
+            <span
+              className={`absolute w-3 h-3 rounded-full ${colors.dot} opacity-40 animate-ping`}
+            />
           )}
         </span>
         <span className="font-medium">{meta.label}</span>
-        <ChevronDown className={`w-3 h-3 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown
+          className={`w-3 h-3 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
       </button>
 
       {open && (
@@ -168,15 +236,18 @@ function StatusView({
       <div className="py-1 max-h-[320px] overflow-y-auto">
         {/* Root agent (chat) — always show */}
         <div className="flex items-center gap-2 px-3 py-1.5">
-          <StatusIcon status={anyRunning && !currentAgent ? 'running' : (agents.length > 0 ? 'idle' : 'running')} color="gray" />
+          <StatusIcon
+            status={
+              anyRunning && !currentAgent ? 'running' : agents.length > 0 ? 'idle' : 'running'
+            }
+            color="gray"
+          />
           <span className="text-xs text-gray-400 flex-1">Chat Agent</span>
           <span className="text-[10px] text-gray-600">main</span>
         </div>
 
         {agents.length === 0 && !anyRunning && (
-          <div className="px-3 py-2 text-[11px] text-gray-600">
-            No sub-agents active.
-          </div>
+          <div className="px-3 py-2 text-[11px] text-gray-600">No sub-agents active.</div>
         )}
 
         {agents.map((agent) => {
@@ -189,7 +260,9 @@ function StatusView({
               style={{ paddingLeft: `${12 + agent.depth * 12}px` }}
             >
               <StatusIcon status={agent.status} color={am.color} />
-              <span className={`text-xs flex-1 ${agent.status === 'running' ? ac.text : 'text-gray-500'}`}>
+              <span
+                className={`text-xs flex-1 ${agent.status === 'running' ? ac.text : 'text-gray-500'}`}
+              >
                 {am.label}
               </span>
               {agent.status === 'running' && <Elapsed since={agent.startedAt} />}

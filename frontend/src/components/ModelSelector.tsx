@@ -39,7 +39,9 @@ export default function ModelSelector() {
       >
         <span className={`w-1.5 h-1.5 rounded-full ${tier.dot}`} />
         <span className="text-gray-300 font-medium">{current.name.replace('Claude ', '')}</span>
-        <ChevronDown className={`w-3 h-3 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`} />
+        <ChevronDown
+          className={`w-3 h-3 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}
+        />
       </button>
 
       {open && (
@@ -68,7 +70,9 @@ export default function ModelSelector() {
                 <MIcon className={`w-4 h-4 mt-0.5 shrink-0 ${mt.color}`} />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className={`text-sm font-medium ${isActive ? 'text-white' : 'text-gray-300'}`}>
+                    <span
+                      className={`text-sm font-medium ${isActive ? 'text-white' : 'text-gray-300'}`}
+                    >
                       {m.name}
                     </span>
                     {isActive && <span className="w-1.5 h-1.5 rounded-full bg-primary-500" />}

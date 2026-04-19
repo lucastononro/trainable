@@ -99,12 +99,14 @@ function readDraftFromDOM(root: HTMLDivElement): Draft {
           /* ignore malformed pill */
         }
         // Skip pill subtree.
-        const next = walker.nextSibling() || (() => {
-          // Move past the whole subtree.
-          let cur: Node | null = el;
-          while (cur && !cur.nextSibling) cur = cur.parentNode;
-          return cur ? cur.nextSibling : null;
-        })();
+        const next =
+          walker.nextSibling() ||
+          (() => {
+            // Move past the whole subtree.
+            let cur: Node | null = el;
+            while (cur && !cur.nextSibling) cur = cur.parentNode;
+            return cur ? cur.nextSibling : null;
+          })();
         if (next) {
           walker.currentNode = next;
           node = next;
@@ -246,8 +248,7 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(function MentionInput
       // Find end of the query run (up to next whitespace or end).
       const afterAt = fullText.slice(active.atOffset + 1);
       const endMatch = afterAt.search(/\s/);
-      const queryEnd =
-        active.atOffset + 1 + (endMatch === -1 ? afterAt.length : endMatch);
+      const queryEnd = active.atOffset + 1 + (endMatch === -1 ? afterAt.length : endMatch);
       const after = fullText.slice(queryEnd);
 
       const parent = textNode.parentNode;
@@ -306,15 +307,12 @@ const MentionInput = forwardRef<MentionInputHandle, Props>(function MentionInput
     [pickerAnchor, onSubmit],
   );
 
-  const handlePaste = useCallback(
-    (e: React.ClipboardEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      const text = e.clipboardData.getData('text/plain');
-      if (!text) return;
-      document.execCommand('insertText', false, text);
-    },
-    [],
-  );
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const text = e.clipboardData.getData('text/plain');
+    if (!text) return;
+    document.execCommand('insertText', false, text);
+  }, []);
 
   // When editing the DOM directly via insertNode etc we must trigger a
   // synthetic input so consumers re-render.

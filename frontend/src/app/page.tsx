@@ -5,7 +5,12 @@ import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
 import { SSEEvent, FileTreeNode, MetricPoint, ChartConfig, Mention, Draft } from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
-import { ImperativePanelHandle, Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels';
+import {
+  ImperativePanelHandle,
+  Panel,
+  PanelGroup,
+  PanelResizeHandle,
+} from 'react-resizable-panels';
 import {
   Bot,
   Send,
@@ -114,10 +119,22 @@ interface ChatItem {
 // ---------------------------------------------------------------------------
 
 const SUGGESTIONS = [
-  { icon: BarChart3, label: 'Explore a dataset', prompt: 'Analyze this dataset \u2014 perform a full EDA.' },
+  {
+    icon: BarChart3,
+    label: 'Explore a dataset',
+    prompt: 'Analyze this dataset \u2014 perform a full EDA.',
+  },
   { icon: Cpu, label: 'Train a model', prompt: 'Train a model on this dataset.' },
-  { icon: Database, label: 'Clean & prep data', prompt: 'Clean and prepare this dataset for modeling.' },
-  { icon: Terminal, label: 'Write a script', prompt: 'Write a Python script to process this data.' },
+  {
+    icon: Database,
+    label: 'Clean & prep data',
+    prompt: 'Clean and prepare this dataset for modeling.',
+  },
+  {
+    icon: Terminal,
+    label: 'Write a script',
+    prompt: 'Write a Python script to process this data.',
+  },
 ];
 
 // ---------------------------------------------------------------------------
@@ -154,7 +171,6 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
   const [experimentName, setExperimentName] = useState('');
-
 
   // Workspace state
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -197,7 +213,9 @@ export default function HomePage() {
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
   const activeAgentsRef = useRef<ActiveAgent[]>([]);
   // Keep ref in sync for use inside SSE handler closure
-  useEffect(() => { activeAgentsRef.current = activeAgents; }, [activeAgents]);
+  useEffect(() => {
+    activeAgentsRef.current = activeAgents;
+  }, [activeAgents]);
 
   // File attachment state
   const [attachedFiles, setAttachedFiles] = useState<File[]>([]);
@@ -292,15 +310,14 @@ export default function HomePage() {
               // text. Fall back to the activeAgents heuristic only when the
               // event is missing the field (legacy events).
               const eventAgentType = (data.agent_type as string | undefined) || undefined;
-              const running = activeAgentsRef.current.filter(a => a.status === 'running');
-              const fallbackType = running.length > 0 ? running[running.length - 1].type : undefined;
+              const running = activeAgentsRef.current.filter((a) => a.status === 'running');
+              const fallbackType =
+                running.length > 0 ? running[running.length - 1].type : undefined;
               const currentAgentType = eventAgentType || fallbackType;
               setChatItems((prev) => {
                 const streamingId = streamingItemIdRef.current;
                 if (streamingId) {
-                  const idx = prev.findIndex(
-                    (i) => i.id === streamingId && i.type === 'assistant',
-                  );
+                  const idx = prev.findIndex((i) => i.id === streamingId && i.type === 'assistant');
                   if (idx >= 0) {
                     const updated = [...prev];
                     updated[idx] = {
@@ -662,9 +679,7 @@ export default function HomePage() {
               const path = data.notebook_path as string | undefined;
               if (path) {
                 openCanvas();
-                window.dispatchEvent(
-                  new CustomEvent('trainable:open-file', { detail: { path } }),
-                );
+                window.dispatchEvent(new CustomEvent('trainable:open-file', { detail: { path } }));
               }
               break;
             }
@@ -1038,8 +1053,7 @@ export default function HomePage() {
         // registry, exposed as `is_running` on the session payload.
         if (sessionData.state) setSessionState(sessionData.state);
         const stillRunning =
-          sessionData.is_running === true ||
-          (sessionData.state?.includes('running') ?? false);
+          sessionData.is_running === true || (sessionData.state?.includes('running') ?? false);
         if (stillRunning) {
           setIsRunning(true);
           if (inFlightSubAgents.length > 0) setActiveAgents(inFlightSubAgents);
@@ -1075,22 +1089,23 @@ export default function HomePage() {
       });
       setIsRunning(true);
       api
-        .sendMessage(activeSessionId, pending.content, true, agentModelsRef.current, pending.mentions)
+        .sendMessage(
+          activeSessionId,
+          pending.content,
+          true,
+          agentModelsRef.current,
+          pending.mentions,
+        )
         .catch((e: any) => {
-        addItem({ type: 'error', content: e.message });
-        setIsRunning(false);
-      });
+          addItem({ type: 'error', content: e.message });
+          setIsRunning(false);
+        });
     }
   }, [activeSessionId, sseConnected, addItem]);
 
   // Drain a pending file attachment once the auto-created session's SSE is live
   useEffect(() => {
-    if (
-      !pendingAttachmentRef.current ||
-      !activeExperimentId ||
-      !activeSessionId ||
-      !sseConnected
-    ) {
+    if (!pendingAttachmentRef.current || !activeExperimentId || !activeSessionId || !sseConnected) {
       return;
     }
     const pending = pendingAttachmentRef.current;
@@ -1277,7 +1292,18 @@ export default function HomePage() {
     } finally {
       setAttachingFiles(false);
     }
-  }, [attachedFiles, draft, activeExperimentId, activeSessionId, activeProjectId, refreshExperiments, refreshProjects, setActiveExperiment, setActiveProject, addItem]);
+  }, [
+    attachedFiles,
+    draft,
+    activeExperimentId,
+    activeSessionId,
+    activeProjectId,
+    refreshExperiments,
+    refreshProjects,
+    setActiveExperiment,
+    setActiveProject,
+    addItem,
+  ]);
 
   const handleS3Select = useCallback(
     async (s3Path: string) => {
@@ -1329,7 +1355,16 @@ export default function HomePage() {
         setAttachingFiles(false);
       }
     },
-    [activeExperimentId, activeSessionId, activeProjectId, refreshExperiments, refreshProjects, setActiveExperiment, setActiveProject, addItem],
+    [
+      activeExperimentId,
+      activeSessionId,
+      activeProjectId,
+      refreshExperiments,
+      refreshProjects,
+      setActiveExperiment,
+      setActiveProject,
+      addItem,
+    ],
   );
 
   // Close attach menu on outside click
@@ -1360,9 +1395,7 @@ export default function HomePage() {
         seen.add(name);
         out.push({
           name,
-          sandboxPath: activeSessionId
-            ? `/sessions/${activeSessionId}/${name}`
-            : name,
+          sandboxPath: activeSessionId ? `/sessions/${activeSessionId}/${name}` : name,
         });
       }
     }
@@ -1398,9 +1431,7 @@ export default function HomePage() {
           )}
           <div className="flex-1" />
 
-          {hasActiveSession && (
-            <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />
-          )}
+          {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
           <ModelSelector />
 
@@ -1433,7 +1464,7 @@ export default function HomePage() {
                 )}
               </button>
               <button
-                onClick={() => canvasOpen ? workspacePanelRef.current?.collapse() : openCanvas()}
+                onClick={() => (canvasOpen ? workspacePanelRef.current?.collapse() : openCanvas())}
                 className={`p-1.5 rounded-lg transition-colors ${
                   canvasOpen
                     ? 'bg-primary-600/20 text-primary-400'
@@ -1466,9 +1497,12 @@ export default function HomePage() {
                 <div className="flex items-center justify-center gap-3">
                   <img src="/logo-brain-transparent.png" alt="Trainable" className="h-10 w-auto" />
                 </div>
-                <h1 className="text-2xl font-semibold text-white">What would you like to explore?</h1>
+                <h1 className="text-2xl font-semibold text-white">
+                  What would you like to explore?
+                </h1>
                 <p className="text-sm text-gray-500">
-                  Upload a dataset or describe what you want to build. Trainable will handle the rest.
+                  Upload a dataset or describe what you want to build. Trainable will handle the
+                  rest.
                 </p>
               </div>
 
@@ -1502,7 +1536,9 @@ export default function HomePage() {
                     <button
                       onClick={() => setShowAttachMenu(!showAttachMenu)}
                       className={`p-1.5 rounded-xl transition-colors shrink-0 ${
-                        showAttachMenu ? 'bg-white/[0.1] text-white' : 'hover:bg-white/[0.08] text-gray-400 hover:text-gray-300'
+                        showAttachMenu
+                          ? 'bg-white/[0.1] text-white'
+                          : 'hover:bg-white/[0.08] text-gray-400 hover:text-gray-300'
                       }`}
                       title="Attach files or data"
                     >
@@ -1545,7 +1581,10 @@ export default function HomePage() {
                         </button>
                         <div className="border-t border-white/[0.06]" />
                         <button
-                          onClick={() => { setShowAttachMenu(false); setShowS3Browser(true); }}
+                          onClick={() => {
+                            setShowAttachMenu(false);
+                            setShowS3Browser(true);
+                          }}
                           title="Browse existing S3 datasets"
                           className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/[0.06] transition-colors"
                         >
@@ -1607,7 +1646,11 @@ export default function HomePage() {
           // -------------------------------------------------------------------
           // Studio view: chat + workspace
           // -------------------------------------------------------------------
-          <PanelGroup direction="horizontal" className="flex-1 animate-slide-up" autoSaveId="trainable-layout-v2">
+          <PanelGroup
+            direction="horizontal"
+            className="flex-1 animate-slide-up"
+            autoSaveId="trainable-layout-v2"
+          >
             {/* Chat panel */}
             <Panel defaultSize={canvasOpen ? 30 : 100} minSize={20}>
               <div className="h-full flex flex-col min-w-0">
@@ -1617,21 +1660,32 @@ export default function HomePage() {
                   >
                     {renderGroupedChatItems(chatItems, streamingItemIdRef.current, activeSessionId)}
 
-                    {isRunning && !streamingItemIdRef.current && (() => {
-                      const last = chatItems[chatItems.length - 1];
-                      return !last || last.type !== 'tool_start';
-                    })() && (
-                      <div className="flex gap-3 animate-fade-in">
-                        <div className="w-7 h-7 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0">
-                          <Bot className="w-3.5 h-3.5 text-emerald-400" />
+                    {isRunning &&
+                      !streamingItemIdRef.current &&
+                      (() => {
+                        const last = chatItems[chatItems.length - 1];
+                        return !last || last.type !== 'tool_start';
+                      })() && (
+                        <div className="flex gap-3 animate-fade-in">
+                          <div className="w-7 h-7 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0">
+                            <Bot className="w-3.5 h-3.5 text-emerald-400" />
+                          </div>
+                          <div className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border">
+                            <span
+                              className="w-2 h-2 rounded-full bg-gray-400 animate-typing"
+                              style={{ animationDelay: '0ms' }}
+                            />
+                            <span
+                              className="w-2 h-2 rounded-full bg-gray-400 animate-typing"
+                              style={{ animationDelay: '150ms' }}
+                            />
+                            <span
+                              className="w-2 h-2 rounded-full bg-gray-400 animate-typing"
+                              style={{ animationDelay: '300ms' }}
+                            />
+                          </div>
                         </div>
-                        <div className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border">
-                          <span className="w-2 h-2 rounded-full bg-gray-400 animate-typing" style={{ animationDelay: '0ms' }} />
-                          <span className="w-2 h-2 rounded-full bg-gray-400 animate-typing" style={{ animationDelay: '150ms' }} />
-                          <span className="w-2 h-2 rounded-full bg-gray-400 animate-typing" style={{ animationDelay: '300ms' }} />
-                        </div>
-                      </div>
-                    )}
+                      )}
                     <div ref={bottomRef} />
                   </div>
                 </div>
@@ -1667,7 +1721,9 @@ export default function HomePage() {
                           type="button"
                           onClick={() => setShowAttachMenu(!showAttachMenu)}
                           className={`p-2 rounded-xl transition-colors shrink-0 ${
-                            showAttachMenu ? 'bg-white/[0.1] text-white' : 'hover:bg-neutral-700 text-gray-400 hover:text-gray-300'
+                            showAttachMenu
+                              ? 'bg-white/[0.1] text-white'
+                              : 'hover:bg-neutral-700 text-gray-400 hover:text-gray-300'
                           }`}
                           title="Attach files or data"
                         >
@@ -1680,7 +1736,9 @@ export default function HomePage() {
                               type="file"
                               multiple
                               className="hidden"
-                              onChange={(e) => e.target.files && handleFilesSelected(e.target.files)}
+                              onChange={(e) =>
+                                e.target.files && handleFilesSelected(e.target.files)
+                              }
                             />
                             <input
                               ref={folderInputRef}
@@ -1690,7 +1748,9 @@ export default function HomePage() {
                               directory=""
                               multiple
                               className="hidden"
-                              onChange={(e) => e.target.files && handleFilesSelected(e.target.files)}
+                              onChange={(e) =>
+                                e.target.files && handleFilesSelected(e.target.files)
+                              }
                             />
                             <button
                               onClick={() => fileInputRef2.current?.click()}
@@ -1708,7 +1768,10 @@ export default function HomePage() {
                             </button>
                             <div className="border-t border-white/[0.06]" />
                             <button
-                              onClick={() => { setShowAttachMenu(false); setShowS3Browser(true); }}
+                              onClick={() => {
+                                setShowAttachMenu(false);
+                                setShowS3Browser(true);
+                              }}
                               className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/[0.06] transition-colors"
                             >
                               <HardDrive className="w-4 h-4 text-gray-500" />
@@ -1761,7 +1824,9 @@ export default function HomePage() {
             </Panel>
 
             {/* Resize handle + Workspace sidebar */}
-            <PanelResizeHandle className={`w-1.5 transition-colors relative group flex items-center justify-center ${canvasOpen ? 'bg-surface-border hover:bg-primary-500/50 active:bg-primary-500/70' : 'bg-transparent pointer-events-none'}`}>
+            <PanelResizeHandle
+              className={`w-1.5 transition-colors relative group flex items-center justify-center ${canvasOpen ? 'bg-surface-border hover:bg-primary-500/50 active:bg-primary-500/70' : 'bg-transparent pointer-events-none'}`}
+            >
               {canvasOpen && (
                 <div className="opacity-0 group-hover:opacity-100 transition-opacity">
                   <GripVertical className="w-3 h-3 text-gray-400" />
@@ -1812,7 +1877,6 @@ export default function HomePage() {
           onClose={() => setShowProjectData(false)}
         />
       )}
-
     </div>
   );
 }
@@ -2201,8 +2265,7 @@ function WorkspaceSidebar({
       if (path) openFile(path);
     };
     window.addEventListener('trainable:open-file', handler as EventListener);
-    return () =>
-      window.removeEventListener('trainable:open-file', handler as EventListener);
+    return () => window.removeEventListener('trainable:open-file', handler as EventListener);
   }, [openFile]);
 
   const closeTab = useCallback((tabId: string) => {
@@ -2471,7 +2534,7 @@ function ToolGroupCard({ items }: { items: ChatItem[] }) {
   const toolItems = items.filter((i) => i.type === 'tool_start' || i.type === 'tool_end');
   const count = toolItems.length;
   const totalDuration = toolItems.reduce(
-    (sum, i) => sum + (i.type === 'tool_end' ? (i.meta?.duration || 0) : 0),
+    (sum, i) => sum + (i.type === 'tool_end' ? i.meta?.duration || 0 : 0),
     0,
   );
 
@@ -2541,7 +2604,9 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
   }, [isStart, item.timestamp]);
 
   const card = (
-    <div className={`${inline ? '' : 'max-w-[85%] '}rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border overflow-hidden`}>
+    <div
+      className={`${inline ? '' : 'max-w-[85%] '}rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border overflow-hidden`}
+    >
       <button
         type="button"
         aria-expanded={!collapsed}
@@ -2549,7 +2614,9 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
         onClick={() => setCollapsed((prev) => !prev)}
       >
         {isStart ? (
-          <Loader2 className={`${inline ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-amber-400 animate-spin`} />
+          <Loader2
+            className={`${inline ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-amber-400 animate-spin`}
+          />
         ) : (
           <CheckCircle2 className={`${inline ? 'w-3 h-3' : 'w-3.5 h-3.5'} text-green-400`} />
         )}
@@ -2568,9 +2635,7 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
         <>
           {item.meta?.code && (
             <pre className="px-4 py-2 text-xs text-gray-400 font-mono max-h-24 overflow-y-auto border-t border-surface-border whitespace-pre-wrap">
-              {item.meta.code.length > 300
-                ? item.meta.code.slice(0, 300) + '...'
-                : item.meta.code}
+              {item.meta.code.length > 300 ? item.meta.code.slice(0, 300) + '...' : item.meta.code}
             </pre>
           )}
           {item.meta?.outputs?.length > 0 && (
@@ -2626,14 +2691,54 @@ const AGENT_META: Record<string, { label: string; color: string }> = {
 };
 
 const AGENT_COLORS: Record<string, { bg: string; text: string; border: string; dot: string }> = {
-  blue: { bg: 'bg-blue-500/15', text: 'text-blue-400', border: 'border-blue-500/20', dot: 'bg-blue-400' },
-  amber: { bg: 'bg-amber-500/15', text: 'text-amber-400', border: 'border-amber-500/20', dot: 'bg-amber-400' },
-  green: { bg: 'bg-green-500/15', text: 'text-green-400', border: 'border-green-500/20', dot: 'bg-green-400' },
-  orange: { bg: 'bg-orange-500/15', text: 'text-orange-400', border: 'border-orange-500/20', dot: 'bg-orange-400' },
-  rose: { bg: 'bg-rose-500/15', text: 'text-rose-400', border: 'border-rose-500/20', dot: 'bg-rose-400' },
-  violet: { bg: 'bg-violet-500/15', text: 'text-violet-400', border: 'border-violet-500/20', dot: 'bg-violet-400' },
-  gray: { bg: 'bg-gray-500/15', text: 'text-gray-400', border: 'border-gray-500/20', dot: 'bg-gray-400' },
-  teal: { bg: 'bg-teal-500/15', text: 'text-teal-400', border: 'border-teal-500/20', dot: 'bg-teal-400' },
+  blue: {
+    bg: 'bg-blue-500/15',
+    text: 'text-blue-400',
+    border: 'border-blue-500/20',
+    dot: 'bg-blue-400',
+  },
+  amber: {
+    bg: 'bg-amber-500/15',
+    text: 'text-amber-400',
+    border: 'border-amber-500/20',
+    dot: 'bg-amber-400',
+  },
+  green: {
+    bg: 'bg-green-500/15',
+    text: 'text-green-400',
+    border: 'border-green-500/20',
+    dot: 'bg-green-400',
+  },
+  orange: {
+    bg: 'bg-orange-500/15',
+    text: 'text-orange-400',
+    border: 'border-orange-500/20',
+    dot: 'bg-orange-400',
+  },
+  rose: {
+    bg: 'bg-rose-500/15',
+    text: 'text-rose-400',
+    border: 'border-rose-500/20',
+    dot: 'bg-rose-400',
+  },
+  violet: {
+    bg: 'bg-violet-500/15',
+    text: 'text-violet-400',
+    border: 'border-violet-500/20',
+    dot: 'bg-violet-400',
+  },
+  gray: {
+    bg: 'bg-gray-500/15',
+    text: 'text-gray-400',
+    border: 'border-gray-500/20',
+    dot: 'bg-gray-400',
+  },
+  teal: {
+    bg: 'bg-teal-500/15',
+    text: 'text-teal-400',
+    border: 'border-teal-500/20',
+    dot: 'bg-teal-400',
+  },
 };
 
 function SubAgentCard({ item }: { item: ChatItem }) {
@@ -2642,9 +2747,14 @@ function SubAgentCard({ item }: { item: ChatItem }) {
   const [elapsed, setElapsed] = useState(0);
 
   const agentType = item.content || 'sub-agent';
-  const meta = AGENT_META[agentType] || { label: agentType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), color: 'teal' };
+  const meta = AGENT_META[agentType] || {
+    label: agentType.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+    color: 'teal',
+  };
   const colors = AGENT_COLORS[meta.color] || AGENT_COLORS.teal;
-  const modelName = item.meta?.model ? item.meta.model.replace('claude-', '').replace(/-/g, ' ') : '';
+  const modelName = item.meta?.model
+    ? item.meta.model.replace('claude-', '').replace(/-/g, ' ')
+    : '';
 
   useEffect(() => {
     if (!isStart) return;
@@ -2662,7 +2772,9 @@ function SubAgentCard({ item }: { item: ChatItem }) {
         onClick={() => setCollapsed((prev) => !prev)}
       >
         {/* Agent icon */}
-        <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${colors.bg}`}>
+        <div
+          className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${colors.bg}`}
+        >
           {isStart ? (
             <Loader2 className={`w-3.5 h-3.5 ${colors.text} animate-spin`} />
           ) : (
@@ -2761,7 +2873,9 @@ function ClarificationCard({ item, sessionId }: { item: ChatItem; sessionId: str
     <div className="animate-fade-in my-1.5" style={{ marginLeft: `${Math.min(depth, 3) * 12}px` }}>
       <div className={`rounded-xl border ${askerColor.border} ${askerColor.bg} p-3.5`}>
         <div className="flex items-center gap-2 mb-2">
-          <div className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${askerColor.bg}`}>
+          <div
+            className={`w-6 h-6 rounded-lg flex items-center justify-center shrink-0 ${askerColor.bg}`}
+          >
             <AlertCircle className={`w-3.5 h-3.5 ${askerColor.text}`} />
           </div>
           <div className="flex-1 min-w-0">
@@ -2814,7 +2928,11 @@ function ClarificationCard({ item, sessionId }: { item: ChatItem; sessionId: str
               disabled={submitting || !reply.trim()}
               className="px-3 py-2 rounded-lg bg-primary-600 hover:bg-primary-500 disabled:bg-neutral-800 disabled:text-gray-600 text-white text-sm flex items-center gap-1.5 transition-colors"
             >
-              {submitting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+              {submitting ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Send className="w-3.5 h-3.5" />
+              )}
               Reply
             </button>
           </div>
@@ -2837,10 +2955,24 @@ const AGENT_TOOL_META: Record<
   string,
   { icon: typeof Search; verb: string; targetVerb?: string; color: keyof typeof AGENT_COLORS }
 > = {
-  inspect_agent_context: { icon: Search, verb: 'inspected', targetVerb: "'s context", color: 'teal' },
+  inspect_agent_context: {
+    icon: Search,
+    verb: 'inspected',
+    targetVerb: "'s context",
+    color: 'teal',
+  },
   list_session_agents: { icon: ListChecks, verb: 'listed agents in this session', color: 'teal' },
-  read_project_session: { icon: FileSearch, verb: 'read another session in this project', color: 'teal' },
-  request_clarification: { icon: AlertCircle, verb: 'asked', targetVerb: 'for clarification (answered internally)', color: 'violet' },
+  read_project_session: {
+    icon: FileSearch,
+    verb: 'read another session in this project',
+    color: 'teal',
+  },
+  request_clarification: {
+    icon: AlertCircle,
+    verb: 'asked',
+    targetVerb: 'for clarification (answered internally)',
+    color: 'violet',
+  },
 };
 
 function _agentLabel(agentType: string | undefined | null): string {
@@ -2943,9 +3075,7 @@ function renderChatItem(
       const mentions: Mention[] | undefined = item.meta?.mentions;
       const hasText = item.content && item.content.trim().length > 0;
       const hasFiles = files.length > 0;
-      const tokens = mentions && mentions.length > 0
-        ? wireToDraft(item.content, mentions)
-        : null;
+      const tokens = mentions && mentions.length > 0 ? wireToDraft(item.content, mentions) : null;
       return (
         <div key={item.id} className="flex justify-end animate-fade-in">
           <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary-600 text-white text-sm overflow-hidden">
@@ -2991,7 +3121,9 @@ function renderChatItem(
 
       return (
         <div key={item.id} className="flex gap-3 animate-fade-in">
-          <div className={`w-7 h-7 rounded-full ${avatarBg} flex items-center justify-center shrink-0 mt-1`}>
+          <div
+            className={`w-7 h-7 rounded-full ${avatarBg} flex items-center justify-center shrink-0 mt-1`}
+          >
             <Bot className={`w-3.5 h-3.5 ${avatarText}`} />
           </div>
           <div className="flex-1 min-w-0 text-sm text-gray-200 markdown-content">

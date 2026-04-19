@@ -46,12 +46,7 @@ function newMarkdownCell(source = ''): NotebookCell {
   return { id: newId(), cell_type: 'markdown', source, metadata: {} };
 }
 
-export default function Notebook({
-  sessionId,
-  notebookName,
-  onClose,
-  variant = 'inline',
-}: Props) {
+export default function Notebook({ sessionId, notebookName, onClose, variant = 'inline' }: Props) {
   const [nb, setNb] = useState<NotebookT>(emptyNotebook);
   const [kernelState, setKernelState] = useState<KernelState>('dead');
   const [running, setRunning] = useState<Record<string, boolean>>({});
@@ -128,9 +123,7 @@ export default function Notebook({
       const code = sourceToString(cell.source);
       setRunning((r) => ({ ...r, [cellId]: true }));
       mutateCell(cellId, (c) =>
-        c.cell_type === 'code'
-          ? { ...c, outputs: [], execution_count: null }
-          : c,
+        c.cell_type === 'code' ? { ...c, outputs: [], execution_count: null } : c,
       );
       const completion = new Promise<void>((resolve) => {
         completionResolversRef.current.set(cellId, resolve);
@@ -168,9 +161,7 @@ export default function Notebook({
   );
 
   const runAll = useCallback(() => {
-    const ids = nbRef.current.cells
-      .filter((c) => c.cell_type === 'code')
-      .map((c) => c.id);
+    const ids = nbRef.current.cells.filter((c) => c.cell_type === 'code').map((c) => c.id);
     return runCellIds(ids);
   }, [runCellIds]);
 
@@ -231,10 +222,7 @@ export default function Notebook({
     (type: 'code' | 'markdown') => {
       setNb((prev) => ({
         ...prev,
-        cells: [
-          ...prev.cells,
-          type === 'code' ? newCodeCell() : newMarkdownCell(),
-        ],
+        cells: [...prev.cells, type === 'code' ? newCodeCell() : newMarkdownCell()],
       }));
       scheduleSave();
     },
@@ -288,10 +276,7 @@ export default function Notebook({
           if (c.id !== e.cell_id || c.cell_type !== 'code') return c;
           return {
             ...c,
-            outputs: [
-              ...c.outputs,
-              { output_type: 'stream', name: e.name, text: e.text },
-            ],
+            outputs: [...c.outputs, { output_type: 'stream', name: e.name, text: e.text }],
           };
         }),
       }));
@@ -456,15 +441,12 @@ export default function Notebook({
       {kernelState === 'starting' && (
         <div className="flex items-center gap-2 border-b border-amber-700/40 bg-amber-500/10 px-4 py-2 text-xs text-amber-200">
           <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-          Starting Modal sandbox kernel — first spin-up takes 20–60 s while
-          the ML image boots. Cells you run now will queue and execute as soon
-          as the kernel is ready.
+          Starting Modal sandbox kernel — first spin-up takes 20–60 s while the ML image boots.
+          Cells you run now will queue and execute as soon as the kernel is ready.
         </div>
       )}
       <div className="flex-1 overflow-y-auto px-3 py-3">
-        {loading && (
-          <div className="text-sm text-neutral-400">Loading notebook…</div>
-        )}
+        {loading && <div className="text-sm text-neutral-400">Loading notebook…</div>}
         {error && <div className="text-sm text-rose-400">Error: {error}</div>}
         {!loading && !error && (
           <div className="mx-auto flex max-w-3xl flex-col gap-2">
@@ -485,10 +467,7 @@ export default function Notebook({
             {nb.cells.length === 0 && (
               <div className="rounded-lg border border-dashed border-neutral-800 p-6 text-center text-sm text-neutral-500">
                 Empty notebook. Click{' '}
-                <button
-                  className="underline"
-                  onClick={() => appendCell('code')}
-                >
+                <button className="underline" onClick={() => appendCell('code')}>
                   + code
                 </button>{' '}
                 to start — or let the agent fill it.

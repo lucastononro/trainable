@@ -23,8 +23,6 @@ from typing import Optional
 import nbformat
 
 from services.volume import (
-    get_volume,
-    read_volume_file,
     read_volume_file_async,
     upload_to_volume,
 )

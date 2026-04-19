@@ -89,6 +89,19 @@ async def client():
             yield ac
 
 
+@pytest_asyncio.fixture
+async def default_project_id(client):
+    """Create a project and return its id. /api/experiments now requires
+    project_id as a form field, so every experiment-creating test needs a
+    project first."""
+    resp = await client.post(
+        "/api/projects",
+        json={"name": "Test Project", "description": "for tests"},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["project"]["id"]
+
+
 @pytest.fixture
 def sample_csv(tmp_path):
     """Create a sample CSV file."""

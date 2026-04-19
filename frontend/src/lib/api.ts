@@ -49,8 +49,7 @@ export const api = {
       body: JSON.stringify(patch),
     }),
 
-  deleteProject: (id: string) =>
-    fetchJSON<DeleteResponse>(`/projects/${id}`, { method: 'DELETE' }),
+  deleteProject: (id: string) => fetchJSON<DeleteResponse>(`/projects/${id}`, { method: 'DELETE' }),
 
   listProjectFiles: (id: string) =>
     fetchJSON<{
@@ -75,9 +74,7 @@ export const api = {
 
   // Experiments
   listExperiments: (projectId?: string) =>
-    fetchJSON<Experiment[]>(
-      projectId ? `/experiments?project_id=${projectId}` : '/experiments',
-    ),
+    fetchJSON<Experiment[]>(projectId ? `/experiments?project_id=${projectId}` : '/experiments'),
 
   updateExperiment: (
     id: string,
@@ -129,7 +126,9 @@ export const api = {
       body: JSON.stringify({
         content,
         run_agent: runAgent,
-        ...(agentModels && Object.keys(agentModels).length > 0 ? { agent_models: agentModels } : {}),
+        ...(agentModels && Object.keys(agentModels).length > 0
+          ? { agent_models: agentModels }
+          : {}),
         ...(mentions && mentions.length > 0 ? { mentions } : {}),
       }),
     }),
@@ -144,10 +143,10 @@ export const api = {
     fetchJSON<AbortResponse>(`/sessions/${sessionId}/abort`, { method: 'POST' }),
 
   replyClarification: (sessionId: string, questionId: string, answer: string) =>
-    fetchJSON<{ status: string }>(
-      `/sessions/${sessionId}/clarifications/${questionId}`,
-      { method: 'POST', body: JSON.stringify({ answer }) },
-    ),
+    fetchJSON<{ status: string }>(`/sessions/${sessionId}/clarifications/${questionId}`, {
+      method: 'POST',
+      body: JSON.stringify({ answer }),
+    }),
 
   // Files
   getFileTree: (sessionId: string) =>

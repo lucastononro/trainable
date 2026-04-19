@@ -26,13 +26,7 @@ const CODE_FONT_SIZE = 13;
 const CODE_LINE_HEIGHT = 20; // px — fixed for reliable alignment
 const CODE_PADDING = '10px 14px';
 
-export default function CodeCell({
-  cell,
-  running,
-  kernelBusy,
-  onChange,
-  onRun,
-}: Props) {
+export default function CodeCell({ cell, running, kernelBusy, onChange, onRun }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const src = sourceToString(cell.source);
 
@@ -90,9 +84,11 @@ export default function CodeCell({
   };
 
   return (
-    <div className={`overflow-hidden rounded-lg border bg-[#1e1e1e] ${
-      running ? 'border-sky-500/40' : 'border-neutral-800'
-    }`}>
+    <div
+      className={`overflow-hidden rounded-lg border bg-[#1e1e1e] ${
+        running ? 'border-sky-500/40' : 'border-neutral-800'
+      }`}
+    >
       <div className="flex items-stretch">
         <div className="flex w-14 shrink-0 select-none flex-col items-end border-r border-neutral-800 bg-neutral-950 px-2 pt-2.5 font-mono text-xs text-sky-400">
           <div>{countLabel}</div>

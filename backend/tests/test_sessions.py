@@ -3,12 +3,17 @@
 import pytest
 
 
-async def _create_experiment(client, sample_csv):
+async def _create_experiment(client, sample_csv, project_id):
     """Helper to create an experiment and return (exp_id, session_id)."""
     with open(sample_csv, "rb") as f:
         resp = await client.post(
             "/api/experiments",
-            data={"name": "Session Test", "description": "", "instructions": "test"},
+            data={
+                "project_id": project_id,
+                "name": "Session Test",
+                "description": "",
+                "instructions": "test",
+            },
             files={"files": ("data.csv", f, "text/csv")},
         )
     body = resp.json()
@@ -16,8 +21,8 @@ async def _create_experiment(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_get_session(client, sample_csv):
-    exp_id, session_id = await _create_experiment(client, sample_csv)
+async def test_get_session(client, sample_csv, default_project_id):
+    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     resp = await client.get(f"/api/sessions/{session_id}")
     assert resp.status_code == 200
@@ -38,8 +43,8 @@ async def test_get_session_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_create_additional_session(client, sample_csv):
-    exp_id, _ = await _create_experiment(client, sample_csv)
+async def test_create_additional_session(client, sample_csv, default_project_id):
+    exp_id, _ = await _create_experiment(client, sample_csv, default_project_id)
 
     resp = await client.post(f"/api/experiments/{exp_id}/sessions")
     assert resp.status_code == 200
@@ -49,8 +54,8 @@ async def test_create_additional_session(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_send_message(client, sample_csv):
-    _, session_id = await _create_experiment(client, sample_csv)
+async def test_send_message(client, sample_csv, default_project_id):
+    _, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     resp = await client.post(
         f"/api/sessions/{session_id}/messages",
@@ -63,8 +68,8 @@ async def test_send_message(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_get_messages(client, sample_csv):
-    _, session_id = await _create_experiment(client, sample_csv)
+async def test_get_messages(client, sample_csv, default_project_id):
+    _, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     # Send two messages
     await client.post(f"/api/sessions/{session_id}/messages", json={"content": "First"})
@@ -81,8 +86,8 @@ async def test_get_messages(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_get_artifacts_empty(client, sample_csv):
-    _, session_id = await _create_experiment(client, sample_csv)
+async def test_get_artifacts_empty(client, sample_csv, default_project_id):
+    _, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     resp = await client.get(f"/api/sessions/{session_id}/artifacts")
     assert resp.status_code == 200
@@ -90,8 +95,8 @@ async def test_get_artifacts_empty(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_get_metrics_empty(client, sample_csv):
-    _, session_id = await _create_experiment(client, sample_csv)
+async def test_get_metrics_empty(client, sample_csv, default_project_id):
+    _, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     resp = await client.get(f"/api/sessions/{session_id}/metrics")
     assert resp.status_code == 200
@@ -99,8 +104,8 @@ async def test_get_metrics_empty(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_session_shows_in_experiment(client, sample_csv):
-    exp_id, session_id = await _create_experiment(client, sample_csv)
+async def test_session_shows_in_experiment(client, sample_csv, default_project_id):
+    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     # Create a second session
     resp = await client.post(f"/api/experiments/{exp_id}/sessions")

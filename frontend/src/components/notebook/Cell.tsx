@@ -42,9 +42,7 @@ export default function Cell({
       )}
       <div className="absolute -top-3 right-2 z-10 hidden items-center gap-1 rounded border border-neutral-800 bg-neutral-950 px-1 py-0.5 text-[10px] text-neutral-400 shadow group-hover:flex">
         <button
-          onClick={() =>
-            onConvertTo(cell.cell_type === 'code' ? 'markdown' : 'code')
-          }
+          onClick={() => onConvertTo(cell.cell_type === 'code' ? 'markdown' : 'code')}
           className="rounded px-1.5 py-0.5 hover:bg-neutral-800"
           title="Toggle cell type"
         >

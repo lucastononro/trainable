@@ -6,7 +6,7 @@ import logging
 import re
 
 from services.sandbox import run_code
-from services.volume import get_volume, reload_volume, write_to_volume
+from services.volume import write_to_volume
 
 logger = logging.getLogger(__name__)
 

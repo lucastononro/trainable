@@ -8,9 +8,9 @@ from tests.conftest import MockVolume
 
 
 @pytest.mark.asyncio
-async def test_preview_prep_data(client, sample_csv, mock_volume_with_prep):
+async def test_preview_prep_data(client, sample_csv, mock_volume_with_prep, default_project_id):
     # Create experiment to have a session
-    exp_id, session_id = await _create_experiment(client, sample_csv)
+    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     with (
         patch("routers.data_explorer.reload_volume"),
@@ -156,8 +156,8 @@ async def test_query_no_data(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_get_prep_metadata_not_found(client, sample_csv):
-    exp_id, session_id = await _create_experiment(client, sample_csv)
+async def test_get_prep_metadata_not_found(client, sample_csv, default_project_id):
+    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     resp = await client.get(f"/api/sessions/{session_id}/prep/metadata")
     assert resp.status_code == 404
@@ -165,9 +165,9 @@ async def test_get_prep_metadata_not_found(client, sample_csv):
 
 @pytest.mark.asyncio
 async def test_get_prep_metadata_after_extraction(
-    client, sample_csv, sample_parquet_splits, sample_metadata_json
+    client, sample_csv, sample_parquet_splits, sample_metadata_json, default_project_id
 ):
-    exp_id, session_id = await _create_experiment(client, sample_csv)
+    exp_id, session_id = await _create_experiment(client, sample_csv, default_project_id)
 
     # Build a mock volume with the actual session/experiment IDs
     vol = MockVolume(
@@ -210,11 +210,16 @@ async def test_get_prep_metadata_after_extraction(
 # ---------------------------------------------------------------------------
 
 
-async def _create_experiment(client, sample_csv):
+async def _create_experiment(client, sample_csv, project_id):
     with open(sample_csv, "rb") as f:
         resp = await client.post(
             "/api/experiments",
-            data={"name": "Test", "description": "", "instructions": ""},
+            data={
+                "project_id": project_id,
+                "name": "Test",
+                "description": "",
+                "instructions": "",
+            },
             files={"files": ("data.csv", f, "text/csv")},
         )
     body = resp.json()

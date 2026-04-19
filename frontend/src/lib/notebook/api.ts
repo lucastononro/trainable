@@ -16,9 +16,7 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
 
 export const notebookApi = {
   list: (sessionId: string) =>
-    fetchJSON<{ notebooks: NotebookListItem[] }>(
-      `/sessions/${sessionId}/notebooks`,
-    ),
+    fetchJSON<{ notebooks: NotebookListItem[] }>(`/sessions/${sessionId}/notebooks`),
 
   open: (sessionId: string, name: string) =>
     fetchJSON<Notebook>(`/sessions/${sessionId}/notebooks/${name}/open`, {
@@ -34,16 +32,11 @@ export const notebookApi = {
       body: JSON.stringify(nb),
     }),
 
-  executeCell: (
-    sessionId: string,
-    name: string,
-    cellId: string,
-    code: string,
-  ) =>
-    fetchJSON<{ ok: boolean }>(
-      `/sessions/${sessionId}/notebooks/${name}/cells/${cellId}/execute`,
-      { method: 'POST', body: JSON.stringify({ code }) },
-    ),
+  executeCell: (sessionId: string, name: string, cellId: string, code: string) =>
+    fetchJSON<{ ok: boolean }>(`/sessions/${sessionId}/notebooks/${name}/cells/${cellId}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ code }),
+    }),
 
   startKernel: (sessionId: string) =>
     fetchJSON<{ ok: boolean }>(`/sessions/${sessionId}/notebook/start`, {
@@ -60,14 +53,12 @@ export const notebookApi = {
       method: 'POST',
     }),
 
-  status: (sessionId: string) =>
-    fetchJSON<KernelStatus>(`/sessions/${sessionId}/notebook/status`),
+  status: (sessionId: string) => fetchJSON<KernelStatus>(`/sessions/${sessionId}/notebook/status`),
 
   downloadUrl: (sessionId: string, name: string) =>
     `${API_BASE}/sessions/${sessionId}/notebooks/${name}/download`,
 
   // File served as raw bytes (images, etc.) — used by markdown cells to
   // render `![](figures/x.png)` references inside the session workspace.
-  rawFileUrl: (path: string) =>
-    `${API_BASE}/files/raw?path=${encodeURIComponent(path)}`,
+  rawFileUrl: (path: string) => `${API_BASE}/files/raw?path=${encodeURIComponent(path)}`,
 };

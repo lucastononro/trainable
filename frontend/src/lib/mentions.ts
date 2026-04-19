@@ -45,9 +45,7 @@ export function wireToDraft(content: string, mentions: Mention[] | undefined): D
 }
 
 export function draftToPlainText(draft: Draft): string {
-  return draft
-    .map((t) => (t.kind === 'text' ? t.value : `@${t.mention.label}`))
-    .join('');
+  return draft.map((t) => (t.kind === 'text' ? t.value : `@${t.mention.label}`)).join('');
 }
 
 export function isDraftEmpty(draft: Draft): boolean {

@@ -293,7 +293,6 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
 
     # 2. Check report exists — Artifact DB first, then scan for a top-level *.md.
     report_raw = None
-    report_path_used: str | None = None
     try:
         async with async_session() as db:
             q = (
@@ -306,7 +305,6 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
             )
             art = (await db.execute(q)).scalars().first()
             if art:
-                report_path_used = art.path
                 report_raw = _read_volume_file_safe(art.path)
     except Exception:
         pass
@@ -317,7 +315,6 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
                 if entry.type.name != "FILE":
                     continue
                 if entry.path.endswith(".md"):
-                    report_path_used = entry.path
                     report_raw = _read_volume_file_safe(entry.path)
                     if report_raw:
                         break

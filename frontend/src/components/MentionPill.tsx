@@ -17,10 +17,7 @@ export default function MentionPill({ mention, onRemove, contentEditable, title 
     : 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30';
   const Icon = isSession ? MessageSquare : FileText;
   const tooltip =
-    title ??
-    (isSession
-      ? `session · ${mention.ref}`
-      : mention.sandbox_path || mention.ref);
+    title ?? (isSession ? `session · ${mention.ref}` : mention.sandbox_path || mention.ref);
 
   return (
     <span

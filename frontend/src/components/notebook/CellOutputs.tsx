@@ -28,20 +28,15 @@ export default function CellOutputs({ outputs }: Props) {
 
 function OutputBlock({ output }: { output: CellOutput }) {
   if (output.output_type === 'stream') {
-    const cls =
-      output.name === 'stderr' ? 'text-rose-400' : 'text-neutral-200';
+    const cls = output.name === 'stderr' ? 'text-rose-400' : 'text-neutral-200';
     return (
-      <pre
-        className={`whitespace-pre-wrap break-words px-4 py-2 font-mono text-xs ${cls}`}
-      >
+      <pre className={`whitespace-pre-wrap break-words px-4 py-2 font-mono text-xs ${cls}`}>
         {joinText(output.text)}
       </pre>
     );
   }
   if (output.output_type === 'error') {
-    const tb = output.traceback
-      .map(stripAnsi)
-      .join('\n');
+    const tb = output.traceback.map(stripAnsi).join('\n');
     return (
       <pre className="whitespace-pre-wrap break-words px-4 py-2 font-mono text-xs text-rose-400">
         {tb || `${output.ename}: ${output.evalue}`}

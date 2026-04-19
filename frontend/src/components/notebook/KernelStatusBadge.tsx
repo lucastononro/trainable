@@ -23,12 +23,7 @@ const DOT_CLS: Record<KernelState, string> = {
   dead: 'bg-neutral-500',
 };
 
-export default function KernelStatusBadge({
-  state,
-  onStart,
-  onInterrupt,
-  onShutdown,
-}: Props) {
+export default function KernelStatusBadge({ state, onStart, onInterrupt, onShutdown }: Props) {
   return (
     <div className="flex items-center gap-2 text-xs text-neutral-300">
       <span className={`inline-block h-2 w-2 rounded-full ${DOT_CLS[state]}`} />

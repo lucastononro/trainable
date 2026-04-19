@@ -50,14 +50,19 @@ async def test_abort_session_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_abort_session_not_running(client, sample_csv):
+async def test_abort_session_not_running(client, sample_csv, default_project_id):
     """Abort when no agent is running returns not_running."""
 
     async def _create_experiment(c, csv):
         with open(csv, "rb") as f:
             resp = await c.post(
                 "/api/experiments",
-                data={"name": "Test", "description": "", "instructions": ""},
+                data={
+                    "project_id": default_project_id,
+                    "name": "Test",
+                    "description": "",
+                    "instructions": "",
+                },
                 files={"files": ("data.csv", f, "text/csv")},
             )
         return resp.json()["id"], resp.json()["session_id"]
@@ -88,14 +93,19 @@ async def test_send_message_session_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_get_metrics_with_stage_filter(client, sample_csv):
+async def test_get_metrics_with_stage_filter(client, sample_csv, default_project_id):
     """Metrics endpoint still supports stage and name query params."""
 
     async def _create(c, csv):
         with open(csv, "rb") as f:
             resp = await c.post(
                 "/api/experiments",
-                data={"name": "Test", "description": "", "instructions": ""},
+                data={
+                    "project_id": default_project_id,
+                    "name": "Test",
+                    "description": "",
+                    "instructions": "",
+                },
                 files={"files": ("data.csv", f, "text/csv")},
             )
         return resp.json()["session_id"]

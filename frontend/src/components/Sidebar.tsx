@@ -42,30 +42,18 @@ function statusDot(state: string | null): string {
 function StatusIcon({ state }: { state: string | null }) {
   if (state && state.includes('running')) {
     return (
-      <Loader2
-        className="w-3 h-3 shrink-0 text-amber-400 animate-spin"
-        aria-label="running"
-      />
+      <Loader2 className="w-3 h-3 shrink-0 text-amber-400 animate-spin" aria-label="running" />
     );
   }
   if (state === 'failed') {
-    return (
-      <AlertCircle
-        className="w-3 h-3 shrink-0 text-red-400"
-        aria-label="failed"
-      />
-    );
+    return <AlertCircle className="w-3 h-3 shrink-0 text-red-400" aria-label="failed" />;
   }
   if (state && (state.includes('done') || state === 'train_done')) {
-    return (
-      <Check className="w-3 h-3 shrink-0 text-green-400" aria-label="done" />
-    );
+    return <Check className="w-3 h-3 shrink-0 text-green-400" aria-label="done" />;
   }
   // Idle / unknown — fall back to the original dot so brand-new chats don't
   // shout "completed" before they've run.
-  return (
-    <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(state)}`} />
-  );
+  return <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${statusDot(state)}`} />;
 }
 
 // -----------------------------------------------------------------------------
@@ -360,9 +348,7 @@ export default function Sidebar() {
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set());
   const [dropTargetProjectId, setDropTargetProjectId] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<
-    | { kind: 'project'; id: string }
-    | { kind: 'experiment'; id: string; name: string }
-    | null
+    { kind: 'project'; id: string } | { kind: 'experiment'; id: string; name: string } | null
   >(null);
 
   // Expand the active project whenever it changes.
@@ -447,13 +433,10 @@ export default function Sidebar() {
     [refreshProjects],
   );
 
-  const handleDeleteProject = useCallback(
-    (projectId: string, e: React.MouseEvent) => {
-      e.stopPropagation();
-      setConfirmTarget({ kind: 'project', id: projectId });
-    },
-    [],
-  );
+  const handleDeleteProject = useCallback((projectId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setConfirmTarget({ kind: 'project', id: projectId });
+  }, []);
 
   const confirmDeleteProject = useCallback(
     async (projectId: string) => {
@@ -565,7 +548,11 @@ export default function Sidebar() {
               className="p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors text-gray-400 hover:text-white"
               title="New project"
             >
-              {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderPlus className="w-4 h-4" />}
+              {creating ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <FolderPlus className="w-4 h-4" />
+              )}
             </button>
             <button
               onClick={() => setSidebarOpen(false)}
@@ -593,7 +580,11 @@ export default function Sidebar() {
               className="p-1.5 rounded-lg hover:bg-white/[0.06] transition-colors text-gray-400 hover:text-white"
               title="New project"
             >
-              {creating ? <Loader2 className="w-4 h-4 animate-spin" /> : <FolderPlus className="w-4 h-4" />}
+              {creating ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <FolderPlus className="w-4 h-4" />
+              )}
             </button>
           </div>
         )}
@@ -607,9 +598,7 @@ export default function Sidebar() {
               <div className="px-3 py-8 text-center">
                 <MessageSquare className="w-8 h-8 text-gray-700 mx-auto mb-2" />
                 <p className="text-xs text-gray-600">No projects yet</p>
-                <p className="text-[10px] text-gray-700 mt-1">
-                  Click the folder button to start
-                </p>
+                <p className="text-[10px] text-gray-700 mt-1">Click the folder button to start</p>
               </div>
             )}
             {projects.map((project) => {

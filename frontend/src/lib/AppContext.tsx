@@ -65,20 +65,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setHydrated(true);
   }, []);
 
-  const setAgentModel = useCallback(
-    (agentType: string, modelId: string | null) => {
-      setAgentModelsState((prev) => {
-        const next = { ...prev };
-        if (modelId) {
-          next[agentType] = modelId;
-        } else {
-          delete next[agentType];
-        }
-        return next;
-      });
-    },
-    [],
-  );
+  const setAgentModel = useCallback((agentType: string, modelId: string | null) => {
+    setAgentModelsState((prev) => {
+      const next = { ...prev };
+      if (modelId) {
+        next[agentType] = modelId;
+      } else {
+        delete next[agentType];
+      }
+      return next;
+    });
+  }, []);
 
   // Persist agent model overrides to localStorage (after hydration)
   useEffect(() => {
@@ -118,7 +115,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return null;
       });
     })();
-    api.listModels().then(setModels).catch(() => {});
+    api
+      .listModels()
+      .then(setModels)
+      .catch(() => {});
   }, [refreshProjects, refreshExperiments]);
 
   useEffect(() => {
