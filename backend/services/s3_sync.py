@@ -10,21 +10,23 @@ logger = logging.getLogger(__name__)
 
 
 async def sync_stage_to_s3(session_id: str, experiment_id: str, stage: str) -> dict:
-    """Sync all files from a stage workspace on Modal Volume to S3.
+    """Sync all files from a session workspace on Modal Volume to S3.
 
-    Uploads /sessions/{session_id}/{stage}/ to
-    s3://datasets/datasets/{experiment_id}/processed/{session_id}/{stage}/
+    Uploads the entire /sessions/{session_id}/ workspace to
+    s3://datasets/datasets/{experiment_id}/processed/{session_id}/
 
-    Returns dict with sync results.
+    `stage` is accepted for compatibility and recorded in the result, but
+    no longer partitions the path — sessions are now flat, free-form
+    workspaces shared across agents.
     """
 
     vol = get_volume()
     vol.reload()
     s3 = get_s3_client()
     bucket = "datasets"
-    s3_prefix = f"datasets/{experiment_id}/processed/{session_id}/{stage}"
+    s3_prefix = f"datasets/{experiment_id}/processed/{session_id}"
 
-    workspace = f"/sessions/{session_id}/{stage}"
+    workspace = f"/sessions/{session_id}"
     synced_files = []
 
     try:

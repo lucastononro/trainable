@@ -1,10 +1,33 @@
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  created_at: string;
+  updated_at: string;
+  experiment_count: number;
+  dataset_count: number;
+  model_count: number;
+}
+
+export interface ProjectDetail extends Project {
+  experiments: Experiment[];
+}
+
+export interface CreateProjectResponse {
+  project: Project;
+  experiment: Experiment;
+  session_id: string;
+}
+
 export interface Experiment {
   id: string;
+  project_id: string;
   name: string;
   description: string;
   dataset_ref: string;
   instructions: string;
   created_at: string;
+  updated_at: string;
   latest_session_id: string | null;
   latest_state: string | null;
 }
@@ -13,8 +36,19 @@ export interface Session {
   id: string;
   experiment_id: string;
   state: string;
+  model?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface ModelInfo {
+  id: string;
+  name: string;
+  tier: 'premium' | 'standard' | 'fast';
+  context: string;
+  input_cost: number;
+  output_cost: number;
+  description: string;
 }
 
 export interface Message {
@@ -56,6 +90,17 @@ export interface ChartConfig {
 
 export type Stage = 'eda' | 'prep' | 'train';
 
+export type MentionKind = 'file' | 'session';
+export interface Mention {
+  kind: MentionKind;
+  ref: string;
+  label: string;
+  sandbox_path?: string;
+  experiment_id?: string;
+}
+export type DraftToken = { kind: 'text'; value: string } | { kind: 'mention'; mention: Mention };
+export type Draft = DraftToken[];
+
 export interface SSEEvent {
   type: string;
   data: Record<string, unknown>;
@@ -70,6 +115,7 @@ export interface SessionDetail extends Session {
   messages: Message[];
   artifacts: Artifact[];
   processed_meta: Record<string, unknown> | null;
+  is_running?: boolean;
 }
 
 export interface FileTreeNode {
@@ -83,10 +129,6 @@ export interface FileTreeNode {
 export interface CreateExperimentResponse extends Experiment {
   session_id: string;
   uploaded_files?: string[];
-}
-export interface StageStartResponse {
-  status: string;
-  state: string;
 }
 export interface DeleteResponse {
   status: string;

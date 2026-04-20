@@ -1,0 +1,30 @@
+name: request_clarification
+description: |
+  Ask your parent agent a clarifying question and pause until you get an
+  answer. Use this whenever your task is ambiguous, you'd otherwise be making
+  an assumption that could be wrong, or context from your parent is missing
+  details you genuinely need. Do NOT proceed on guesses — ask.
+
+  Your parent will be invoked briefly to answer. The parent may either reply
+  directly or escalate the question to the human user. The tool returns
+  `{ answer, answered_by, question_id }` where `answered_by` is one of
+  `"parent"`, `"user"`, `"timeout"`, or `"session_ended"`.
+
+  Keep `question` short and specific. Use `why_needed` to explain what you'd
+  do differently depending on the answer.
+
+input_schema:
+  type: object
+  properties:
+    question:
+      type: string
+      description: The clarifying question to ask the parent agent
+    why_needed:
+      type: string
+      description: Brief explanation of what you'd do differently depending on the answer
+    urgency:
+      type: string
+      enum: ["low", "normal", "high"]
+      description: Hint to the UI about how prominently to surface this if escalated
+  required:
+    - question

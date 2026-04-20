@@ -24,6 +24,7 @@ if "claude_agent_sdk" not in sys.modules:
     _mock_sdk.AssistantMessage = type("AssistantMessage", (), {})
     _mock_sdk.ResultMessage = type("ResultMessage", (), {})
     _mock_sdk.SystemMessage = type("SystemMessage", (), {})
+    _mock_sdk.UserMessage = type("UserMessage", (), {})
     sys.modules["claude_agent_sdk"] = _mock_sdk
 
 # Mock mcp package if it's not installed
@@ -86,6 +87,19 @@ async def client():
         mock_s3_exp.return_value = mock_client
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             yield ac
+
+
+@pytest_asyncio.fixture
+async def default_project_id(client):
+    """Create a project and return its id. /api/experiments now requires
+    project_id as a form field, so every experiment-creating test needs a
+    project first."""
+    resp = await client.post(
+        "/api/projects",
+        json={"name": "Test Project", "description": "for tests"},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["project"]["id"]
 
 
 @pytest.fixture
@@ -211,16 +225,15 @@ class MockVolume:
 
 @pytest.fixture
 def mock_volume_with_prep(sample_parquet_splits, sample_metadata_json):
-    """MockVolume pre-loaded with prep stage outputs for session 'test-session'."""
+    """MockVolume pre-loaded with data-prep outputs in the flat session layout
+    used by the multi-agent workspace (no /prep/ subfolder)."""
     files = {
-        "/sessions/test-session/prep/data/train.parquet": sample_parquet_splits[
-            "train"
-        ],
-        "/sessions/test-session/prep/data/val.parquet": sample_parquet_splits["val"],
-        "/sessions/test-session/prep/data/test.parquet": sample_parquet_splits["test"],
-        "/sessions/test-session/prep/data/metadata.json": sample_metadata_json,
-        "/sessions/test-session/prep/report.md": b"# Prep Report\nAll good.",
-        "/sessions/test-session/prep/scripts/step_01_clean.py": b"import pandas as pd\n",
+        "/sessions/test-session/data/train.parquet": sample_parquet_splits["train"],
+        "/sessions/test-session/data/val.parquet": sample_parquet_splits["val"],
+        "/sessions/test-session/data/test.parquet": sample_parquet_splits["test"],
+        "/sessions/test-session/data/metadata.json": sample_metadata_json,
+        "/sessions/test-session/report.md": b"# Prep Report\nAll good.",
+        "/sessions/test-session/scripts/step_01_clean.py": b"import pandas as pd\n",
         "/datasets/test-experiment/iris.csv": b"a,b,target\n1,2,0\n",
     }
     return MockVolume(files)
@@ -228,7 +241,7 @@ def mock_volume_with_prep(sample_parquet_splits, sample_metadata_json):
 
 @pytest.fixture
 def mock_volume_with_train(sample_parquet_splits):
-    """MockVolume pre-loaded with train stage outputs."""
+    """MockVolume pre-loaded with trainer outputs in the flat session layout."""
     train_meta = json.dumps(
         {
             "best_model": "XGBClassifier",
@@ -238,9 +251,9 @@ def mock_volume_with_train(sample_parquet_splits):
         }
     ).encode("utf-8")
     files = {
-        "/sessions/test-session/train/models/model.pkl": b"fake-model-bytes",
-        "/sessions/test-session/train/report.md": b"# Train Report\nBest model: XGB.",
-        "/sessions/test-session/train/data/metadata.json": train_meta,
-        "/sessions/test-session/train/figures/confusion_matrix.png": b"fake-png",
+        "/sessions/test-session/models/model.pkl": b"fake-model-bytes",
+        "/sessions/test-session/report.md": b"# Train Report\nBest model: XGB.",
+        "/sessions/test-session/data/metadata.json": train_meta,
+        "/sessions/test-session/figures/confusion_matrix.png": b"fake-png",
     }
     return MockVolume(files)

@@ -45,6 +45,7 @@ services:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
+      WATCHFILES_FORCE_POLLING: "true"
     volumes:
       - ./backend:/app
       - ~/.modal.toml:/home/trainable/.modal.toml:ro
@@ -64,9 +65,15 @@ services:
       - "3000:3000"
     environment:
       - BACKEND_URL=http://backend:8000
+      - WATCHPACK_POLLING=true
+      - CHOKIDAR_USEPOLLING=true
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/public:/app/public
+      - ./frontend/next.config.js:/app/next.config.js
+      - ./frontend/tailwind.config.ts:/app/tailwind.config.ts
+      - ./frontend/postcss.config.js:/app/postcss.config.js
+      - ./frontend/tsconfig.json:/app/tsconfig.json
     command: ["npm", "run", "dev"]
     depends_on:
       - backend

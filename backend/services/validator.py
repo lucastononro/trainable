@@ -1,7 +1,10 @@
 """Automated post-agent validation for prep and train outputs.
 
 Runs independently of the agent — reads output files directly from Modal Volume
-and checks for common ML quality issues.
+and checks for common ML quality issues. File discovery uses the Artifact DB
+table first (populated by publish_artifacts) and falls back to recursively
+scanning /sessions/{session_id} — agents are free to organize their workspace
+however they like.
 """
 
 import io
@@ -10,8 +13,11 @@ import logging
 
 import pandas as pd
 import pyarrow.parquet as pq
+from sqlalchemy import select
 
-from services.volume import read_volume_file, reload_volume
+from db import async_session
+from models import Artifact
+from services.volume import get_volume, read_volume_file, reload_volume
 
 logger = logging.getLogger(__name__)
 
@@ -24,23 +30,69 @@ def _read_volume_file_safe(path: str):
         return None
 
 
+async def _discover_session_files(
+    session_id: str, filenames: set[str]
+) -> dict[str, str]:
+    """Find absolute paths for given basenames inside a session workspace.
+
+    Checks the Artifact DB first (cheap, authoritative for registered
+    outputs). Falls back to a recursive volume scan for anything not yet
+    indexed. Returns a mapping of basename -> absolute path. Missing names
+    are simply absent from the result.
+    """
+    found: dict[str, str] = {}
+
+    try:
+        async with async_session() as db:
+            rows = await db.execute(
+                select(Artifact.name, Artifact.path).where(
+                    Artifact.session_id == session_id,
+                    Artifact.name.in_(list(filenames)),
+                )
+            )
+            for name, path in rows.all():
+                if name not in found:
+                    found[name] = path
+    except Exception as e:
+        logger.debug("Artifact lookup failed: %s", e)
+
+    missing = filenames - set(found.keys())
+    if missing:
+        try:
+            reload_volume()
+            vol = get_volume()
+            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+                if entry.type.name != "FILE":
+                    continue
+                base = entry.path.rsplit("/", 1)[-1]
+                if base in missing and base not in found:
+                    found[base] = entry.path
+        except Exception as e:
+            logger.debug("Scan discovery for %s failed: %s", session_id, e)
+
+    return found
+
+
 async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     """Validate prep stage outputs. Returns dict with errors, warnings, passed checks."""
     reload_volume()
 
-    data_dir = f"/sessions/{session_id}/prep/data"
     results = {"errors": [], "warnings": [], "passed": [], "stage": "prep"}
+
+    wanted = {"train.parquet", "val.parquet", "test.parquet", "metadata.json"}
+    discovered = await _discover_session_files(session_id, wanted)
 
     # 1. Check parquet files exist and are readable
     splits = {}
-    for name in ["train", "val", "test"]:
-        path = f"{data_dir}/{name}.parquet"
-        raw = _read_volume_file_safe(path)
+    for split_name in ("train", "val", "test"):
+        key = f"{split_name}.parquet"
+        path = discovered.get(key)
+        raw = _read_volume_file_safe(path) if path else None
         if raw is None:
-            results["errors"].append(f"{name}.parquet missing or unreadable")
+            results["errors"].append(f"{key} missing or unreadable")
         else:
-            splits[name] = raw
-            results["passed"].append(f"{name}.parquet exists ({len(raw)} bytes)")
+            splits[split_name] = raw
+            results["passed"].append(f"{key} exists ({len(raw)} bytes)")
 
     if not splits:
         results["errors"].append("No parquet splits found — cannot continue validation")
@@ -159,7 +211,8 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
             pass
 
     # 8. Check metadata.json exists
-    metadata_raw = _read_volume_file_safe(f"{data_dir}/metadata.json")
+    metadata_path = discovered.get("metadata.json")
+    metadata_raw = _read_volume_file_safe(metadata_path) if metadata_path else None
     if metadata_raw:
         try:
             meta = json.loads(metadata_raw)
@@ -196,31 +249,86 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
     """Validate train stage outputs."""
     reload_volume()
 
-    workspace = f"/sessions/{session_id}/train"
     results = {"errors": [], "warnings": [], "passed": [], "stage": "train"}
 
-    # 1. Check model file exists
-    model_found = False
-    for ext in [".pkl", ".joblib", ".pt", ".h5", ".onnx"]:
-        model_raw = _read_volume_file_safe(f"{workspace}/models/model{ext}")
-        if model_raw:
-            model_found = True
-            results["passed"].append(
-                f"Model file found: model{ext} ({len(model_raw)} bytes)"
+    # 1. Check model file exists — look up the most recent "model" artifact.
+    #    Falls back to a workspace scan for any model extension.
+    model_path: str | None = None
+    try:
+        async with async_session() as db:
+            q = (
+                select(Artifact)
+                .where(
+                    Artifact.session_id == session_id,
+                    Artifact.artifact_type == "model",
+                )
+                .order_by(Artifact.created_at.desc())
             )
-            break
-    if not model_found:
-        results["errors"].append("No model file found in models/ directory")
+            art = (await db.execute(q)).scalars().first()
+            if art:
+                model_path = art.path
+    except Exception as e:
+        logger.debug("Artifact model lookup failed: %s", e)
 
-    # 2. Check report exists
-    report_raw = _read_volume_file_safe(f"{workspace}/report.md")
+    if not model_path:
+        try:
+            vol = get_volume()
+            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+                if entry.type.name != "FILE":
+                    continue
+                lower = entry.path.lower()
+                if lower.endswith((".pkl", ".joblib", ".pt", ".h5", ".onnx")):
+                    model_path = entry.path
+                    break
+        except Exception:
+            pass
+
+    model_raw = _read_volume_file_safe(model_path) if model_path else None
+    if model_raw:
+        results["passed"].append(
+            f"Model file found: {model_path} ({len(model_raw)} bytes)"
+        )
+    else:
+        results["errors"].append("No model file found in session workspace")
+
+    # 2. Check report exists — Artifact DB first, then scan for a top-level *.md.
+    report_raw = None
+    try:
+        async with async_session() as db:
+            q = (
+                select(Artifact)
+                .where(
+                    Artifact.session_id == session_id,
+                    Artifact.artifact_type == "report",
+                )
+                .order_by(Artifact.created_at.desc())
+            )
+            art = (await db.execute(q)).scalars().first()
+            if art:
+                report_raw = _read_volume_file_safe(art.path)
+    except Exception:
+        pass
+    if report_raw is None:
+        try:
+            vol = get_volume()
+            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+                if entry.type.name != "FILE":
+                    continue
+                if entry.path.endswith(".md"):
+                    report_raw = _read_volume_file_safe(entry.path)
+                    if report_raw:
+                        break
+        except Exception:
+            pass
     if report_raw:
         results["passed"].append(f"report.md exists ({len(report_raw)} bytes)")
     else:
         results["warnings"].append("report.md not found")
 
-    # 3. Check metadata.json
-    metadata_raw = _read_volume_file_safe(f"{workspace}/data/metadata.json")
+    # 3. Check metadata.json — discovery helper covers DB then scan.
+    discovered = await _discover_session_files(session_id, {"metadata.json"})
+    metadata_path = discovered.get("metadata.json")
+    metadata_raw = _read_volume_file_safe(metadata_path) if metadata_path else None
     if metadata_raw:
         try:
             meta = json.loads(metadata_raw)

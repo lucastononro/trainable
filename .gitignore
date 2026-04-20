@@ -25,6 +25,9 @@ Thumbs.db
 .idea/
 *.swp
 
+# Claude Code local state
+.claude/
+
 # Modal
 .modal/
 

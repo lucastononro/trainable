@@ -18,30 +18,48 @@ logger = logging.getLogger(__name__)
 
 
 async def save_and_publish(
-    session_id: str, event_type: str, data: dict, role: str | None = None
+    session_id: str,
+    event_type: str,
+    data: dict,
+    role: str | None = None,
+    publish: bool = True,
+    agent_meta: dict | None = None,
 ):
-    """Persist a chat event to the DB and publish via SSE."""
+    """Persist a chat event to the DB and optionally publish via SSE.
 
-    # Publish to SSE immediately
-    await broadcaster.publish(session_id, {"type": event_type, "data": data})
+    agent_meta carries per-agent identity (agent_id, agent_type, parent_agent_id, depth)
+    and is merged into the row's metadata so downstream tools can filter by agent.
+    """
+
+    # Publish to SSE immediately. Mirror agent_meta into the SSE payload so the
+    # frontend (and any other listener) can attribute events without re-querying.
+    if publish:
+        sse_data = dict(data)
+        if agent_meta:
+            sse_data.setdefault("agent_id", agent_meta.get("agent_id"))
+            sse_data.setdefault("agent_type", agent_meta.get("agent_type"))
+            sse_data.setdefault("parent_agent_id", agent_meta.get("parent_agent_id"))
+            sse_data.setdefault("depth", agent_meta.get("depth"))
+        await broadcaster.publish(session_id, {"type": event_type, "data": sse_data})
 
     # Persist to DB
     if role:
         try:
             async with async_session() as db:
+                metadata = {
+                    "event_type": event_type,
+                    **{k: v for k, v in data.items() if k not in ("text", "content")},
+                }
+                if agent_meta:
+                    for k, v in agent_meta.items():
+                        if v is not None:
+                            metadata.setdefault(k, v)
                 db.add(
                     Message(
                         session_id=session_id,
                         role=role,
                         content=data.get("text", data.get("content", "")),
-                        metadata_={
-                            "event_type": event_type,
-                            **{
-                                k: v
-                                for k, v in data.items()
-                                if k not in ("text", "content")
-                            },
-                        },
+                        metadata_=metadata,
                     )
                 )
                 await db.commit()
@@ -50,25 +68,57 @@ async def save_and_publish(
 
 
 async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
-    """After a stage completes, read report + list files from Modal Volume, publish via SSE, persist to DB."""
+    """After an agent run completes, scan the session workspace for new files,
+    publish via SSE, and persist as Artifact records.
+
+    The `stage` argument here is the producer agent_type (e.g. "eda", "trainer").
+    It's recorded on each Artifact row so the UI can attribute outputs to a
+    specific agent, but it no longer implies a folder name — the agent is
+    free to organize its outputs anywhere under /sessions/{session_id}/.
+    """
 
     vol = get_volume()
-    workspace = f"/sessions/{session_id}/{stage}"
+    workspace = f"/sessions/{session_id}"
 
-    # Try to read report.md
+    # Report discovery: prefer a top-level report.md (the soft convention);
+    # otherwise the most recently modified .md file anywhere in the workspace.
+    report_path: str | None = None
+    report_mtime = -1.0
     try:
-        report_data = read_volume_file(f"{workspace}/report.md")
-        report_text = report_data.decode("utf-8", errors="replace")
-        if report_text.strip():
-            await save_and_publish(
-                session_id,
-                "report_ready",
-                {"content": report_text, "stage": stage},
-                role="assistant",
+        for entry in vol.listdir(workspace, recursive=True):
+            if entry.type.name != "FILE" or not entry.path.endswith(".md"):
+                continue
+            rel = (
+                entry.path[len(workspace) + 1 :]
+                if entry.path.startswith(workspace + "/")
+                else entry.path
             )
-            logger.info("Published report (%d chars)", len(report_text))
+            if rel == "report.md":
+                report_path = entry.path
+                break
+            mtime = float(getattr(entry, "mtime", 0) or 0)
+            if mtime > report_mtime:
+                report_mtime = mtime
+                report_path = entry.path
     except Exception as e:
-        logger.debug("No report.md found: %s", e)
+        logger.debug("Workspace listdir failed while looking for report: %s", e)
+
+    if report_path:
+        try:
+            report_data = read_volume_file(report_path)
+            report_text = report_data.decode("utf-8", errors="replace")
+            if report_text.strip():
+                await save_and_publish(
+                    session_id,
+                    "report_ready",
+                    {"content": report_text, "stage": stage, "path": report_path},
+                    role="assistant",
+                )
+                logger.info(
+                    "Published report from %s (%d chars)", report_path, len(report_text)
+                )
+        except Exception as e:
+            logger.debug("Could not read report %s: %s", report_path, e)
 
     # List all generated files and persist as Artifact records
     try:
@@ -91,10 +141,19 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
             )
             logger.info("Published %d files", len(files))
 
-            # Persist artifacts to DB
+            # Persist artifacts to DB. Agents now share one workspace per
+            # session, so dedupe on (session_id, path) — earlier agents'
+            # files shouldn't be re-attributed to the current agent.
             try:
                 async with async_session() as db:
+                    existing = await db.execute(
+                        select(Artifact.path).where(Artifact.session_id == session_id)
+                    )
+                    existing_paths = {p for (p,) in existing.all()}
+                    new_count = 0
                     for f in files:
+                        if f["path"] in existing_paths:
+                            continue
                         name = f["path"].split("/")[-1]
                         if name.endswith(".json"):
                             artifact_type = "metadata"
@@ -119,8 +178,9 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
                                 path=f["path"],
                             )
                         )
+                        new_count += 1
                     await db.commit()
-                logger.info("Persisted %d artifacts to DB", len(files))
+                logger.info("Persisted %d new artifacts to DB", new_count)
             except Exception as e:
                 logger.error("Failed to persist artifacts: %s", e)
     except Exception as e:
@@ -133,11 +193,13 @@ async def post_stage_hook(session_id: str, experiment_id: str, stage: str):
     Failures here are non-blocking -- the stage is still marked as done.
     """
 
-    # 1. Validation
+    # 1. Validation. `stage` here is the agent_type that just finished —
+    # accept both the legacy short names ("prep"/"train") and the current
+    # multi-agent names ("data_prep"/"trainer").
     try:
-        if stage == "prep":
+        if stage in ("prep", "data_prep"):
             validation = await validate_prep_output(session_id, experiment_id)
-        elif stage == "train":
+        elif stage in ("train", "trainer"):
             validation = await validate_train_output(session_id, experiment_id)
         else:
             validation = None
@@ -158,8 +220,8 @@ async def post_stage_hook(session_id: str, experiment_id: str, stage: str):
     except Exception as e:
         logger.error("Post-hook validation failed: %s", e)
 
-    # 2. S3 sync (prep and train stages)
-    if stage in ("prep", "train"):
+    # 2. S3 sync (after prep and train agents finish)
+    if stage in ("prep", "data_prep", "train", "trainer"):
         try:
             sync_result = await sync_stage_to_s3(session_id, experiment_id, stage)
             await save_and_publish(
@@ -193,8 +255,8 @@ async def post_stage_hook(session_id: str, experiment_id: str, stage: str):
         except Exception as e:
             logger.error("Post-hook S3 sync failed: %s", e)
 
-    # 3. Metadata extraction (prep stage only)
-    if stage == "prep":
+    # 3. Metadata extraction (after data prep only)
+    if stage in ("prep", "data_prep"):
         try:
             await extract_and_store_metadata(session_id, experiment_id)
             await save_and_publish(

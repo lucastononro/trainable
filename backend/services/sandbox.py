@@ -22,11 +22,23 @@ _app = None
 _image = None
 
 
-def _get_app():
+async def get_app():
+    """Return the shared Modal App (lazy init, async).
+
+    Modal's sync `App.lookup` issues an `AsyncUsageWarning` when called from
+    an event-loop context (all our callers). Use the `.aio` blueprint to
+    stay on the async path.
+    """
     global _app
     if _app is None:
-        _app = modal.App.lookup(settings.modal_app_name, create_if_missing=True)
+        _app = await modal.App.lookup.aio(
+            settings.modal_app_name, create_if_missing=True
+        )
     return _app
+
+
+# Backwards-compatible alias — callers inside this module still use the underscore name.
+_get_app = get_app
 
 
 # SDK injected at the top of every sandbox execution.
@@ -49,7 +61,8 @@ del _m, types
 """
 
 
-def _get_image():
+def get_image():
+    """Return the shared Modal Image (lazy init). Reused by the notebook kernel."""
     global _image
     if _image is None:
         _image = (
@@ -71,6 +84,8 @@ def _get_image():
                 "pandera",
                 "shap",
                 "statsmodels",
+                "ipykernel",
+                "jupyter_client",
             )
             .pip_install(
                 "torch",
@@ -83,6 +98,9 @@ def _get_image():
             )
         )
     return _image
+
+
+_get_image = get_image
 
 
 async def run_code(
@@ -106,7 +124,7 @@ async def run_code(
         volumes={"/data": get_volume()},
         gpu=gpu,
         timeout=settings.sandbox_timeout,
-        app=_get_app(),
+        app=await _get_app(),
     )
 
     logger.info("Running code in sandbox for session %s", session_id)
@@ -127,34 +145,43 @@ async def run_code(
 
     stderr_task = asyncio.create_task(_drain_stderr())
 
-    async for chunk in sb.stdout:
-        stdout_parts.append(chunk)
-        await broadcaster.publish(
-            session_id,
-            {"type": "code_output", "data": {"stream": "stdout", "text": chunk}},
-        )
+    try:
+        async for chunk in sb.stdout:
+            stdout_parts.append(chunk)
+            await broadcaster.publish(
+                session_id,
+                {"type": "code_output", "data": {"stream": "stdout", "text": chunk}},
+            )
 
-        if stage:
-            line_buffer += chunk
-            lines = line_buffer.split("\n")
-            line_buffer = lines[-1]
-            for line in lines[:-1]:
-                parsed = parse_stdout_line(line)
-                if parsed:
-                    try:
-                        await _dispatch(parsed)
-                    except Exception as e:
-                        logger.warning("Metric/config publish error: %s", e)
+            if stage:
+                line_buffer += chunk
+                lines = line_buffer.split("\n")
+                line_buffer = lines[-1]
+                for line in lines[:-1]:
+                    parsed = parse_stdout_line(line)
+                    if parsed:
+                        try:
+                            await _dispatch(parsed)
+                        except Exception as e:
+                            logger.warning("Metric/config publish error: %s", e)
 
-    if stage and line_buffer.strip():
-        parsed = parse_stdout_line(line_buffer)
-        if parsed:
-            try:
-                await _dispatch(parsed)
-            except Exception as e:
-                logger.warning("Metric/config flush error: %s", e)
+        if stage and line_buffer.strip():
+            parsed = parse_stdout_line(line_buffer)
+            if parsed:
+                try:
+                    await _dispatch(parsed)
+                except Exception as e:
+                    logger.warning("Metric/config flush error: %s", e)
+    finally:
+        # Ensure the stderr drainer doesn't outlive the sandbox call.
+        if not stderr_task.done():
+            stderr_task.cancel()
+        try:
+            await stderr_task
+        except (asyncio.CancelledError, Exception) as e:
+            if not isinstance(e, asyncio.CancelledError):
+                logger.debug("stderr drainer exited with: %s", e)
 
-    await stderr_task
     await sb.wait.aio()
 
     result = {

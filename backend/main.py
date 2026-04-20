@@ -9,7 +9,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db import init_db
 from errors import generic_exception_handler
-from routers import data_explorer, experiments, files, s3_browser, sessions, stream
+from routers import (
+    data_explorer,
+    experiments,
+    files,
+    models,
+    notebook,
+    projects,
+    s3_browser,
+    sessions,
+    stream,
+)
+from services.kernel_manager import kernel_manager
 from services.s3_client import get_s3_client
 
 logging.basicConfig(
@@ -39,7 +50,11 @@ def _init_s3_buckets():
 async def lifespan(app: FastAPI):
     await init_db()
     _init_s3_buckets()
-    yield
+    kernel_manager.start_idle_reaper()
+    try:
+        yield
+    finally:
+        await kernel_manager.shutdown_all()
 
 
 app = FastAPI(title="Trainable v2", lifespan=lifespan)
@@ -53,12 +68,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(projects.router, prefix="/api")
 app.include_router(experiments.router, prefix="/api")
 app.include_router(sessions.router, prefix="/api")
 app.include_router(stream.router, prefix="/api")
 app.include_router(s3_browser.router, prefix="/api/s3")
 app.include_router(files.router, prefix="/api")
 app.include_router(data_explorer.router, prefix="/api")
+app.include_router(models.router, prefix="/api")
+app.include_router(notebook.router, prefix="/api")
 
 
 @app.get("/api/health")

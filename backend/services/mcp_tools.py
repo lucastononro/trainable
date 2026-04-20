@@ -32,21 +32,29 @@ def create_trainable_mcp_server(tool_handlers: dict):
     async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         handler = tool_handlers.get(name)
         if not handler:
-            return [TextContent(type="text", text=f"Unknown tool: {name}")]
+            return [TextContent(type="text", text=f"[ERROR] Unknown tool: {name}")]
 
         try:
             result = await handler["handler"](arguments)
         except Exception as e:
             logger.exception(f"Tool {name} error")
-            return [TextContent(type="text", text=f"Tool error: {e}")]
+            return [TextContent(type="text", text=f"[ERROR] Tool {name} raised: {e}")]
 
-        # Extract text from the result dict
+        # Extract text from the result dict.
         texts = []
         if isinstance(result, dict) and "content" in result:
             for item in result["content"]:
                 if isinstance(item, dict) and item.get("type") == "text":
                     texts.append(item.get("text", ""))
 
-        return [TextContent(type="text", text="\n".join(texts) or "(no output)")]
+        # Preserve the handler's is_error flag by prefixing the text. The MCP
+        # SDK on this version doesn't propagate isError through a bare
+        # list[TextContent] return, so we signal the error in-band so the LLM
+        # recognises the failure and adapts.
+        text = "\n".join(texts) or "(no output)"
+        if isinstance(result, dict) and result.get("is_error"):
+            text = f"[ERROR] {text}"
+
+        return [TextContent(type="text", text=text)]
 
     return {"type": "sdk", "name": "trainable", "instance": server}

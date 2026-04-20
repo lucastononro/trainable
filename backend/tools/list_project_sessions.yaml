@@ -1,0 +1,16 @@
+name: list_project_sessions
+description: |
+  List every chat (session) that exists in the current project, including the
+  session this agent is running in. Returns session_id, chat_name, state,
+  timestamps, and message count per session.
+
+  Use this to discover context from other chats in the same project — for
+  example, if the user asks "remind me what we decided in the last chat", or
+  when you want to avoid repeating analysis the user already did elsewhere.
+
+  Once you know the session_id of another chat, use `read_project_session` to
+  pull its messages.
+
+input_schema:
+  type: object
+  properties: {}

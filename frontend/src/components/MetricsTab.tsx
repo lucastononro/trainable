@@ -125,7 +125,7 @@ function compactFormat(v: number): string {
 function ChartTooltip({ active, payload, label }: any) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="bg-[#1c1c1c] border border-white/10 rounded-lg px-3 py-2.5 shadow-xl shadow-black/50 min-w-[180px]">
+    <div className="bg-black border border-white/10 rounded-lg px-3 py-2.5 shadow-xl shadow-black/50 min-w-[180px]">
       <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-2 font-medium">
         Step {label}
       </div>
@@ -300,19 +300,19 @@ export default function MetricsTab({ metricPoints, chartConfig, state }: Metrics
           <Activity className="w-7 h-7 text-gray-600" />
         </div>
         <p className="text-sm font-medium text-gray-400 mb-1">Metrics Dashboard</p>
-        <p className="text-xs text-gray-600 text-center max-w-[240px]">
-          {state.includes('train')
-            ? 'Training is running. Metrics will appear here as the model logs them.'
-            : 'Start the training stage to see live metrics streamed to this dashboard.'}
+        <p className="text-xs text-gray-600 text-center max-w-[260px]">
+          {state.includes('running')
+            ? 'An agent is running. Metrics will stream here as it logs them via trainable.log(...).'
+            : 'Metrics appear here when an agent calls trainable.log(step=..., metrics={...}) during training.'}
         </p>
       </div>
     );
   }
 
   return (
-    <div className="h-full overflow-y-auto bg-[#0a0a0a]">
+    <div className="h-full overflow-y-auto bg-black">
       {/* ── Top bar ── */}
-      <div className="sticky top-0 z-10 bg-[#0a0a0a]/90 backdrop-blur-sm border-b border-white/[0.06] px-4 py-2.5 flex items-center justify-between">
+      <div className="sticky top-0 z-10 bg-black/90 backdrop-blur-sm border-b border-white/[0.06] px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Activity className="w-4 h-4 text-emerald-400" />
           <span className="text-xs font-semibold text-gray-300">Metrics</span>

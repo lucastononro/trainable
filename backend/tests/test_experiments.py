@@ -11,11 +11,12 @@ async def test_list_experiments_empty(client):
 
 
 @pytest.mark.asyncio
-async def test_create_experiment_single_file(client, sample_csv):
+async def test_create_experiment_single_file(client, sample_csv, default_project_id):
     with open(sample_csv, "rb") as f:
         resp = await client.post(
             "/api/experiments",
             data={
+                "project_id": default_project_id,
                 "name": "Iris Test",
                 "description": "Test experiment",
                 "instructions": "Classify species",
@@ -33,7 +34,9 @@ async def test_create_experiment_single_file(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_create_experiment_multiple_files(client, sample_folder):
+async def test_create_experiment_multiple_files(
+    client, sample_folder, default_project_id
+):
     files = []
     for f_path in sorted(sample_folder.iterdir()):
         files.append(
@@ -43,6 +46,7 @@ async def test_create_experiment_multiple_files(client, sample_folder):
     resp = await client.post(
         "/api/experiments",
         data={
+            "project_id": default_project_id,
             "name": "Multi-file Test",
             "description": "Folder upload",
             "instructions": "",
@@ -61,10 +65,11 @@ async def test_create_experiment_multiple_files(client, sample_folder):
 
 
 @pytest.mark.asyncio
-async def test_create_experiment_from_s3(client):
+async def test_create_experiment_from_s3(client, default_project_id):
     resp = await client.post(
         "/api/experiments/from-s3",
         data={
+            "project_id": default_project_id,
             "name": "S3 Test",
             "description": "From S3 bucket",
             "instructions": "Analyze this",
@@ -79,11 +84,16 @@ async def test_create_experiment_from_s3(client):
 
 
 @pytest.mark.asyncio
-async def test_get_experiment(client, sample_csv):
+async def test_get_experiment(client, sample_csv, default_project_id):
     with open(sample_csv, "rb") as f:
         create_resp = await client.post(
             "/api/experiments",
-            data={"name": "Get Test", "description": "", "instructions": ""},
+            data={
+                "project_id": default_project_id,
+                "name": "Get Test",
+                "description": "",
+                "instructions": "",
+            },
             files={"files": ("data.csv", f, "text/csv")},
         )
     exp_id = create_resp.json()["id"]
@@ -103,11 +113,16 @@ async def test_get_experiment_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_delete_experiment(client, sample_csv):
+async def test_delete_experiment(client, sample_csv, default_project_id):
     with open(sample_csv, "rb") as f:
         create_resp = await client.post(
             "/api/experiments",
-            data={"name": "Delete Me", "description": "", "instructions": ""},
+            data={
+                "project_id": default_project_id,
+                "name": "Delete Me",
+                "description": "",
+                "instructions": "",
+            },
             files={"files": ("data.csv", f, "text/csv")},
         )
     exp_id = create_resp.json()["id"]
@@ -121,18 +136,26 @@ async def test_delete_experiment(client, sample_csv):
 
 
 @pytest.mark.asyncio
-async def test_list_experiments_after_create(client, sample_csv):
+async def test_list_experiments_after_create(client, sample_csv, default_project_id):
     for i in range(3):
         with open(sample_csv, "rb") as f:
             await client.post(
                 "/api/experiments",
-                data={"name": f"Exp {i}", "description": "", "instructions": ""},
+                data={
+                    "project_id": default_project_id,
+                    "name": f"Exp {i}",
+                    "description": "",
+                    "instructions": "",
+                },
                 files={"files": ("data.csv", f, "text/csv")},
             )
 
     resp = await client.get("/api/experiments")
     assert resp.status_code == 200
-    assert len(resp.json()) == 3
+    # Account for the placeholder "Untitled" experiment auto-created with
+    # the test project (see POST /api/projects) plus the 3 explicitly
+    # created here.
+    assert len(resp.json()) == 4
 
 
 @pytest.mark.asyncio
@@ -142,10 +165,11 @@ async def test_delete_experiment_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_create_experiment_from_s3_invalid_path(client):
+async def test_create_experiment_from_s3_invalid_path(client, default_project_id):
     resp = await client.post(
         "/api/experiments/from-s3",
         data={
+            "project_id": default_project_id,
             "name": "Bad S3",
             "description": "",
             "instructions": "",
@@ -156,11 +180,18 @@ async def test_create_experiment_from_s3_invalid_path(client):
 
 
 @pytest.mark.asyncio
-async def test_experiment_latest_session_tracking(client, sample_csv):
+async def test_experiment_latest_session_tracking(
+    client, sample_csv, default_project_id
+):
     with open(sample_csv, "rb") as f:
         create_resp = await client.post(
             "/api/experiments",
-            data={"name": "Track", "description": "", "instructions": ""},
+            data={
+                "project_id": default_project_id,
+                "name": "Track",
+                "description": "",
+                "instructions": "",
+            },
             files={"files": ("data.csv", f, "text/csv")},
         )
     exp_id = create_resp.json()["id"]
@@ -170,5 +201,7 @@ async def test_experiment_latest_session_tracking(client, sample_csv):
 
     resp = await client.get("/api/experiments")
     body = resp.json()
-    assert len(body) == 1
-    assert body[0]["latest_session_id"] is not None
+    # +1 for the Untitled placeholder auto-created with the project.
+    assert len(body) == 2
+    tracked = next(e for e in body if e["id"] == exp_id)
+    assert tracked["latest_session_id"] is not None

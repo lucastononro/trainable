@@ -12,6 +12,7 @@ from tests.conftest import MockVolume, _make_parquet_bytes
 async def test_validate_prep_output_all_good(mock_volume_with_prep):
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=mock_volume_with_prep),
         patch("services.volume.get_volume", return_value=mock_volume_with_prep),
     ):
         from services.validator import validate_prep_output
@@ -34,10 +35,10 @@ async def test_validate_prep_output_all_good(mock_volume_with_prep):
 async def test_validate_prep_output_missing_file():
     """Missing val.parquet should produce an error."""
     files = {
-        "/sessions/s1/prep/data/train.parquet": _make_parquet_bytes(
+        "/sessions/s1/data/train.parquet": _make_parquet_bytes(
             {"x": [1, 2], "y": [0, 1]}
         ),
-        "/sessions/s1/prep/data/test.parquet": _make_parquet_bytes(
+        "/sessions/s1/data/test.parquet": _make_parquet_bytes(
             {"x": [3, 4], "y": [1, 0]}
         ),
     }
@@ -45,6 +46,7 @@ async def test_validate_prep_output_missing_file():
 
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=vol),
         patch("services.volume.get_volume", return_value=vol),
     ):
         from services.validator import validate_prep_output
@@ -62,14 +64,15 @@ async def test_validate_prep_output_schema_mismatch():
     val = _make_parquet_bytes({"x": [3, 4], "z": [1, 0]})  # z instead of y
     test = _make_parquet_bytes({"x": [5, 6], "y": [0, 1]})
     files = {
-        "/sessions/s1/prep/data/train.parquet": train,
-        "/sessions/s1/prep/data/val.parquet": val,
-        "/sessions/s1/prep/data/test.parquet": test,
+        "/sessions/s1/data/train.parquet": train,
+        "/sessions/s1/data/val.parquet": val,
+        "/sessions/s1/data/test.parquet": test,
     }
     vol = MockVolume(files)
 
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=vol),
         patch("services.volume.get_volume", return_value=vol),
     ):
         from services.validator import validate_prep_output
@@ -103,14 +106,15 @@ async def test_validate_prep_output_with_nulls():
     test_bytes = _make_parquet_bytes({"x": [6.0, 7.0], "y": [0, 1]})
 
     files = {
-        "/sessions/s1/prep/data/train.parquet": train_bytes,
-        "/sessions/s1/prep/data/val.parquet": val_bytes,
-        "/sessions/s1/prep/data/test.parquet": test_bytes,
+        "/sessions/s1/data/train.parquet": train_bytes,
+        "/sessions/s1/data/val.parquet": val_bytes,
+        "/sessions/s1/data/test.parquet": test_bytes,
     }
     vol = MockVolume(files)
 
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=vol),
         patch("services.volume.get_volume", return_value=vol),
     ):
         from services.validator import validate_prep_output
@@ -135,15 +139,16 @@ async def test_validate_prep_output_metadata_target_missing():
     ).encode()
 
     files = {
-        "/sessions/s1/prep/data/train.parquet": train,
-        "/sessions/s1/prep/data/val.parquet": train,
-        "/sessions/s1/prep/data/test.parquet": train,
-        "/sessions/s1/prep/data/metadata.json": meta,
+        "/sessions/s1/data/train.parquet": train,
+        "/sessions/s1/data/val.parquet": train,
+        "/sessions/s1/data/test.parquet": train,
+        "/sessions/s1/data/metadata.json": meta,
     }
     vol = MockVolume(files)
 
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=vol),
         patch("services.volume.get_volume", return_value=vol),
     ):
         from services.validator import validate_prep_output
@@ -162,14 +167,15 @@ async def test_validate_prep_output_no_metadata_json():
     val = _make_parquet_bytes({"x": [5, 6], "y": [7, 8]})
     test = _make_parquet_bytes({"x": [9, 10], "y": [11, 12]})
     files = {
-        "/sessions/s1/prep/data/train.parquet": train,
-        "/sessions/s1/prep/data/val.parquet": val,
-        "/sessions/s1/prep/data/test.parquet": test,
+        "/sessions/s1/data/train.parquet": train,
+        "/sessions/s1/data/val.parquet": val,
+        "/sessions/s1/data/test.parquet": test,
     }
     vol = MockVolume(files)
 
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=vol),
         patch("services.volume.get_volume", return_value=vol),
     ):
         from services.validator import validate_prep_output
@@ -185,6 +191,7 @@ async def test_validate_prep_output_no_metadata_json():
 async def test_validate_train_output_all_good(mock_volume_with_train):
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=mock_volume_with_train),
         patch("services.volume.get_volume", return_value=mock_volume_with_train),
     ):
         from services.validator import validate_train_output
@@ -203,12 +210,13 @@ async def test_validate_train_output_all_good(mock_volume_with_train):
 async def test_validate_train_output_no_model():
     """Missing model file should error."""
     files = {
-        "/sessions/s1/train/report.md": b"# Report",
+        "/sessions/s1/report.md": b"# Report",
     }
     vol = MockVolume(files)
 
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=vol),
         patch("services.volume.get_volume", return_value=vol),
     ):
         from services.validator import validate_train_output
@@ -229,14 +237,15 @@ async def test_validate_train_output_perfect_metrics_warning():
         }
     ).encode()
     files = {
-        "/sessions/s1/train/models/model.pkl": b"model",
-        "/sessions/s1/train/report.md": b"# Report",
-        "/sessions/s1/train/data/metadata.json": meta,
+        "/sessions/s1/models/model.pkl": b"model",
+        "/sessions/s1/report.md": b"# Report",
+        "/sessions/s1/data/metadata.json": meta,
     }
     vol = MockVolume(files)
 
     with (
         patch("services.validator.reload_volume"),
+        patch("services.validator.get_volume", return_value=vol),
         patch("services.volume.get_volume", return_value=vol),
     ):
         from services.validator import validate_train_output

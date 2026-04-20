@@ -55,9 +55,9 @@ async def test_extract_metadata_without_agent_metadata():
     test = _make_parquet_bytes({"age": [45], "salary": [90], "target": [0]})
 
     files = {
-        "/sessions/s1/prep/data/train.parquet": train,
-        "/sessions/s1/prep/data/val.parquet": val,
-        "/sessions/s1/prep/data/test.parquet": test,
+        "/sessions/s1/data/train.parquet": train,
+        "/sessions/s1/data/val.parquet": val,
+        "/sessions/s1/data/test.parquet": test,
     }
     vol = MockVolume(files)
 

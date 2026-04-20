@@ -5,8 +5,8 @@
 :root {
   --foreground-rgb: 255, 255, 255;
   --background-rgb: 0, 0, 0;
-  --surface-rgb: 17, 17, 17;
-  --surface-elevated-rgb: 26, 26, 26;
+  --surface-rgb: 0, 0, 0;
+  --surface-elevated-rgb: 0, 0, 0;
   --border-rgb: 38, 38, 38;
   --text-secondary-rgb: 163, 163, 163;
 }
@@ -28,7 +28,9 @@ body {
   }
   input:focus-visible,
   textarea:focus-visible,
-  select:focus-visible {
+  select:focus-visible,
+  [contenteditable]:focus-visible,
+  [role='textbox']:focus-visible {
     @apply ring-0 ring-offset-0;
   }
 }
@@ -67,30 +69,49 @@ body {
   background: #444;
 }
 
-/* Markdown styles - dark theme */
+/* Markdown styles — ChatGPT-inspired, dark theme */
+.markdown-content p {
+  @apply my-3 leading-7 text-gray-300;
+}
+.markdown-content p:first-child {
+  @apply mt-0;
+}
+.markdown-content p:last-child {
+  @apply mb-0;
+}
 .markdown-content h1 {
-  @apply text-2xl font-bold mt-6 mb-4 text-white;
+  @apply text-xl font-semibold mt-6 mb-3 text-white;
 }
 .markdown-content h2 {
-  @apply text-xl font-semibold mt-5 mb-3 text-white;
+  @apply text-lg font-semibold mt-5 mb-2 text-white;
 }
 .markdown-content h3 {
-  @apply text-lg font-medium mt-4 mb-2 text-white;
-}
-.markdown-content p {
-  @apply my-3 leading-relaxed text-gray-300;
+  @apply text-base font-semibold mt-4 mb-2 text-white;
 }
 .markdown-content ul {
-  @apply list-disc list-inside my-3 text-gray-300;
+  @apply list-disc pl-6 my-3 space-y-1.5 text-gray-300;
 }
 .markdown-content ol {
-  @apply list-decimal list-inside my-3 text-gray-300;
+  @apply list-decimal pl-6 my-3 space-y-1.5 text-gray-300;
+}
+.markdown-content li {
+  @apply leading-7;
+}
+.markdown-content li > p {
+  @apply my-0 inline;
+}
+.markdown-content li > ul,
+.markdown-content li > ol {
+  @apply mt-1.5 mb-0;
+}
+.markdown-content strong {
+  @apply text-white font-semibold;
 }
 .markdown-content code {
-  @apply bg-neutral-800 text-gray-200 px-1 py-0.5 rounded text-sm font-mono;
+  @apply bg-white/[0.08] text-gray-200 px-1.5 py-0.5 rounded text-[13px] font-mono;
 }
 .markdown-content pre {
-  @apply bg-neutral-900 text-gray-100 p-4 rounded-lg overflow-x-auto my-4 border border-neutral-800;
+  @apply bg-black text-gray-100 p-4 rounded-xl overflow-x-auto my-4 border border-white/[0.06] text-[13px];
 }
 .markdown-content pre code {
   @apply bg-transparent p-0;
@@ -102,20 +123,35 @@ body {
   @apply w-full border-collapse my-4 text-sm rounded-lg overflow-hidden;
 }
 .markdown-content thead {
-  @apply bg-neutral-800;
+  @apply bg-white/[0.04];
 }
 .markdown-content th {
-  @apply border border-neutral-600 px-4 py-2.5 text-left text-white font-semibold text-xs uppercase tracking-wider;
+  @apply border border-white/[0.08] px-4 py-2 text-left text-gray-300 font-medium text-xs;
 }
 .markdown-content td {
-  @apply border border-neutral-700 px-4 py-2 text-left text-gray-300;
+  @apply border border-white/[0.06] px-4 py-2 text-left text-gray-400;
 }
 .markdown-content tbody tr:hover {
-  @apply bg-neutral-800/50;
-}
-.markdown-content tbody tr:nth-child(even) {
-  @apply bg-neutral-800/30;
+  @apply bg-white/[0.03];
 }
 .markdown-content blockquote {
-  @apply border-l-4 border-primary-500 pl-4 my-4 italic text-gray-400;
+  @apply border-l-2 border-white/20 pl-4 my-4 text-gray-400;
+}
+.markdown-content a {
+  @apply text-primary-400 underline underline-offset-2 decoration-primary-400/40 hover:decoration-primary-400;
+}
+.markdown-content hr {
+  @apply border-white/[0.08] my-6;
+}
+
+/* Smooth collapse/expand for react-resizable-panels.
+   Animates `flex` on programmatic open/close, but disables the transition
+   while the user is actively dragging the resize handle. */
+[data-panel] {
+  transition: flex 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: flex;
+}
+[data-panel-group]:has([data-resize-handle-state='drag']) [data-panel],
+[data-panel-group]:has([data-resize-handle-active]) [data-panel] {
+  transition: none;
 }
