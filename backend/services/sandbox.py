@@ -44,7 +44,12 @@ _get_app = get_app
 # SDK injected at the top of every sandbox execution.
 # Creates a `trainable` module so agent code can do:
 #   from trainable import log, configure_dashboard
-_SDK_PREAMBLE = """\
+#
+# Used two ways:
+#   1. execute_code scripts — string-concatenated ahead of user code in run_code()
+#   2. notebook kernels    — sent to ipykernel as a silent preamble cell at boot
+#      (see kernel_manager.py)
+SDK_PREAMBLE = """\
 import types, json, sys
 _m = types.ModuleType('trainable')
 _json = json
@@ -121,7 +126,7 @@ async def run_code(
         effective_timeout,
     )
 
-    full_code = _SDK_PREAMBLE + code
+    full_code = SDK_PREAMBLE + code
 
     sb = await modal.Sandbox.create.aio(
         "python",
