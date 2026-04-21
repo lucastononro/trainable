@@ -235,7 +235,7 @@ USAGE = f"""\
   trainable down    Stop all services
 
 {BOLD}Quick start:{RESET}
-  pip install trainable
+  pip install trainable-ai
   mkdir trainable && cd trainable
   trainable init
 """

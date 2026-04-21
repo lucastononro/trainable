@@ -15,7 +15,7 @@ You need **Docker** and one of:
 ### One-liner (recommended)
 
 ```bash
-pip install trainable
+pip install trainable-ai
 trainable init
 ```
 
@@ -136,7 +136,7 @@ pytest tests/ -v
 ## Project Structure
 
 ```
-cli/               CLI installer (pip install trainable)
+cli/               CLI installer (pip install trainable-ai)
 backend/           FastAPI application
   routers/         API endpoints (experiments, sessions, stream, files)
   services/        Agent orchestration, sandbox, broadcaster, validators
