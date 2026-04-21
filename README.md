@@ -25,17 +25,22 @@ AI-powered ML experimentation platform. Upload a dataset, and AI agents autonomo
 
 ## Quick Start
 
-No clone or build needed — just Docker.
+### Option A: CLI wizard (recommended)
 
 ```bash
-# 1. Grab the compose file and env template
+pip install trainable
+mkdir trainable && cd trainable
+trainable init
+```
+
+The wizard checks Docker, downloads the compose file, prompts for your API keys, and starts everything.
+
+### Option B: Manual setup
+
+```bash
 curl -sLO https://raw.githubusercontent.com/lucastononro/trainable/main/docker-compose.prod.yml
 curl -sLO https://raw.githubusercontent.com/lucastononro/trainable/main/.env.example
-
-# 2. Configure (set ANTHROPIC_API_KEY, MODAL_TOKEN_ID, MODAL_TOKEN_SECRET)
-cp .env.example .env
-
-# 3. Run
+cp .env.example .env   # set ANTHROPIC_API_KEY, MODAL_TOKEN_ID, MODAL_TOKEN_SECRET
 docker compose -f docker-compose.prod.yml up
 ```
 

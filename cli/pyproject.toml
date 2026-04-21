@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "trainable"
+version = "0.1.0"
+description = "AI-powered ML experimentation platform — local installer"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+authors = [{ name = "Lucas Tononro" }]
+keywords = ["ml", "ai", "experimentation", "docker"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+[project.scripts]
+trainable = "trainable_cli.main:main"
+
+[project.urls]
+Homepage = "https://github.com/lucastononro/trainable"
