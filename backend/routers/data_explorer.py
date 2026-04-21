@@ -13,7 +13,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import async_session, get_db
 from models import Artifact, ProcessedDatasetMeta
-from services.volume import get_volume, read_volume_file, reload_volume
+from services.volume import (
+    listdir_async,
+    read_volume_file_async,
+    reload_volume_async,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -100,9 +104,10 @@ async def _resolve_split_paths(session_id: str) -> dict[str, str]:
     missing = {"train.parquet", "val.parquet", "test.parquet"} - set(paths.keys())
     if missing:
         try:
-            reload_volume()
-            vol = get_volume()
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            await reload_volume_async()
+            for entry in await listdir_async(
+                f"/sessions/{session_id}", recursive=True
+            ):
                 if entry.type.name != "FILE":
                     continue
                 base = entry.path.rsplit("/", 1)[-1]
@@ -122,7 +127,7 @@ async def query_prep_data(session_id: str, body: QueryRequest):
     Also creates an all_data view combining all splits with a 'split' column.
     """
 
-    reload_volume()
+    await reload_volume_async()
 
     split_paths = await _resolve_split_paths(session_id)
     con = duckdb.connect(":memory:")
@@ -134,7 +139,7 @@ async def query_prep_data(session_id: str, body: QueryRequest):
             if not path:
                 continue
             try:
-                raw = read_volume_file(path)
+                raw = await read_volume_file_async(path)
                 _load_parquet_to_duckdb(con, raw, split)
             except Exception:
                 pass
@@ -186,14 +191,14 @@ async def preview_prep_data(
 ):
     """Quick preview of a processed data split (first N rows)."""
 
-    reload_volume()
+    await reload_volume_async()
 
     split_paths = await _resolve_split_paths(session_id)
     path = split_paths.get(f"{split}.parquet")
     if not path:
         raise HTTPException(status_code=404, detail=f"{split}.parquet not found")
     try:
-        raw = read_volume_file(path)
+        raw = await read_volume_file_async(path)
     except Exception:
         raise HTTPException(status_code=404, detail=f"{split}.parquet not readable")
 

@@ -19,7 +19,11 @@ from sqlalchemy import select
 from config import settings
 from db import async_session
 from models import Artifact, Experiment, Message, ProcessedDatasetMeta, Project
-from services.volume import get_volume, read_volume_file, reload_volume
+from services.volume import (
+    listdir_async,
+    read_volume_file_async,
+    reload_volume_async,
+)
 
 from .agents import (
     get_agent_default_model,
@@ -181,20 +185,13 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
 
     files_listing = "(no data uploaded yet)"
     if project_id:
-        # Use the safe wrapper — `vol.reload()` raises "reload() can only be
-        # called from within a running function" when invoked from the
-        # FastAPI process on some Modal SDK versions, and silently swallowing
-        # that here would (and did) make every agent think the project is
-        # empty even when files are present.
-        reload_volume()
+        await reload_volume_async()
         try:
-            vol = get_volume()
             entries = []
             datasets_root = f"/projects/{project_id}/datasets"
-            for entry in vol.listdir(datasets_root, recursive=True):
+            for entry in await listdir_async(datasets_root, recursive=True):
                 if entry.type.name != "FILE":
                     continue
-                # Display path relative to /data/ mount used inside sandboxes.
                 display = entry.path
                 if display.startswith("/"):
                     display = display[1:]
@@ -213,16 +210,10 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
                     "Project context: project %s datasets dir is empty", project_id
                 )
         except FileNotFoundError:
-            # Datasets folder genuinely hasn't been created yet — leave the
-            # placeholder. Distinguish from real errors below.
             logger.info(
                 "Project context: no datasets folder yet for project %s", project_id
             )
         except Exception as e:
-            # Don't swallow silently. If listdir really fails (transient
-            # Modal hiccup, malformed path, etc.) the agent should at least
-            # know the listing was unavailable rather than be confidently
-            # told the project is empty.
             logger.warning(
                 "Project context: failed to list datasets for %s: %s",
                 project_id,
@@ -281,7 +272,8 @@ async def _load_prev_context(session_id: str, stage: str) -> str:
                     continue
                 seen_producers.add(producer)
                 try:
-                    text = read_volume_file(art.path).decode("utf-8", errors="replace")
+                    raw = await read_volume_file_async(art.path)
+                    text = raw.decode("utf-8", errors="replace")
                 except Exception:
                     continue
                 if text.strip():

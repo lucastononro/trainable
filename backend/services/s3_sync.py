@@ -4,7 +4,7 @@ import logging
 import mimetypes
 
 from services.s3_client import get_s3_client
-from services.volume import get_volume
+from services.volume import listdir_async, read_volume_file_async, reload_volume_async
 
 logger = logging.getLogger(__name__)
 
@@ -20,8 +20,7 @@ async def sync_stage_to_s3(session_id: str, experiment_id: str, stage: str) -> d
     workspaces shared across agents.
     """
 
-    vol = get_volume()
-    vol.reload()
+    await reload_volume_async()
     s3 = get_s3_client()
     bucket = "datasets"
     s3_prefix = f"datasets/{experiment_id}/processed/{session_id}"
@@ -30,7 +29,7 @@ async def sync_stage_to_s3(session_id: str, experiment_id: str, stage: str) -> d
     synced_files = []
 
     try:
-        entries = list(vol.listdir(workspace, recursive=True))
+        entries = await listdir_async(workspace, recursive=True)
     except Exception as e:
         logger.error(f"[S3_SYNC] Failed to list {workspace}: {e}")
         return {
@@ -55,7 +54,7 @@ async def sync_stage_to_s3(session_id: str, experiment_id: str, stage: str) -> d
         content_type = mimetypes.guess_type(rel_path)[0] or "application/octet-stream"
 
         try:
-            data = b"".join(vol.read_file(entry.path))
+            data = await read_volume_file_async(entry.path)
             s3.put_object(
                 Bucket=bucket,
                 Key=s3_key,
