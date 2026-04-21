@@ -1,4 +1,4 @@
-# trainable
+# trainable-ai
 
 AI-powered ML experimentation platform — local installer.
 
