@@ -17,6 +17,11 @@ RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 
 COMPOSE_FILE = "docker-compose.prod.yml"
 ENV_FILE = ".env"
+PROJECT_NAME = "trainable"
+
+# Config lives in ~/.trainable so `trainable up` works from any directory.
+# Override via TRAINABLE_HOME env var for advanced users.
+CONFIG_DIR = Path(os.environ.get("TRAINABLE_HOME", Path.home() / ".trainable"))
 
 BOLD = "\033[1m"
 DIM = "\033[2m"
@@ -141,9 +146,9 @@ def prompt_claude_auth() -> dict[str, str]:
         return {"ANTHROPIC_API_KEY": key}
 
     # Subscription token flow
-    print(f"  To get your subscription token, run this in another terminal:\n")
+    print("  To get your subscription token, run this in another terminal:\n")
     print(f"    {BOLD}claude setup-token{RESET}\n")
-    print(f"  Then paste the token below.\n")
+    print("  Then paste the token below.\n")
     token = prompt_secret("Claude subscription token")
     return {"CLAUDE_CODE_OAUTH_TOKEN": token}
 
@@ -151,7 +156,9 @@ def prompt_claude_auth() -> dict[str, str]:
 def cmd_init():
     banner()
 
-    dest = Path.cwd()
+    dest = CONFIG_DIR
+    dest.mkdir(parents=True, exist_ok=True)
+    print(f"  {DIM}Config directory: {dest}{RESET}")
 
     # Step 1 — check Docker
     step(1, 4, "Checking prerequisites")
@@ -189,54 +196,61 @@ def cmd_init():
     if answer in ("", "y", "yes"):
         cmd_up()
     else:
-        print(
-            f"\n  Run {BOLD}trainable up{RESET} when you're ready, "
-            f"or: {DIM}docker compose -f {COMPOSE_FILE} up{RESET}\n"
+        print(f"\n  Run {BOLD}trainable up{RESET} from anywhere when you're ready.\n")
+
+
+def _compose_args(subcommand: list[str]) -> list[str]:
+    """Build `docker compose` args pinned to the global config directory."""
+    compose = CONFIG_DIR / COMPOSE_FILE
+    return [
+        "docker",
+        "compose",
+        "--project-name",
+        PROJECT_NAME,
+        "--project-directory",
+        str(CONFIG_DIR),
+        "-f",
+        str(compose),
+        *subcommand,
+    ]
+
+
+def _require_config():
+    compose = CONFIG_DIR / COMPOSE_FILE
+    env = CONFIG_DIR / ENV_FILE
+    if not compose.exists() or not env.exists():
+        fail(
+            f"Config not found at {CONFIG_DIR}. Run {BOLD}trainable init{RESET} first."
         )
+        sys.exit(1)
 
 
 def cmd_up():
-    compose = Path.cwd() / COMPOSE_FILE
-    if not compose.exists():
-        fail(f"{COMPOSE_FILE} not found. Run {BOLD}trainable init{RESET} first.")
-        sys.exit(1)
-    if not (Path.cwd() / ENV_FILE).exists():
-        fail(f"{ENV_FILE} not found. Run {BOLD}trainable init{RESET} first.")
-        sys.exit(1)
+    _require_config()
 
     print(f"\n{GREEN}{BOLD}Starting trainable...{RESET}")
     print(f"{DIM}  Frontend:      http://localhost:3000")
-    print(f"  Backend API:   http://localhost:8000")
+    print("  Backend API:   http://localhost:8000")
     print(f"  MinIO Console: http://localhost:9001{RESET}\n")
 
-    os.execvp(
-        "docker",
-        ["docker", "compose", "-f", COMPOSE_FILE, "up"],
-    )
+    os.execvp("docker", _compose_args(["up"]))
 
 
 def cmd_down():
-    compose = Path.cwd() / COMPOSE_FILE
-    if not compose.exists():
-        fail(f"{COMPOSE_FILE} not found.")
-        sys.exit(1)
-    os.execvp(
-        "docker",
-        ["docker", "compose", "-f", COMPOSE_FILE, "down"],
-    )
+    _require_config()
+    os.execvp("docker", _compose_args(["down"]))
 
 
 USAGE = f"""\
 {BOLD}trainable{RESET} — AI-powered ML experimentation platform
 
 {BOLD}Usage:{RESET}
-  trainable init    Set up trainable in the current directory (wizard)
-  trainable up      Start all services
+  trainable init    One-time setup wizard (writes config to ~/.trainable)
+  trainable up      Start all services (works from any directory)
   trainable down    Stop all services
 
 {BOLD}Quick start:{RESET}
   pip install trainable-ai
-  mkdir trainable && cd trainable
   trainable init
 """
 
