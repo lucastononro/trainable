@@ -65,6 +65,15 @@ def _run_migrations(connection):
             )
             logger.info("[DB] Added run_tag column to metrics table")
 
+    # Add sandbox_config to projects if missing
+    if insp.has_table("projects"):
+        columns = [c["name"] for c in insp.get_columns("projects")]
+        if "sandbox_config" not in columns:
+            connection.execute(
+                text("ALTER TABLE projects ADD COLUMN sandbox_config JSON")
+            )
+            logger.info("[DB] Added sandbox_config column to projects table")
+
     # ------------------------------------------------------------------
     # Phase A — projects foundation
     # ------------------------------------------------------------------

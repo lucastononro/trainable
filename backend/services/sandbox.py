@@ -108,10 +108,18 @@ async def run_code(
     session_id: str,
     stage: str = None,
     gpu: str = None,
+    timeout: int | None = None,
 ) -> dict:
     """Execute Python code in a Modal Sandbox with data volume mounted at /data."""
 
-    logger.info("Creating sandbox for session %s (%d chars)", session_id, len(code))
+    effective_timeout = timeout or settings.sandbox_timeout
+    logger.info(
+        "Creating sandbox for session %s (%d chars, gpu=%s, timeout=%ds)",
+        session_id,
+        len(code),
+        gpu,
+        effective_timeout,
+    )
 
     full_code = _SDK_PREAMBLE + code
 
@@ -123,7 +131,7 @@ async def run_code(
         image=_get_image(),
         volumes={"/data": get_volume()},
         gpu=gpu,
-        timeout=settings.sandbox_timeout,
+        timeout=effective_timeout,
         app=await _get_app(),
     )
 

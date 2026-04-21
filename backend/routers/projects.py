@@ -20,7 +20,12 @@ from models import Experiment, Project
 from models import Session as SessionModel
 from schemas import ProjectCreate, ProjectUpdate
 from services.s3_client import get_s3_client
-from services.volume import get_volume, reload_volume
+from services.volume import (
+    get_volume,
+    listdir_async,
+    reload_volume_async,
+    remove_volume_file_async,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -53,6 +58,7 @@ async def create_project(body: ProjectCreate, db: AsyncSession = Depends(get_db)
         id=project_id,
         name=body.name or "New project",
         description=body.description or "",
+        sandbox_config=body.sandbox_config.model_dump() if body.sandbox_config else {},
         created_at=now,
         updated_at=now,
     )
@@ -138,6 +144,8 @@ async def update_project(
         project.name = body.name
     if body.description is not None:
         project.description = body.description
+    if body.sandbox_config is not None:
+        project.sandbox_config = body.sandbox_config.model_dump()
     project.updated_at = _now()
 
     await db.commit()
@@ -231,10 +239,9 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
 
     # Best-effort cleanup of per-session workspaces on the volume.
     try:
-        vol = get_volume()
         for sid in session_ids:
             try:
-                vol.remove_file(f"/sessions/{sid}", recursive=True)
+                await remove_volume_file_async(f"/sessions/{sid}")
                 storage["modal_sessions_removed"] += 1
             except FileNotFoundError:
                 pass
@@ -285,9 +292,8 @@ async def list_project_files(
     sandbox_error: str | None = None
     sandbox_checked = False
     try:
-        reload_volume()  # best-effort; swallows its own errors
-        vol = get_volume()
-        for entry in vol.listdir(datasets_root, recursive=True):
+        await reload_volume_async()
+        for entry in await listdir_async(datasets_root, recursive=True):
             if entry.type.name != "FILE":
                 continue
             rel_path = _strip_prefix(entry.path, prefix_in_entry)

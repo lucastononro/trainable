@@ -24,7 +24,6 @@ packages = ["trainable_cli"]
 
 [project.scripts]
 trainable = "trainable_cli.main:main"
-trainable-ai = "trainable_cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/lucastononro/trainable"

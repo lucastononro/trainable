@@ -20,7 +20,7 @@ from sqlalchemy import select
 from db import async_session
 from models import Experiment
 from models import Session as SessionModel
-from services.volume import get_volume, reload_volume
+from services.volume import listdir_async, reload_volume_async
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +104,8 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
 
         workspace = f"/sessions/{target_session_id}"
         try:
-            reload_volume()
-            vol = get_volume()
-            entries = list(vol.listdir(workspace, recursive=True))
+            await reload_volume_async()
+            entries = await listdir_async(workspace, recursive=True)
         except Exception as e:
             logger.info(
                 "list_session_files empty or missing workspace %s: %s", workspace, e

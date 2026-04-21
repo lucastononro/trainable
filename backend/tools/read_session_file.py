@@ -21,7 +21,7 @@ from sqlalchemy import select
 from db import async_session
 from models import Experiment
 from models import Session as SessionModel
-from services.volume import read_volume_file, reload_volume
+from services.volume import read_volume_file_async, reload_volume_async
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +158,8 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
             }
 
         try:
-            reload_volume()
-            raw = read_volume_file(normalized)
+            await reload_volume_async()
+            raw = await read_volume_file_async(normalized)
         except Exception as e:
             return {
                 "content": [

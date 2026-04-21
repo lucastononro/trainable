@@ -104,6 +104,17 @@ async def upload_to_volume(local_path: str, remote_path: str):
     logger.info("Uploaded %s -> %s", local_path, remote_path)
 
 
+async def remove_volume_file_async(path: str):
+    """Remove a file from the Modal Volume without blocking the event loop."""
+    vol = get_volume()
+
+    def _sync():
+        vol.remove_file(path, recursive=True)
+
+    await asyncio.get_running_loop().run_in_executor(None, _sync)
+    logger.info("Removed %s", path)
+
+
 async def write_to_volume(content: str, remote_path: str):
     """Write text content directly to the Modal Volume (non-blocking)."""
     vol = get_volume()

@@ -17,15 +17,19 @@ from sqlalchemy import select
 
 from db import async_session
 from models import Artifact
-from services.volume import get_volume, read_volume_file, reload_volume
+from services.volume import (
+    listdir_async,
+    read_volume_file_async,
+    reload_volume_async,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _read_volume_file_safe(path: str):
+async def _read_volume_file_safe(path: str):
     """Read a file from volume, returning None on failure."""
     try:
-        return read_volume_file(path)
+        return await read_volume_file_async(path)
     except Exception:
         return None
 
@@ -59,9 +63,8 @@ async def _discover_session_files(
     missing = filenames - set(found.keys())
     if missing:
         try:
-            reload_volume()
-            vol = get_volume()
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            await reload_volume_async()
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 base = entry.path.rsplit("/", 1)[-1]
@@ -75,7 +78,7 @@ async def _discover_session_files(
 
 async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     """Validate prep stage outputs. Returns dict with errors, warnings, passed checks."""
-    reload_volume()
+    await reload_volume_async()
 
     results = {"errors": [], "warnings": [], "passed": [], "stage": "prep"}
 
@@ -87,7 +90,7 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     for split_name in ("train", "val", "test"):
         key = f"{split_name}.parquet"
         path = discovered.get(key)
-        raw = _read_volume_file_safe(path) if path else None
+        raw = await _read_volume_file_safe(path) if path else None
         if raw is None:
             results["errors"].append(f"{key} missing or unreadable")
         else:
@@ -212,7 +215,9 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
 
     # 8. Check metadata.json exists
     metadata_path = discovered.get("metadata.json")
-    metadata_raw = _read_volume_file_safe(metadata_path) if metadata_path else None
+    metadata_raw = (
+        await _read_volume_file_safe(metadata_path) if metadata_path else None
+    )
     if metadata_raw:
         try:
             meta = json.loads(metadata_raw)
@@ -247,7 +252,7 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
 
 async def validate_train_output(session_id: str, experiment_id: str) -> dict:
     """Validate train stage outputs."""
-    reload_volume()
+    await reload_volume_async()
 
     results = {"errors": [], "warnings": [], "passed": [], "stage": "train"}
 
@@ -272,8 +277,7 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
 
     if not model_path:
         try:
-            vol = get_volume()
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 lower = entry.path.lower()
@@ -283,7 +287,7 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
         except Exception:
             pass
 
-    model_raw = _read_volume_file_safe(model_path) if model_path else None
+    model_raw = await _read_volume_file_safe(model_path) if model_path else None
     if model_raw:
         results["passed"].append(
             f"Model file found: {model_path} ({len(model_raw)} bytes)"
@@ -310,12 +314,11 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
         pass
     if report_raw is None:
         try:
-            vol = get_volume()
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 if entry.path.endswith(".md"):
-                    report_raw = _read_volume_file_safe(entry.path)
+                    report_raw = await _read_volume_file_safe(entry.path)
                     if report_raw:
                         break
         except Exception:
@@ -328,7 +331,9 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
     # 3. Check metadata.json — discovery helper covers DB then scan.
     discovered = await _discover_session_files(session_id, {"metadata.json"})
     metadata_path = discovered.get("metadata.json")
-    metadata_raw = _read_volume_file_safe(metadata_path) if metadata_path else None
+    metadata_raw = (
+        await _read_volume_file_safe(metadata_path) if metadata_path else None
+    )
     if metadata_raw:
         try:
             meta = json.loads(metadata_raw)

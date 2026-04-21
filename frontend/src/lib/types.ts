@@ -1,7 +1,13 @@
+export interface SandboxConfig {
+  gpu?: string | null;
+  timeout?: number | null;
+}
+
 export interface Project {
   id: string;
   name: string;
   description: string;
+  sandbox_config: SandboxConfig;
   created_at: string;
   updated_at: string;
   experiment_count: number;

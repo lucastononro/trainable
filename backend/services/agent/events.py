@@ -12,7 +12,7 @@ from services.broadcaster import broadcaster
 from services.metadata_extractor import extract_and_store_metadata
 from services.s3_sync import sync_stage_to_s3
 from services.validator import validate_prep_output, validate_train_output
-from services.volume import get_volume, read_volume_file
+from services.volume import listdir_async, read_volume_file_async
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,6 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
     free to organize its outputs anywhere under /sessions/{session_id}/.
     """
 
-    vol = get_volume()
     workspace = f"/sessions/{session_id}"
 
     # Report discovery: prefer a top-level report.md (the soft convention);
@@ -85,7 +84,7 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
     report_path: str | None = None
     report_mtime = -1.0
     try:
-        for entry in vol.listdir(workspace, recursive=True):
+        for entry in await listdir_async(workspace, recursive=True):
             if entry.type.name != "FILE" or not entry.path.endswith(".md"):
                 continue
             rel = (
@@ -105,7 +104,7 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
 
     if report_path:
         try:
-            report_data = read_volume_file(report_path)
+            report_data = await read_volume_file_async(report_path)
             report_text = report_data.decode("utf-8", errors="replace")
             if report_text.strip():
                 await save_and_publish(
@@ -123,7 +122,7 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
     # List all generated files and persist as Artifact records
     try:
         files = []
-        for entry in vol.listdir(workspace, recursive=True):
+        for entry in await listdir_async(workspace, recursive=True):
             if entry.type.name != "FILE":
                 continue
             files.append(
