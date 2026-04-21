@@ -5,7 +5,7 @@ AI-powered ML experimentation platform — local installer.
 ## Install
 
 ```bash
-pip install trainable
+pip install trainable-ai
 ```
 
 ## Usage
