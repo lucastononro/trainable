@@ -44,23 +44,38 @@ cp .env.example .env   # set ANTHROPIC_API_KEY, MODAL_TOKEN_ID, MODAL_TOKEN_SECR
 docker compose -f docker-compose.prod.yml up
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Once running, open [http://localhost:3000](http://localhost:3000).
 
-You'll need:
-- [Anthropic API key](https://console.anthropic.com/)
-- [Modal](https://modal.com/) account → get tokens from [modal.com/settings](https://modal.com/settings)
+| Service | URL |
+|---------|-----|
+| Frontend | http://localhost:3000 |
+| Backend API | http://localhost:8000 |
+| MinIO Console | http://localhost:9001 (minioadmin/minioadmin) |
+
+### Prerequisites
+
+- Docker with Compose plugin
+- [Anthropic API key](https://console.anthropic.com/) or a Claude Pro/Max subscription
+- [Modal](https://modal.com/) account — get tokens from [modal.com/settings](https://modal.com/settings)
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ANTHROPIC_API_KEY` | Yes* | — | Claude API key (*or use `CLAUDE_CODE_OAUTH_TOKEN`) |
+| `CLAUDE_CODE_OAUTH_TOKEN` | Yes* | — | Claude subscription token (*or use API key). Run `claude setup-token` to get it |
+| `MODAL_TOKEN_ID` | Yes | — | Modal auth |
+| `MODAL_TOKEN_SECRET` | Yes | — | Modal auth |
+| `CLAUDE_MODEL` | No | `claude-sonnet-4-20250514` | Model for the AI agent |
+| `DATABASE_URL` | No | SQLite | PostgreSQL connection string (set by docker-compose) |
+| `S3_ENDPOINT` | No | localhost | S3-compatible endpoint (set by docker-compose) |
 
 ## Development Setup
 
 <details>
 <summary>For contributors who want to build from source</summary>
 
-### Prerequisites
-
-- Python 3.11+
-- Node.js 20+
-
-### 1. Clone and configure
+### Clone and configure
 
 ```bash
 git clone https://github.com/lucastononro/trainable.git
@@ -68,7 +83,7 @@ cd trainable
 cp .env.example .env
 ```
 
-### 2. Backend
+### Backend
 
 ```bash
 cd backend
@@ -77,7 +92,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### 3. Frontend
+### Frontend
 
 ```bash
 cd frontend
@@ -85,22 +100,15 @@ npm install
 npm run dev
 ```
 
-### Docker Compose (full stack, dev mode)
+### Docker Compose (dev mode)
 
-Runs PostgreSQL, MinIO, backend, and frontend with hot-reload:
+Runs PostgreSQL, MinIO, backend, and frontend with hot-reload and source mounts:
 
 ```bash
 docker compose up
 ```
 
-</details>
-
-This starts:
-- **Frontend**: http://localhost:3000
-- **Backend API**: http://localhost:8000
-- **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
-
-## Running Tests
+### Running Tests
 
 ```bash
 cd backend
@@ -108,22 +116,12 @@ source .venv/bin/activate
 pytest tests/ -v
 ```
 
-## Environment Variables
-
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `ANTHROPIC_API_KEY` | Yes | — | Claude API key for the AI agent |
-| `MODAL_TOKEN_ID` | Yes* | — | Modal auth (*or run `modal token set`) |
-| `MODAL_TOKEN_SECRET` | Yes* | — | Modal auth |
-| `DATABASE_URL` | No | SQLite (local file) | PostgreSQL connection string |
-| `S3_ENDPOINT` | No | AWS S3 | S3-compatible endpoint (MinIO, etc.) |
-| `AWS_ACCESS_KEY_ID` | No | — | S3 credentials |
-| `AWS_SECRET_ACCESS_KEY` | No | — | S3 credentials |
-| `CLAUDE_MODEL` | No | `claude-opus-4-6` | Model for the AI agent |
+</details>
 
 ## Project Structure
 
 ```
+cli/               CLI installer (pip install trainable)
 backend/           FastAPI application
   routers/         API endpoints (experiments, sessions, stream, files)
   services/        Agent orchestration, sandbox, broadcaster, validators
@@ -137,9 +135,10 @@ docs/              Architecture and agent documentation
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for detailed system design and [docs/agents.md](docs/agents.md) for agent documentation.
 
-## CI
+## CI/CD
 
-GitHub Actions runs on every push to `main` and on pull requests:
+GitHub Actions workflows:
 
-- **Backend**: Ruff lint + format check, pytest, Bandit security scan
-- **Frontend**: ESLint, TypeScript typecheck, Next.js build
+- **CI** (`ci.yml`) — Runs on every push to `main` and PRs: Ruff lint + format, pytest, Bandit security scan, ESLint, TypeScript typecheck, Next.js build
+- **Docker Images** (`publish-image.yml`) — Builds and pushes multi-arch (amd64 + arm64) images to GHCR on push to `main` and version tags
+- **PyPI** (`publish.yml`) — Publishes the CLI package to PyPI on version tags via trusted publisher
