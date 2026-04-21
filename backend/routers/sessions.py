@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import async_session, get_db
-from models import Artifact, Experiment, Message, Metric, Project
+from models import Artifact, Experiment, Message, Metric
 from models import Session as SessionModel
 from schemas import ClarificationReply, MessageCreate
 from services.agent import abort_agent, run_agent
@@ -82,9 +82,7 @@ async def send_message(
     result = await db.execute(
         select(SessionModel)
         .where(SessionModel.id == session_id)
-        .options(
-            selectinload(SessionModel.experiment).selectinload(Experiment.project)
-        )
+        .options(selectinload(SessionModel.experiment).selectinload(Experiment.project))
     )
     session = result.scalar_one_or_none()
     if not session:

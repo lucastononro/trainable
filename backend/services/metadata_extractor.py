@@ -44,9 +44,7 @@ async def extract_and_store_metadata(session_id: str, experiment_id: str):
     missing = wanted - set(paths.keys())
     if missing:
         try:
-            for entry in await listdir_async(
-                f"/sessions/{session_id}", recursive=True
-            ):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 base = entry.path.rsplit("/", 1)[-1]

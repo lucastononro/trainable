@@ -215,12 +215,48 @@ class MockVolume:
             return [self._files[path]]
         raise FileNotFoundError(f"Mock volume: {path} not found")
 
+    def read_file_bytes(self, path: str) -> bytes:
+        if path in self._files:
+            return self._files[path]
+        raise FileNotFoundError(f"Mock volume: {path} not found")
+
     def listdir(self, prefix: str, recursive: bool = False):
         entries = []
         for path in self._files:
             if path.startswith(prefix + "/") or path == prefix:
                 entries.append(MockVolumeEntry(path, is_file=True))
         return entries
+
+
+def mock_volume_patches(vol: MockVolume, *modules: str):
+    """Return a list of patch context managers for the async volume functions
+    in each given module path (e.g. 'services.validator').
+
+    Usage::
+
+        with ExitStack() as stack:
+            for p in mock_volume_patches(vol, "services.validator"):
+                stack.enter_context(p)
+            ...
+    """
+    patches = []
+    for mod in modules:
+        patches.append(patch(f"{mod}.reload_volume_async", new_callable=AsyncMock))
+        patches.append(
+            patch(
+                f"{mod}.listdir_async",
+                new_callable=AsyncMock,
+                side_effect=vol.listdir,
+            )
+        )
+        patches.append(
+            patch(
+                f"{mod}.read_volume_file_async",
+                new_callable=AsyncMock,
+                side_effect=vol.read_file_bytes,
+            )
+        )
+    return patches
 
 
 @pytest.fixture

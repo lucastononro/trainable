@@ -105,9 +105,7 @@ async def _resolve_split_paths(session_id: str) -> dict[str, str]:
     if missing:
         try:
             await reload_volume_async()
-            for entry in await listdir_async(
-                f"/sessions/{session_id}", recursive=True
-            ):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 base = entry.path.rsplit("/", 1)[-1]

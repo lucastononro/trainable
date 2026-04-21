@@ -1,10 +1,10 @@
 """Tests for routers/data_explorer.py — DuckDB query and preview endpoints."""
 
-from unittest.mock import patch
+from contextlib import ExitStack
 
 import pytest
 
-from tests.conftest import MockVolume
+from tests.conftest import MockVolume, mock_volume_patches
 
 
 @pytest.mark.asyncio
@@ -16,14 +16,10 @@ async def test_preview_prep_data(
         client, sample_csv, default_project_id
     )
 
-    with (
-        patch("routers.data_explorer.reload_volume"),
-        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
-        patch(
-            "routers.data_explorer.read_volume_file",
-            side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
-        ),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "routers.data_explorer"):
+            stack.enter_context(p)
+
         resp = await client.get(
             "/api/sessions/test-session/prep/preview",
             params={"split": "train", "limit": 5},
@@ -42,10 +38,12 @@ async def test_preview_prep_data(
 
 @pytest.mark.asyncio
 async def test_preview_not_found(client, sample_csv):
-    with (
-        patch("routers.data_explorer.reload_volume"),
-        patch("routers.data_explorer.read_volume_file", side_effect=FileNotFoundError),
-    ):
+    vol = MockVolume({})
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "routers.data_explorer"):
+            stack.enter_context(p)
+
         resp = await client.get(
             "/api/sessions/nonexistent/prep/preview",
             params={"split": "train"},
@@ -56,14 +54,10 @@ async def test_preview_not_found(client, sample_csv):
 
 @pytest.mark.asyncio
 async def test_query_prep_data(client, sample_csv, mock_volume_with_prep):
-    with (
-        patch("routers.data_explorer.reload_volume"),
-        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
-        patch(
-            "routers.data_explorer.read_volume_file",
-            side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
-        ),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "routers.data_explorer"):
+            stack.enter_context(p)
+
         resp = await client.post(
             "/api/sessions/test-session/prep/query",
             json={"sql": "SELECT * FROM train", "limit": 10},
@@ -79,14 +73,10 @@ async def test_query_prep_data(client, sample_csv, mock_volume_with_prep):
 
 @pytest.mark.asyncio
 async def test_query_prep_data_with_filter(client, sample_csv, mock_volume_with_prep):
-    with (
-        patch("routers.data_explorer.reload_volume"),
-        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
-        patch(
-            "routers.data_explorer.read_volume_file",
-            side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
-        ),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "routers.data_explorer"):
+            stack.enter_context(p)
+
         resp = await client.post(
             "/api/sessions/test-session/prep/query",
             json={
@@ -105,14 +95,10 @@ async def test_query_prep_data_with_filter(client, sample_csv, mock_volume_with_
 
 @pytest.mark.asyncio
 async def test_query_prep_data_all_data_view(client, sample_csv, mock_volume_with_prep):
-    with (
-        patch("routers.data_explorer.reload_volume"),
-        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
-        patch(
-            "routers.data_explorer.read_volume_file",
-            side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
-        ),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "routers.data_explorer"):
+            stack.enter_context(p)
+
         resp = await client.post(
             "/api/sessions/test-session/prep/query",
             json={
@@ -129,14 +115,10 @@ async def test_query_prep_data_all_data_view(client, sample_csv, mock_volume_wit
 
 @pytest.mark.asyncio
 async def test_query_prep_data_invalid_sql(client, sample_csv, mock_volume_with_prep):
-    with (
-        patch("routers.data_explorer.reload_volume"),
-        patch("routers.data_explorer.get_volume", return_value=mock_volume_with_prep),
-        patch(
-            "routers.data_explorer.read_volume_file",
-            side_effect=lambda p: b"".join(mock_volume_with_prep.read_file(p)),
-        ),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "routers.data_explorer"):
+            stack.enter_context(p)
+
         resp = await client.post(
             "/api/sessions/test-session/prep/query",
             json={"sql": "SELECT * FROM nonexistent_table"},
@@ -147,10 +129,12 @@ async def test_query_prep_data_invalid_sql(client, sample_csv, mock_volume_with_
 
 @pytest.mark.asyncio
 async def test_query_no_data(client, sample_csv):
-    with (
-        patch("routers.data_explorer.reload_volume"),
-        patch("routers.data_explorer.read_volume_file", side_effect=FileNotFoundError),
-    ):
+    vol = MockVolume({})
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "routers.data_explorer"):
+            stack.enter_context(p)
+
         resp = await client.post(
             "/api/sessions/empty/prep/query",
             json={"sql": "SELECT 1"},
@@ -190,11 +174,11 @@ async def test_get_prep_metadata_after_extraction(
         }
     )
 
-    # Run metadata extraction (patch at metadata_extractor's import site)
-    with (
-        patch("services.metadata_extractor.reload_volume"),
-        patch("services.metadata_extractor.get_volume", return_value=vol),
-    ):
+    # Run metadata extraction
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.metadata_extractor"):
+            stack.enter_context(p)
+
         from services.metadata_extractor import extract_and_store_metadata
 
         await extract_and_store_metadata(session_id, exp_id)

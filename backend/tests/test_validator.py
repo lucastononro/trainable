@@ -1,20 +1,19 @@
 """Tests for services/validator.py — automated post-agent validation."""
 
 import json
-from unittest.mock import patch
+from contextlib import ExitStack
 
 import pytest
 
-from tests.conftest import MockVolume, _make_parquet_bytes
+from tests.conftest import MockVolume, _make_parquet_bytes, mock_volume_patches
 
 
 @pytest.mark.asyncio
 async def test_validate_prep_output_all_good(mock_volume_with_prep):
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=mock_volume_with_prep),
-        patch("services.volume.get_volume", return_value=mock_volume_with_prep),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("test-session", "test-experiment")
@@ -44,11 +43,10 @@ async def test_validate_prep_output_missing_file():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -70,11 +68,10 @@ async def test_validate_prep_output_schema_mismatch():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -112,11 +109,10 @@ async def test_validate_prep_output_with_nulls():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -146,11 +142,10 @@ async def test_validate_prep_output_metadata_target_missing():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -173,11 +168,10 @@ async def test_validate_prep_output_no_metadata_json():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -189,11 +183,10 @@ async def test_validate_prep_output_no_metadata_json():
 
 @pytest.mark.asyncio
 async def test_validate_train_output_all_good(mock_volume_with_train):
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=mock_volume_with_train),
-        patch("services.volume.get_volume", return_value=mock_volume_with_train),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_train, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_train_output
 
         result = await validate_train_output("test-session", "test-experiment")
@@ -214,11 +207,10 @@ async def test_validate_train_output_no_model():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_train_output
 
         result = await validate_train_output("s1", "exp1")
@@ -243,11 +235,10 @@ async def test_validate_train_output_perfect_metrics_warning():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_train_output
 
         result = await validate_train_output("s1", "exp1")

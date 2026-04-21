@@ -64,9 +64,7 @@ async def _discover_session_files(
     if missing:
         try:
             await reload_volume_async()
-            for entry in await listdir_async(
-                f"/sessions/{session_id}", recursive=True
-            ):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 base = entry.path.rsplit("/", 1)[-1]
@@ -217,7 +215,9 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
 
     # 8. Check metadata.json exists
     metadata_path = discovered.get("metadata.json")
-    metadata_raw = await _read_volume_file_safe(metadata_path) if metadata_path else None
+    metadata_raw = (
+        await _read_volume_file_safe(metadata_path) if metadata_path else None
+    )
     if metadata_raw:
         try:
             meta = json.loads(metadata_raw)
@@ -277,9 +277,7 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
 
     if not model_path:
         try:
-            for entry in await listdir_async(
-                f"/sessions/{session_id}", recursive=True
-            ):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 lower = entry.path.lower()
@@ -316,9 +314,7 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
         pass
     if report_raw is None:
         try:
-            for entry in await listdir_async(
-                f"/sessions/{session_id}", recursive=True
-            ):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 if entry.path.endswith(".md"):
@@ -335,7 +331,9 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
     # 3. Check metadata.json — discovery helper covers DB then scan.
     discovered = await _discover_session_files(session_id, {"metadata.json"})
     metadata_path = discovered.get("metadata.json")
-    metadata_raw = await _read_volume_file_safe(metadata_path) if metadata_path else None
+    metadata_raw = (
+        await _read_volume_file_safe(metadata_path) if metadata_path else None
+    )
     if metadata_raw:
         try:
             meta = json.loads(metadata_raw)

@@ -23,7 +23,6 @@ from services.s3_client import get_s3_client
 from services.volume import (
     get_volume,
     listdir_async,
-    reload_volume,
     reload_volume_async,
     remove_volume_file_async,
 )

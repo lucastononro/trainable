@@ -1,20 +1,24 @@
 """Tests for services/s3_sync.py — Modal Volume → S3 sync."""
 
+from contextlib import ExitStack
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tests.conftest import MockVolume
+from tests.conftest import MockVolume, mock_volume_patches
 
 
 @pytest.mark.asyncio
 async def test_sync_stage_to_s3(mock_volume_with_prep):
     mock_s3 = MagicMock()
 
-    with (
-        patch("services.s3_sync.get_volume", return_value=mock_volume_with_prep),
-        patch("services.s3_sync.get_s3_client", return_value=mock_s3),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "services.s3_sync"):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("services.s3_sync.get_s3_client", return_value=mock_s3)
+        )
+
         from services.s3_sync import sync_stage_to_s3
 
         result = await sync_stage_to_s3("test-session", "test-experiment", "prep")
@@ -39,10 +43,13 @@ async def test_sync_stage_to_s3(mock_volume_with_prep):
 async def test_sync_stage_to_s3_file_details(mock_volume_with_prep):
     mock_s3 = MagicMock()
 
-    with (
-        patch("services.s3_sync.get_volume", return_value=mock_volume_with_prep),
-        patch("services.s3_sync.get_s3_client", return_value=mock_s3),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "services.s3_sync"):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("services.s3_sync.get_s3_client", return_value=mock_s3)
+        )
+
         from services.s3_sync import sync_stage_to_s3
 
         result = await sync_stage_to_s3("test-session", "test-experiment", "prep")
@@ -62,10 +69,13 @@ async def test_sync_stage_to_s3_empty_workspace():
     vol = MockVolume({})
     mock_s3 = MagicMock()
 
-    with (
-        patch("services.s3_sync.get_volume", return_value=vol),
-        patch("services.s3_sync.get_s3_client", return_value=mock_s3),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.s3_sync"):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("services.s3_sync.get_s3_client", return_value=mock_s3)
+        )
+
         from services.s3_sync import sync_stage_to_s3
 
         result = await sync_stage_to_s3("s1", "exp1", "prep")
@@ -78,10 +88,13 @@ async def test_sync_stage_to_s3_empty_workspace():
 async def test_sync_stage_to_s3_train(mock_volume_with_train):
     mock_s3 = MagicMock()
 
-    with (
-        patch("services.s3_sync.get_volume", return_value=mock_volume_with_train),
-        patch("services.s3_sync.get_s3_client", return_value=mock_s3),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_train, "services.s3_sync"):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("services.s3_sync.get_s3_client", return_value=mock_s3)
+        )
+
         from services.s3_sync import sync_stage_to_s3
 
         result = await sync_stage_to_s3("test-session", "test-experiment", "train")
