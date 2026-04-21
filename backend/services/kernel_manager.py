@@ -24,7 +24,7 @@ import modal
 
 from services import notebook_store
 from services.broadcaster import broadcaster
-from services.sandbox import get_app, get_image
+from services.sandbox import SDK_PREAMBLE, get_app, get_image
 from services.volume import get_volume
 
 logger = logging.getLogger(__name__)
@@ -76,9 +76,17 @@ def _cap_display_data(data: dict) -> dict:
 # In-sandbox kernel proxy. Kept as a string so it ships via `python -u -c <...>`
 # and we don't need to pre-upload anything to the Volume. The proxy owns the
 # jupyter_client lifecycle; Trainable never talks ZMQ across the network.
-KERNEL_PROXY_SCRIPT = r"""
+#
+# `__SDK_PREAMBLE_LITERAL__` is replaced at module import time (below) with a
+# repr()-safe Python string literal of the trainable SDK preamble. The proxy
+# sends it as a silent execute before any user cells, so `sys.modules['trainable']`
+# is registered in the ipykernel process just like it is in one-shot execute_code
+# scripts.
+_KERNEL_PROXY_SCRIPT_TEMPLATE = r"""
 import asyncio, json, sys, traceback
 from jupyter_client.manager import AsyncKernelManager
+
+_SDK_PREAMBLE = __SDK_PREAMBLE_LITERAL__
 
 def _emit(obj):
     sys.stdout.write(json.dumps(obj) + "\n")
@@ -94,6 +102,15 @@ async def main():
     except Exception as e:
         _emit({"type": "fatal", "error": f"kernel-not-ready: {e}"})
         return
+
+    # Register the `trainable` module in the kernel's sys.modules so cells can
+    # `from trainable import log, configure_dashboard`. Silent + no-history so
+    # it doesn't show up as cell input/output or bump execution counters.
+    try:
+        kc.execute(_SDK_PREAMBLE, silent=True, store_history=False)
+    except Exception as e:
+        _emit({"type": "warn", "error": f"preamble: {e}"})
+
     _emit({"type": "ready"})
 
     # Map jupyter msg_id -> our cell_id so we can route iopub messages.
@@ -200,6 +217,13 @@ async def main():
 
 asyncio.run(main())
 """
+
+# Materialize the proxy source with the SDK preamble embedded as a Python
+# string literal. repr() gives us correct escaping regardless of the
+# preamble's contents.
+KERNEL_PROXY_SCRIPT = _KERNEL_PROXY_SCRIPT_TEMPLATE.replace(
+    "__SDK_PREAMBLE_LITERAL__", repr(SDK_PREAMBLE)
+)
 
 
 @dataclass

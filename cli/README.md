@@ -11,13 +11,15 @@ pip install trainable-ai
 ## Usage
 
 ```bash
-mkdir trainable && cd trainable
 trainable init
 ```
 
+Config lives at `~/.trainable/`, so `trainable up` / `trainable down` work
+from any directory. Override the location with `TRAINABLE_HOME=...`.
+
 The wizard will:
 1. Check that Docker is installed
-2. Download the production Docker Compose file
+2. Download the production Docker Compose file to `~/.trainable/`
 3. Prompt for your API keys (Anthropic + Modal)
 4. Write a `.env` file
 5. Start the full stack
