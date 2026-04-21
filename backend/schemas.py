@@ -20,6 +20,11 @@ _UUID_MAX = 64
 _GPU_MAX = 32
 
 
+class SandboxConfig(BaseModel):
+    gpu: Optional[str] = Field(default=None, max_length=_GPU_MAX)
+    timeout: Optional[int] = Field(default=None, ge=10, le=7200)
+
+
 class ExperimentCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=_NAME_MAX)
     description: str = Field(default="", max_length=_DESC_MAX)
@@ -50,11 +55,13 @@ class ClarificationReply(BaseModel):
 class ProjectCreate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
+    sandbox_config: Optional[SandboxConfig] = None
 
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
+    sandbox_config: Optional[SandboxConfig] = None
 
 
 class ExperimentUpdate(BaseModel):

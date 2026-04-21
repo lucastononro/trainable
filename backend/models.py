@@ -35,6 +35,7 @@ class Project(Base):
     name = Column(String(255), nullable=False, default="New project")
     description = Column(Text, default="")
     created_at = Column(String, default=lambda: utcnow().isoformat())
+    sandbox_config = Column(JSON, default=dict)
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
     experiments = relationship(
@@ -49,6 +50,7 @@ class Project(Base):
             "id": self.id,
             "name": self.name,
             "description": self.description or "",
+            "sandbox_config": self.sandbox_config or {},
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "experiment_count": experiment_count,

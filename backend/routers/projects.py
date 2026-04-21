@@ -59,6 +59,7 @@ async def create_project(body: ProjectCreate, db: AsyncSession = Depends(get_db)
         id=project_id,
         name=body.name or "New project",
         description=body.description or "",
+        sandbox_config=body.sandbox_config.model_dump() if body.sandbox_config else {},
         created_at=now,
         updated_at=now,
     )
@@ -144,6 +145,8 @@ async def update_project(
         project.name = body.name
     if body.description is not None:
         project.description = body.description
+    if body.sandbox_config is not None:
+        project.sandbox_config = body.sandbox_config.model_dump()
     project.updated_at = _now()
 
     await db.commit()

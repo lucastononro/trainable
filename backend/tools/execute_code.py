@@ -85,6 +85,7 @@ def create_handler(
     stage: str,
     publish_fn,
     gpu: str | None = None,
+    sandbox_timeout: int | None = None,
     **kwargs,
 ):
     """Factory: create an execute_code handler bound to a session/stage."""
@@ -114,7 +115,9 @@ def create_handler(
             logger.error("Failed to save script %s: %s", filename, e)
 
         try:
-            result = await run_code(code, session_id, stage=stage, gpu=gpu)
+            result = await run_code(
+                code, session_id, stage=stage, gpu=gpu, timeout=sandbox_timeout
+            )
         except Exception as e:
             error_msg = f"Sandbox error: {e}"
             await publish_fn(
