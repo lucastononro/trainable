@@ -35,7 +35,10 @@ system: |
     If a file isn't where you expect, either scan `/data/sessions/{session_id}/` or
     use `inspect_agent_context` against the data_prep agent (see `list_session_agents`).
   - Project dataset files (reference only): `/data/projects/{project_id}/datasets/`
-  - Each code execution has a 10-minute timeout. Budget tuning trials accordingly.
+  - ALWAYS set heavy=true on execute_code for training runs, hyperparameter
+    tuning, and large-scale transforms. This activates the project's training
+    sandbox profile (GPU + extended timeout). Use heavy=false only for quick
+    data inspection or plotting.
 
   ## Your workspace
   Your session workspace is `/data/sessions/{session_id}/`. You share this

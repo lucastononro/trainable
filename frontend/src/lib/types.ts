@@ -1,6 +1,11 @@
-export interface SandboxConfig {
+export interface SandboxProfile {
   gpu?: string | null;
   timeout?: number | null;
+}
+
+export interface SandboxConfig {
+  default?: SandboxProfile | null;
+  training?: SandboxProfile | null;
 }
 
 export interface Project {

@@ -20,9 +20,14 @@ _UUID_MAX = 64
 _GPU_MAX = 32
 
 
-class SandboxConfig(BaseModel):
+class SandboxProfile(BaseModel):
     gpu: Optional[str] = Field(default=None, max_length=_GPU_MAX)
     timeout: Optional[int] = Field(default=None, ge=10, le=7200)
+
+
+class SandboxConfig(BaseModel):
+    default: Optional[SandboxProfile] = None
+    training: Optional[SandboxProfile] = None
 
 
 class ExperimentCreate(BaseModel):

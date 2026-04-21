@@ -13,11 +13,13 @@ import {
   Pencil,
   Check,
   AlertCircle,
+  Settings,
 } from 'lucide-react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
-import type { Experiment, Project } from '@/lib/types';
+import type { Experiment, Project, SandboxConfig } from '@/lib/types';
 import ConfirmModal from './ConfirmModal';
+import ProjectSettingsModal from './ProjectSettingsModal';
 
 function timeAgo(dateStr: string): string {
   const diff = Date.now() - new Date(dateStr).getTime();
@@ -249,6 +251,7 @@ function ProjectSection({
   startRenaming,
   onRenameDone,
   onRename,
+  onSettings,
   onDelete,
   onDrop,
   isDropTarget,
@@ -263,6 +266,7 @@ function ProjectSection({
   startRenaming: boolean;
   onRenameDone: () => void;
   onRename: (newName: string) => void;
+  onSettings: (e: React.MouseEvent) => void;
   onDelete: (e: React.MouseEvent) => void;
   onDrop: (e: React.DragEvent) => void;
   isDropTarget: boolean;
@@ -315,6 +319,13 @@ function ProjectSection({
           <Pencil className="w-3 h-3 text-gray-500" />
         </button>
         <button
+          onClick={onSettings}
+          className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
+          title="Project settings"
+        >
+          <Settings className="w-3 h-3 text-gray-500" />
+        </button>
+        <button
           onClick={onDelete}
           className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
           title="Delete project"
@@ -350,6 +361,7 @@ export default function Sidebar() {
   const [confirmTarget, setConfirmTarget] = useState<
     { kind: 'project'; id: string } | { kind: 'experiment'; id: string; name: string } | null
   >(null);
+  const [settingsProjectId, setSettingsProjectId] = useState<string | null>(null);
 
   // Expand the active project whenever it changes.
   useEffect(() => {
@@ -437,6 +449,18 @@ export default function Sidebar() {
     e.stopPropagation();
     setConfirmTarget({ kind: 'project', id: projectId });
   }, []);
+
+  const handleSaveSandboxConfig = useCallback(
+    async (projectId: string, config: SandboxConfig) => {
+      try {
+        await api.updateProject(projectId, { sandbox_config: config });
+        await refreshProjects();
+      } catch {
+        // silent
+      }
+    },
+    [refreshProjects],
+  );
 
   const confirmDeleteProject = useCallback(
     async (projectId: string) => {
@@ -618,6 +642,10 @@ export default function Sidebar() {
                     setActiveProject(project.id);
                   }}
                   onRename={(name) => handleRenameProject(project.id, name)}
+                  onSettings={(e) => {
+                    e.stopPropagation();
+                    setSettingsProjectId(project.id);
+                  }}
                   onDelete={(e) => handleDeleteProject(project.id, e)}
                   isDropTarget={dropTargetProjectId === project.id}
                   onDragOver={(e) => handleDragOver(e, project.id)}
@@ -668,6 +696,23 @@ export default function Sidebar() {
           else confirmDeleteExperiment(target.id);
         }}
       />
+
+      {(() => {
+        const settingsProject = settingsProjectId
+          ? projects.find((p) => p.id === settingsProjectId)
+          : null;
+        return (
+          <ProjectSettingsModal
+            isOpen={settingsProjectId !== null}
+            projectName={settingsProject?.name ?? ''}
+            sandboxConfig={settingsProject?.sandbox_config ?? {}}
+            onSave={(config) => {
+              if (settingsProjectId) handleSaveSandboxConfig(settingsProjectId, config);
+            }}
+            onClose={() => setSettingsProjectId(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
