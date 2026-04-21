@@ -23,33 +23,47 @@ AI-powered ML experimentation platform. Upload a dataset, and AI agents autonomo
 - **Storage**: S3/MinIO (artifacts) + Modal Volumes (workspace)
 - **Database**: SQLite (dev) / PostgreSQL (prod)
 
-## Prerequisites
+## Quick Start
+
+No clone or build needed — just Docker.
+
+```bash
+# 1. Grab the compose file and env template
+curl -sLO https://raw.githubusercontent.com/lucastononro/trainable/main/docker-compose.prod.yml
+curl -sLO https://raw.githubusercontent.com/lucastononro/trainable/main/.env.example
+
+# 2. Configure (set ANTHROPIC_API_KEY, MODAL_TOKEN_ID, MODAL_TOKEN_SECRET)
+cp .env.example .env
+
+# 3. Run
+docker compose -f docker-compose.prod.yml up
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+You'll need:
+- [Anthropic API key](https://console.anthropic.com/)
+- [Modal](https://modal.com/) account → get tokens from [modal.com/settings](https://modal.com/settings)
+
+## Development Setup
+
+<details>
+<summary>For contributors who want to build from source</summary>
+
+### Prerequisites
 
 - Python 3.11+
 - Node.js 20+
-- [Modal](https://modal.com/) account
-- [Anthropic API key](https://console.anthropic.com/)
-
-## Quick Start
 
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/lucastononro/trainable-monorepo.git
-cd trainable-monorepo
+git clone https://github.com/lucastononro/trainable.git
+cd trainable
 cp .env.example .env
 ```
 
-Edit `.env` and add your `ANTHROPIC_API_KEY`.
-
-### 2. Modal authentication
-
-```bash
-pip install modal
-modal token set
-```
-
-### 3. Backend
+### 2. Backend
 
 ```bash
 cd backend
@@ -58,7 +72,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
 
-### 4. Frontend
+### 3. Frontend
 
 ```bash
 cd frontend
@@ -66,16 +80,15 @@ npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+### Docker Compose (full stack, dev mode)
 
-## Docker Compose (full stack)
-
-Runs PostgreSQL, MinIO, backend, and frontend together:
+Runs PostgreSQL, MinIO, backend, and frontend with hot-reload:
 
 ```bash
-cp .env.example .env   # Add your ANTHROPIC_API_KEY
 docker compose up
 ```
+
+</details>
 
 This starts:
 - **Frontend**: http://localhost:3000
