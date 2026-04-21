@@ -9,7 +9,12 @@ description: |
   Save outputs to /data/sessions/{session_id}/{stage}/.
   Use os.makedirs(path, exist_ok=True) before saving.
   Print all results to stdout.
-  Each execution has a 10-minute timeout.
+  Each execution has a 10-minute timeout by default.
+
+  Set heavy=true for GPU-intensive workloads (model training,
+  hyperparameter tuning, large-scale data processing). This uses the
+  project's training sandbox profile which may have a GPU attached
+  and a longer timeout.
 
 input_schema:
   type: object
@@ -17,5 +22,13 @@ input_schema:
     code:
       type: string
       description: Python code to execute in the sandbox
+    heavy:
+      type: boolean
+      description: >
+        Set to true for heavy ML workloads (training, tuning, large
+        transforms). Uses the project's training sandbox profile with
+        GPU and extended timeout. Leave false for lightweight tasks
+        (EDA, plotting, data inspection).
+      default: false
   required:
     - code

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { Settings, X } from 'lucide-react';
-import type { SandboxConfig } from '@/lib/types';
+import type { SandboxConfig, SandboxProfile } from '@/lib/types';
 
 const GPU_OPTIONS = [
   { value: '', label: 'None (CPU only)' },
@@ -20,6 +20,60 @@ interface Props {
   onClose: () => void;
 }
 
+function ProfileSection({
+  label,
+  description,
+  gpu,
+  timeout,
+  defaultTimeout,
+  onGpuChange,
+  onTimeoutChange,
+}: {
+  label: string;
+  description: string;
+  gpu: string;
+  timeout: number;
+  defaultTimeout: number;
+  onGpuChange: (v: string) => void;
+  onTimeoutChange: (v: number) => void;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline gap-2 mb-2">
+        <h4 className="text-xs font-semibold text-gray-300">{label}</h4>
+        <span className="text-[11px] text-gray-600">{description}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <label className="text-[11px] text-gray-500">GPU</label>
+          <select
+            value={gpu}
+            onChange={(e) => onGpuChange(e.target.value)}
+            className="w-full px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-xs text-white focus:outline-none focus:border-blue-500/50 transition-colors"
+          >
+            {GPU_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value} className="bg-black">
+                {opt.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="space-y-1">
+          <label className="text-[11px] text-gray-500">Timeout (s)</label>
+          <input
+            type="number"
+            min={10}
+            max={7200}
+            value={timeout}
+            onChange={(e) => onTimeoutChange(Number(e.target.value))}
+            className="w-full px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-xs text-white focus:outline-none focus:border-blue-500/50 transition-colors"
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function ProjectSettingsModal({
   isOpen,
   projectName,
@@ -27,13 +81,19 @@ export default function ProjectSettingsModal({
   onSave,
   onClose,
 }: Props) {
-  const [gpu, setGpu] = useState(sandboxConfig.gpu || '');
-  const [timeout, setTimeout] = useState(sandboxConfig.timeout ?? 600);
+  const [defaultGpu, setDefaultGpu] = useState('');
+  const [defaultTimeout, setDefaultTimeout] = useState(600);
+  const [trainingGpu, setTrainingGpu] = useState('');
+  const [trainingTimeout, setTrainingTimeout] = useState(1800);
 
   useEffect(() => {
     if (isOpen) {
-      setGpu(sandboxConfig.gpu || '');
-      setTimeout(sandboxConfig.timeout ?? 600);
+      const d = sandboxConfig.default;
+      const t = sandboxConfig.training;
+      setDefaultGpu(d?.gpu || '');
+      setDefaultTimeout(d?.timeout ?? 600);
+      setTrainingGpu(t?.gpu || '');
+      setTrainingTimeout(t?.timeout ?? 1800);
     }
   }, [isOpen, sandboxConfig]);
 
@@ -48,10 +108,20 @@ export default function ProjectSettingsModal({
 
   if (!isOpen) return null;
 
+  const buildProfile = (gpu: string, timeout: number): SandboxProfile | null => {
+    const hasGpu = gpu !== '';
+    const hasTimeout = timeout > 0;
+    if (!hasGpu && !hasTimeout) return null;
+    return {
+      gpu: hasGpu ? gpu : null,
+      timeout: hasTimeout ? timeout : null,
+    };
+  };
+
   const handleSave = () => {
     onSave({
-      gpu: gpu || null,
-      timeout: timeout || null,
+      default: buildProfile(defaultGpu, defaultTimeout),
+      training: buildProfile(trainingGpu, trainingTimeout),
     });
     onClose();
   };
@@ -62,7 +132,7 @@ export default function ProjectSettingsModal({
       onClick={onClose}
     >
       <div
-        className="w-[480px] max-w-[92vw] bg-black border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden animate-scale-in"
+        className="w-[520px] max-w-[92vw] bg-black border border-white/[0.08] rounded-2xl shadow-2xl overflow-hidden animate-scale-in"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -83,47 +153,37 @@ export default function ProjectSettingsModal({
         </div>
 
         {/* Body */}
-        <div className="px-5 py-4 border-t border-white/[0.06] space-y-4">
-          <div>
-            <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider mb-3">
-              Modal Sandbox
-            </h3>
+        <div className="px-5 py-4 border-t border-white/[0.06] space-y-5">
+          <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
+            Modal Sandbox
+          </h3>
 
-            {/* GPU */}
-            <div className="space-y-1.5 mb-3">
-              <label className="text-xs text-gray-400">GPU</label>
-              <select
-                value={gpu}
-                onChange={(e) => setGpu(e.target.value)}
-                className="w-full px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-sm text-white focus:outline-none focus:border-blue-500/50 transition-colors"
-              >
-                {GPU_OPTIONS.map((opt) => (
-                  <option key={opt.value} value={opt.value} className="bg-black">
-                    {opt.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[11px] text-gray-600">
-                GPU attached to each code execution sandbox. Costs apply per second of use.
-              </p>
-            </div>
+          <ProfileSection
+            label="Default"
+            description="EDA, data prep, lightweight tasks"
+            gpu={defaultGpu}
+            timeout={defaultTimeout}
+            defaultTimeout={600}
+            onGpuChange={setDefaultGpu}
+            onTimeoutChange={setDefaultTimeout}
+          />
 
-            {/* Timeout */}
-            <div className="space-y-1.5">
-              <label className="text-xs text-gray-400">Timeout (seconds)</label>
-              <input
-                type="number"
-                min={10}
-                max={7200}
-                value={timeout}
-                onChange={(e) => setTimeout(Number(e.target.value))}
-                className="w-full px-3 py-2 rounded-lg bg-white/[0.04] border border-white/[0.08] text-sm text-white focus:outline-none focus:border-blue-500/50 transition-colors"
-              />
-              <p className="text-[11px] text-gray-600">
-                Max runtime per code execution. Default is 600s (10 min).
-              </p>
-            </div>
-          </div>
+          <div className="border-t border-white/[0.04]" />
+
+          <ProfileSection
+            label="Training"
+            description="Model training, tuning, heavy compute"
+            gpu={trainingGpu}
+            timeout={trainingTimeout}
+            defaultTimeout={1800}
+            onGpuChange={setTrainingGpu}
+            onTimeoutChange={setTrainingTimeout}
+          />
+
+          <p className="text-[11px] text-gray-600">
+            Agents automatically select the right profile. The training profile is used when{' '}
+            <code className="text-gray-500">heavy=true</code> is set on code execution.
+          </p>
         </div>
 
         {/* Footer */}

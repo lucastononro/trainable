@@ -130,12 +130,10 @@ async def send_message(
         agent_models = body.agent_models or {}
         mentions_payload = mention_dicts or None
 
-        # Per-project sandbox config (GPU, timeout, etc.)
+        # Per-project sandbox config (GPU, timeout per profile)
         sandbox_config = {}
         if session.experiment and session.experiment.project:
             sandbox_config = session.experiment.project.sandbox_config or {}
-        gpu = sandbox_config.get("gpu")
-        sandbox_timeout = sandbox_config.get("timeout")
 
         # Mark the session "running" eagerly so the sidebar spinner + the
         # restore-on-tab-switch path both see the live state. Completion /
@@ -152,8 +150,7 @@ async def send_message(
                     instructions=instructions,
                     dataset_ref=dataset_ref,
                     user_prompt=user_content,
-                    gpu=gpu,
-                    sandbox_timeout=sandbox_timeout,
+                    sandbox_config=sandbox_config,
                     model=selected_model,
                     agent_models=agent_models,
                     mentions=mentions_payload,

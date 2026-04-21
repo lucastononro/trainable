@@ -84,19 +84,27 @@ def create_handler(
     session_id: str,
     stage: str,
     publish_fn,
-    gpu: str | None = None,
-    sandbox_timeout: int | None = None,
+    sandbox_config: dict | None = None,
     **kwargs,
 ):
     """Factory: create an execute_code handler bound to a session/stage."""
 
+    _sandbox_config = sandbox_config or {}
+
     async def handler(args: dict):
         code = args.get("code", "") if isinstance(args, dict) else str(args)
+        heavy = args.get("heavy", False) if isinstance(args, dict) else False
+
+        # Pick the right sandbox profile based on heavy flag
+        profile_key = "training" if heavy else "default"
+        profile = _sandbox_config.get(profile_key) or {}
+        gpu = profile.get("gpu")
+        timeout = profile.get("timeout")
 
         await publish_fn(
             session_id,
             "tool_start",
-            {"tool": "execute_code", "input": {"code": code[:500]}},
+            {"tool": "execute_code", "input": {"code": code[:500], "heavy": heavy}},
             role="tool",
         )
 
@@ -116,7 +124,7 @@ def create_handler(
 
         try:
             result = await run_code(
-                code, session_id, stage=stage, gpu=gpu, timeout=sandbox_timeout
+                code, session_id, stage=stage, gpu=gpu, timeout=timeout
             )
         except Exception as e:
             error_msg = f"Sandbox error: {e}"
