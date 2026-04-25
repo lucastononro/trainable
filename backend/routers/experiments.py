@@ -18,6 +18,8 @@ from db import get_db
 from models import Experiment, Message, Project
 from models import Session as SessionModel
 from schemas import ExperimentUpdate
+from services.dataset_versions import list_for_project as list_dataset_versions
+from services.dataset_versions import record_upload as record_dataset_upload
 from services.s3_client import get_s3_client
 from services.volume import upload_to_volume
 
@@ -82,15 +84,51 @@ def _dataset_ref_for(project_id: str, uploaded: list[str]) -> str:
 @router.get("/experiments")
 async def list_experiments(
     project_id: str | None = None,
+    q: str | None = None,
+    tag: str | None = None,
+    pinned: bool | None = None,
+    archived: bool | None = None,
     db: AsyncSession = Depends(get_db),
 ):
+    """List experiments with optional filters.
+
+    `q` matches experiment name or description (case-insensitive substring).
+    `tag` filters to experiments whose tags array contains the value.
+    `pinned` / `archived` filter on those flags.
+    """
     query = select(Experiment).options(selectinload(Experiment.sessions))
     if project_id:
         query = query.where(Experiment.project_id == project_id)
-    query = query.order_by(Experiment.created_at.desc())
+    if pinned is not None:
+        query = query.where(Experiment.pinned == bool(pinned))
+    if archived is None:
+        # By default, hide archived experiments unless explicitly requested.
+        query = query.where((Experiment.archived == False) | (Experiment.archived.is_(None)))  # noqa: E712
+    elif archived is True:
+        query = query.where(Experiment.archived == True)  # noqa: E712
+    if q:
+        like = f"%{q.lower()}%"
+        from sqlalchemy import func, or_
+
+        query = query.where(
+            or_(
+                func.lower(Experiment.name).like(like),
+                func.lower(Experiment.description).like(like),
+            )
+        )
+    query = query.order_by(Experiment.pinned.desc(), Experiment.created_at.desc())
     result = await db.execute(query)
     experiments = result.scalars().all()
-    return [e.to_dict(sessions=e.sessions) for e in experiments]
+    rows = [e.to_dict(sessions=e.sessions) for e in experiments]
+    if tag:
+        tag_lc = tag.strip().lower()
+        rows = [r for r in rows if tag_lc in (r.get("tags") or [])]
+    return rows
+
+
+@router.get("/projects/{project_id}/dataset-versions")
+async def project_dataset_versions(project_id: str):
+    return await list_dataset_versions(project_id)
 
 
 @router.post("/experiments")
@@ -148,6 +186,17 @@ async def create_experiment(
 
         uploaded_files.append(f"s3://datasets/{key}")
         logger.info(f"Uploaded {rel_path} ({len(content)} bytes) → S3 + Modal Volume")
+
+        # Record content hash for dataset versioning. Failures here must not
+        # block the upload — versioning is observability, not a gate.
+        try:
+            await record_dataset_upload(
+                project_id=project_id,
+                path=_dataset_volume_path(project_id, rel_path),
+                content=content,
+            )
+        except Exception as e:
+            logger.warning("dataset_versions.record_upload failed: %s", e)
 
     dataset_ref = _dataset_ref_for(project_id, uploaded_files)
     now = _now()
@@ -495,6 +544,21 @@ async def update_experiment(
         experiment.description = body.description
     if body.instructions is not None:
         experiment.instructions = body.instructions
+    if body.tags is not None:
+        # Normalize: dedupe + lower-case + strip + ≤24-char tags
+        seen = set()
+        cleaned = []
+        for t in body.tags:
+            tag = (t or "").strip().lower()
+            if not tag or len(tag) > 24 or tag in seen:
+                continue
+            seen.add(tag)
+            cleaned.append(tag)
+        experiment.tags = cleaned
+    if body.pinned is not None:
+        experiment.pinned = bool(body.pinned)
+    if body.archived is not None:
+        experiment.archived = bool(body.archived)
     if body.project_id is not None and body.project_id != experiment.project_id:
         await _require_project(db, body.project_id)
         experiment.project_id = body.project_id

@@ -15,6 +15,8 @@ tools:
   - name: request_clarification
   - name: inspect_agent_context
   - name: list_session_agents
+  - name: list_available_skills
+  - name: use_skill
 
 subagents:
   - reviewer

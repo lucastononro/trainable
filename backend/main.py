@@ -9,16 +9,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db import init_db
 from errors import generic_exception_handler
+from observability import init_telemetry
 from routers import (
+    compare,
     data_explorer,
     experiments,
     files,
     models,
     notebook,
     projects,
+    registry,
     s3_browser,
     sessions,
+    skills as skills_router,
+    snapshots,
     stream,
+    usage,
 )
 from services.kernel_manager import kernel_manager
 from services.s3_client import get_s3_client
@@ -58,6 +64,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Trainable v2", lifespan=lifespan)
+# Init telemetry before middleware/routes so FastAPI auto-instrumentation
+# captures every request span. Safe when OTEL_EXPORTER_OTLP_ENDPOINT is unset
+# — exporter is a no-op in that case.
+init_telemetry(app)
 app.add_exception_handler(Exception, generic_exception_handler)
 
 app.add_middleware(
@@ -77,6 +87,11 @@ app.include_router(files.router, prefix="/api")
 app.include_router(data_explorer.router, prefix="/api")
 app.include_router(models.router, prefix="/api")
 app.include_router(notebook.router, prefix="/api")
+app.include_router(usage.router, prefix="/api")
+app.include_router(skills_router.router, prefix="/api")
+app.include_router(registry.router, prefix="/api")
+app.include_router(compare.router, prefix="/api")
+app.include_router(snapshots.router, prefix="/api")
 
 
 @app.get("/api/health")

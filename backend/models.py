@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from db import Base
@@ -71,6 +71,9 @@ class Experiment(Base):
     description = Column(Text, default="")
     dataset_ref = Column(String(512), nullable=False)
     instructions = Column(Text, default="")
+    tags = Column(JSON, default=list)
+    pinned = Column(Boolean, default=False)
+    archived = Column(Boolean, default=False)
     created_at = Column(String, default=lambda: utcnow().isoformat())
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
@@ -94,6 +97,9 @@ class Experiment(Base):
             "description": self.description or "",
             "dataset_ref": self.dataset_ref,
             "instructions": self.instructions or "",
+            "tags": self.tags or [],
+            "pinned": bool(self.pinned),
+            "archived": bool(self.archived),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "latest_session_id": latest_session.id if latest_session else None,
@@ -110,6 +116,7 @@ class Session(Base):
     )
     state = Column(String(50), default=SessionState.CREATED.value)
     model = Column(String(100), default=None)
+    dataset_version_id = Column(Integer, nullable=True, index=True)
     created_at = Column(String, default=lambda: utcnow().isoformat())
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
@@ -136,6 +143,7 @@ class Session(Base):
             "experiment_id": self.experiment_id,
             "state": self.state,
             "model": self.model,
+            "dataset_version_id": self.dataset_version_id,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }
@@ -269,5 +277,199 @@ class Metric(Base):
             "value": self.value,
             "stage": self.stage,
             "run_tag": self.run_tag,
+            "created_at": self.created_at,
+        }
+
+
+class RegisteredModel(Base):
+    """A model promoted out of a session into the project-level registry.
+
+    The pickle/artifact stays on the volume — we copy it to a stable path
+    and pin (project_id, name, version) so the artifact survives session
+    cleanup and is addressable from the deployment layer.
+    """
+
+    __tablename__ = "registered_models"
+
+    id = Column(String(36), primary_key=True)
+    project_id = Column(
+        String(36), ForeignKey("projects.id"), nullable=False, index=True
+    )
+    name = Column(String(255), nullable=False)
+    version = Column(Integer, nullable=False, default=1)
+    source_session_id = Column(String(36), nullable=False, index=True)
+    artifact_uri = Column(String(512), nullable=False)
+    artifact_size_bytes = Column(Integer, default=0)
+    metrics_summary = Column(JSON, default=dict)
+    framework = Column(String(50), nullable=True)
+    status = Column(String(20), default="ready")
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "name": self.name,
+            "version": self.version,
+            "source_session_id": self.source_session_id,
+            "artifact_uri": self.artifact_uri,
+            "artifact_size_bytes": self.artifact_size_bytes or 0,
+            "metrics_summary": self.metrics_summary or {},
+            "framework": self.framework,
+            "status": self.status,
+            "created_at": self.created_at,
+        }
+
+
+class Deployment(Base):
+    """A live or attempted Modal endpoint serving a registered model."""
+
+    __tablename__ = "deployments"
+
+    id = Column(String(36), primary_key=True)
+    model_id = Column(
+        String(36), ForeignKey("registered_models.id"), nullable=False, index=True
+    )
+    endpoint_url = Column(String(512), nullable=True)
+    status = Column(String(20), default="pending")
+    error = Column(Text, nullable=True)
+    modal_app = Column(String(255), nullable=True)
+    modal_function = Column(String(255), nullable=True)
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+    updated_at = Column(String, default=lambda: utcnow().isoformat())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "model_id": self.model_id,
+            "endpoint_url": self.endpoint_url,
+            "status": self.status,
+            "error": self.error,
+            "modal_app": self.modal_app,
+            "modal_function": self.modal_function,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
+        }
+
+
+class RunSnapshot(Base):
+    """Reproducibility manifest captured after a training session completes.
+
+    Hashes splits + script files, captures pip freeze, and freezes the
+    final hyperparams used. The manifest_uri points to a .json file on the
+    volume that mirrors the in-DB summary.
+    """
+
+    __tablename__ = "run_snapshots"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True, unique=True
+    )
+    dataset_hash = Column(String(64), nullable=True)
+    code_hash = Column(String(64), nullable=True)
+    hyperparams = Column(JSON, default=dict)
+    env_lockfile = Column(Text, nullable=True)
+    manifest_uri = Column(String(512), nullable=True)
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "dataset_hash": self.dataset_hash,
+            "code_hash": self.code_hash,
+            "hyperparams": self.hyperparams or {},
+            "env_lockfile_size": len(self.env_lockfile) if self.env_lockfile else 0,
+            "manifest_uri": self.manifest_uri,
+            "created_at": self.created_at,
+        }
+
+
+class DatasetVersion(Base):
+    """Content-addressed snapshot of an uploaded dataset file.
+
+    Multiple uploads of the same content collapse onto a single hash; an
+    edited re-upload becomes a new version with `parent_hash` linking back.
+    """
+
+    __tablename__ = "dataset_versions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    project_id = Column(
+        String(36), ForeignKey("projects.id"), nullable=False, index=True
+    )
+    hash = Column(String(64), nullable=False, index=True)
+    path = Column(String(512), nullable=False)
+    size_bytes = Column(Integer, default=0)
+    parent_hash = Column(String(64), nullable=True)
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "project_id": self.project_id,
+            "hash": self.hash,
+            "path": self.path,
+            "size_bytes": self.size_bytes or 0,
+            "parent_hash": self.parent_hash,
+            "created_at": self.created_at,
+        }
+
+
+class UsageEvent(Base):
+    """One row per LLM call or sandbox execution. The unit of cost accounting.
+
+    `kind` discriminates: 'llm' rows have token fields populated, 'sandbox'
+    rows have wall-time + gpu fields. Cost is precomputed at insert time so
+    rollups don't need to know per-model pricing tables.
+    """
+
+    __tablename__ = "usage_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+    )
+    project_id = Column(String(36), index=True, nullable=True)
+    kind = Column(String(20), nullable=False, default="llm")
+    agent_type = Column(String(50), nullable=True)
+    agent_id = Column(String(100), nullable=True)
+
+    provider = Column(String(50), nullable=True)
+    model = Column(String(100), nullable=True)
+
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    cache_read_input_tokens = Column(Integer, default=0)
+    cache_creation_input_tokens = Column(Integer, default=0)
+
+    sandbox_seconds = Column(Float, default=0.0)
+    gpu_type = Column(String(50), nullable=True)
+
+    cost_usd = Column(Float, default=0.0)
+    is_error = Column(Boolean, default=False)
+    extra = Column(JSON, default=dict)
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "project_id": self.project_id,
+            "kind": self.kind,
+            "agent_type": self.agent_type,
+            "agent_id": self.agent_id,
+            "provider": self.provider,
+            "model": self.model,
+            "input_tokens": self.input_tokens or 0,
+            "output_tokens": self.output_tokens or 0,
+            "cache_read_input_tokens": self.cache_read_input_tokens or 0,
+            "cache_creation_input_tokens": self.cache_creation_input_tokens or 0,
+            "sandbox_seconds": self.sandbox_seconds or 0.0,
+            "gpu_type": self.gpu_type,
+            "cost_usd": self.cost_usd or 0.0,
+            "is_error": bool(self.is_error),
+            "extra": self.extra or {},
             "created_at": self.created_at,
         }

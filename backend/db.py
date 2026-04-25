@@ -151,9 +151,37 @@ def _run_migrations(connection):
     # create_all already built them, and fills the gap on DBs upgraded
     # from the pre-index schema.
     # ------------------------------------------------------------------
+    # Add tags / pinned / archived to experiments if missing
+    if insp.has_table("experiments"):
+        ecols = [c["name"] for c in insp.get_columns("experiments")]
+        if "tags" not in ecols:
+            connection.execute(text("ALTER TABLE experiments ADD COLUMN tags JSON"))
+            logger.info("[DB] Added tags column to experiments")
+        if "pinned" not in ecols:
+            # SQLite has no real BOOLEAN; INTEGER 0/1 works on both backends.
+            connection.execute(
+                text("ALTER TABLE experiments ADD COLUMN pinned BOOLEAN DEFAULT 0")
+            )
+            logger.info("[DB] Added pinned column to experiments")
+        if "archived" not in ecols:
+            connection.execute(
+                text("ALTER TABLE experiments ADD COLUMN archived BOOLEAN DEFAULT 0")
+            )
+            logger.info("[DB] Added archived column to experiments")
+
+    # Add dataset_version_id to sessions if missing
+    if insp.has_table("sessions"):
+        scols = [c["name"] for c in insp.get_columns("sessions")]
+        if "dataset_version_id" not in scols:
+            connection.execute(
+                text("ALTER TABLE sessions ADD COLUMN dataset_version_id INTEGER")
+            )
+            logger.info("[DB] Added dataset_version_id column to sessions")
+
     indexes = [
         ("ix_experiments_project_id", "experiments", "project_id"),
         ("ix_sessions_experiment_id", "sessions", "experiment_id"),
+        ("ix_sessions_dataset_version_id", "sessions", "dataset_version_id"),
         ("ix_messages_session_id", "messages", "session_id"),
         ("ix_artifacts_session_id", "artifacts", "session_id"),
         ("ix_metrics_session_id", "metrics", "session_id"),
@@ -167,6 +195,14 @@ def _run_migrations(connection):
             "processed_dataset_meta",
             "experiment_id",
         ),
+        ("ix_usage_events_session_id", "usage_events", "session_id"),
+        ("ix_usage_events_project_id", "usage_events", "project_id"),
+        ("ix_registered_models_project_id", "registered_models", "project_id"),
+        ("ix_registered_models_source_session", "registered_models", "source_session_id"),
+        ("ix_deployments_model_id", "deployments", "model_id"),
+        ("ix_run_snapshots_session_id", "run_snapshots", "session_id"),
+        ("ix_dataset_versions_project_id", "dataset_versions", "project_id"),
+        ("ix_dataset_versions_hash", "dataset_versions", "hash"),
     ]
     for idx_name, table, column in indexes:
         if insp.has_table(table):
@@ -181,12 +217,17 @@ def _run_migrations(connection):
 async def init_db():
     from models import (  # noqa: F401
         Artifact,
+        DatasetVersion,
+        Deployment,
         Experiment,
         Message,
         Metric,
         ProcessedDatasetMeta,
         Project,
+        RegisteredModel,
+        RunSnapshot,
         Session,
+        UsageEvent,
     )
 
     async with engine.begin() as conn:

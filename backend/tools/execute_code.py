@@ -85,11 +85,15 @@ def create_handler(
     stage: str,
     publish_fn,
     sandbox_config: dict | None = None,
+    parent_agent_type: str | None = None,
+    parent_agent_id: str | None = None,
     **kwargs,
 ):
     """Factory: create an execute_code handler bound to a session/stage."""
 
     _sandbox_config = sandbox_config or {}
+    _agent_type = parent_agent_type or stage
+    _agent_id = parent_agent_id or "root"
 
     async def handler(args: dict):
         code = args.get("code", "") if isinstance(args, dict) else str(args)
@@ -124,7 +128,13 @@ def create_handler(
 
         try:
             result = await run_code(
-                code, session_id, stage=stage, gpu=gpu, timeout=timeout
+                code,
+                session_id,
+                stage=stage,
+                gpu=gpu,
+                timeout=timeout,
+                agent_type=_agent_type,
+                agent_id=_agent_id,
             )
         except Exception as e:
             error_msg = f"Sandbox error: {e}"

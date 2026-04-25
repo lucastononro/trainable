@@ -63,5 +63,19 @@ class Settings(BaseSettings):
     # -- Logging --
     log_level: str = "INFO"
 
+    # -- Observability (OpenTelemetry + Sentry) --
+    # All optional. When unset, telemetry init is a no-op.
+    otel_service_name: str = "trainable-backend"
+    otel_service_version: str = "0.1.0"
+    otel_exporter_otlp_endpoint: Optional[str] = None
+    # "grpc" (default OTLP/gRPC port 4317) or "http/protobuf" (port 4318)
+    otel_exporter_otlp_protocol: str = "grpc"
+    otel_resource_attributes: Optional[str] = None  # comma-separated k=v pairs
+    otel_traces_sampler_ratio: float = 1.0  # 0.0 to 1.0 — fraction sampled
+
+    sentry_dsn: Optional[str] = None
+    sentry_environment: Optional[str] = None
+    sentry_traces_sample_rate: float = 0.1
+
 
 settings = Settings()
