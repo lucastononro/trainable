@@ -91,6 +91,7 @@ def get_image():
                 "statsmodels",
                 "ipykernel",
                 "jupyter_client",
+                "pypdf",
             )
             .pip_install(
                 "torch",

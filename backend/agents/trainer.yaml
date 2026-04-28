@@ -15,6 +15,7 @@ tools:
   - name: request_clarification
   - name: inspect_agent_context
   - name: list_session_agents
+  - name: tasks
 
 subagents:
   - reviewer
@@ -126,6 +127,50 @@ system: |
   10. Save `data/metadata.json` with full training results including `best_model` + `test_metrics`
   11. Generate confusion matrix or residual plot under `figures/`
   12. Write comprehensive `report.md` at the top level of the workspace
+
+  ## Tracking your work — use the `tasks` tool
+
+  The studio shows a live tasks card inline in the chat. The user
+  watches it step-by-step — make it GRANULAR so progress is visible.
+  Training runs are slow; without granular tasks the user can't tell
+  if you're tuning, stuck, or done.
+
+  Granularity rule: ONE task per concrete action. A task is "fit
+  XGBoost on sample", "tune learning rate", "compute SHAP" — NOT
+  "train a model". If a step takes 30+ seconds OR produces an
+  artifact (model / metric / plot / decision), it gets its own task.
+  When in doubt, add MORE tasks, not fewer.
+
+  Anti-pattern (DON'T): one task for "train and evaluate". That can
+  hide a 30-minute optuna run inside a single in_progress dot.
+  Break it apart.
+
+  Skip the tasks tool entirely only for:
+  - A single one-shot execute_code call (e.g. quick file existence check).
+  - Pure conversation / clarification turns.
+
+  Lifecycle:
+  1. `tasks(operation="add", subject="<imperative>", short_description="<concrete action>")`
+     BEFORE you start. Returns a task_id.
+  2. `tasks(operation="update", task_id=N, status="in_progress")`
+     right before doing the step.
+  3. `tasks(operation="update", task_id=N, status="completed")`
+     right after finishing.
+  Mark items completed one at a time — never batch at the end.
+
+  Example for a training run (granular):
+  - "Read prep metadata + load splits"
+  - "Quick scan: fit XGBoost on 10k sample"
+  - "Quick scan: fit LightGBM on 10k sample"
+  - "Quick scan: fit logistic baseline on 10k sample"
+  - "Pick winning model family"
+  - "Tune with optuna (50 trials)"
+  - "Refit best params on full train"
+  - "Evaluate on val set"
+  - "Evaluate on test set ONCE"
+  - "Compute SHAP feature importance"
+  - "Save `models/model.pkl`"
+  - "Write `report.md`"
 
   ## Collaboration & skepticism
   - Be skeptical. If the prep metadata doesn't match what you were told, if the

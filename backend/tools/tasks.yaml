@@ -1,0 +1,69 @@
+name: tasks
+description: |
+  Track multi-step work as a live checklist visible to the user in the
+  studio's Plan tab. Modeled on Claude Code's TaskCreate / TaskUpdate /
+  TaskList — same intent, same lifecycle.
+
+  When to use it:
+  - The work has 3+ distinct steps OR you're delegating to multiple sub-agents.
+  - The user gave a multi-part request ("do X, then Y, then Z").
+  - You want the user to see progress at a glance instead of reading chat scrollback.
+
+  When NOT to use it:
+  - Single-step or trivial tasks — just do them.
+  - Pure conversation / Q&A / explanations.
+
+  Workflow:
+  1. At the start of multi-step work, call `add` once per intended step.
+  2. Right BEFORE you start work on a step, call `update` with status="in_progress".
+  3. Right AFTER you finish a step, call `update` with status="completed".
+  4. Mark steps completed one at a time — never batch-complete at the end.
+  5. If the plan changes, `add` new steps; don't rewrite history.
+
+  Operations:
+  - add: Create a new task. Returns the task id (use it in subsequent `update` calls).
+  - update: Change a task's status, subject, active_form, or description.
+  - list: Return the current session's full task list (rarely needed —
+    the user already sees this in the Plan tab).
+
+input_schema:
+  type: object
+  properties:
+    operation:
+      type: string
+      enum: [add, update, list]
+      description: Operation to execute.
+    subject:
+      type: string
+      description: >
+        Brief, imperative-form title (e.g. "Profile the dataset", "Train
+        XGBoost baseline"). Required for `add`. Optional for `update`
+        (only needed if you want to rename a task).
+    active_form:
+      type: string
+      description: >
+        Present-continuous form shown while the task is in_progress
+        (e.g. "Profiling the dataset", "Training XGBoost baseline").
+        Optional for `add` and `update`. If omitted, `subject` is shown.
+    short_description:
+      type: string
+      description: >
+        One-line summary shown next to the task title in the Tasks tab.
+        Optional. Examples: "Quick scan w/ default params on a 10k
+        sample", "Stratified 80/10/10 split on `target`".
+    description:
+      type: string
+      description: >
+        Long-form description / notes / acceptance criteria. Optional.
+        Surfaced in the expanded view of a task in the Tasks tab.
+        Use this for context that helps a future agent (or yourself)
+        understand what this task actually entails.
+    task_id:
+      type: integer
+      description: Required for `update`. Returned by `add`.
+    status:
+      type: string
+      enum: [pending, in_progress, completed]
+      description: New status. Optional for `update`.
+  required:
+    - operation

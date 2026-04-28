@@ -123,6 +123,9 @@ class Session(Base):
     metrics = relationship(
         "Metric", back_populates="session", cascade="all, delete-orphan"
     )
+    tasks = relationship(
+        "Task", back_populates="session", cascade="all, delete-orphan"
+    )
     processed_meta = relationship(
         "ProcessedDatasetMeta",
         back_populates="session",
@@ -243,6 +246,37 @@ class ProcessedDatasetMeta(Base):
             "s3_synced": self.s3_synced,
             "s3_prefix": self.s3_prefix,
             "created_at": self.created_at,
+        }
+
+
+class Task(Base):
+    __tablename__ = "tasks"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+    )
+    subject = Column(String(255), nullable=False)
+    active_form = Column(String(255), default=None)
+    short_description = Column(Text, default="")
+    description = Column(Text, default="")
+    status = Column(String(20), default="pending")
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+    updated_at = Column(String, default=lambda: utcnow().isoformat())
+
+    session = relationship("Session", back_populates="tasks")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "subject": self.subject,
+            "active_form": self.active_form,
+            "short_description": self.short_description or "",
+            "description": self.description or "",
+            "status": self.status,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 

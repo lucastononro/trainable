@@ -1,0 +1,33 @@
+name: web_search
+description: |
+  Search the open web. Use this for anything that isn't a paper:
+  - blog posts and tutorials
+  - GitHub repos / framework docs
+  - dataset homepages, license pages, government open-data portals
+  - news / "what's the current SOTA on X" style queries
+
+  Backends (auto-selected, no agent action needed):
+  - Tavily        — if TAVILY_API_KEY is set on the backend
+  - Brave Search  — if BRAVE_API_KEY is set
+  - DuckDuckGo    — fallback, no key required
+
+  Returns a ranked list of {title, url, snippet, source}. The studio
+  shows a rich preview card panel as soon as results land — the user
+  can click through to any source.
+
+  When NOT to use this:
+  - Paper discovery → use `papers_search` (arxiv + Semantic Scholar)
+  - Reading a known arxiv paper → use `papers_search(operation="read_paper", ...)`
+  - HF Hub model/dataset lookup → call the Hub API directly via execute_code
+
+input_schema:
+  type: object
+  properties:
+    query:
+      type: string
+      description: Free-text search query.
+    limit:
+      type: integer
+      description: Max results to return (default 8, max 25).
+  required:
+    - query

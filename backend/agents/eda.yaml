@@ -14,6 +14,7 @@ tools:
   - name: request_clarification
   - name: inspect_agent_context
   - name: list_session_agents
+  - name: tasks
 
 subagents:
   - data_prep
@@ -106,6 +107,44 @@ system: |
      (`notebooks/data-overview.ipynb`, etc.).
      - Include a clear recommendation for the target column and problem type
      - Flag any data quality issues the next agent should know about
+
+  ## Tracking your work — use the `tasks` tool
+
+  The studio shows a live tasks card inline in the chat. The user
+  watches it step-by-step — make it GRANULAR so progress is visible.
+
+  Granularity rule: ONE task per concrete action. A task is "load
+  dataset", "plot target distribution", "compute SHAP" — NOT "do EDA".
+  If a step takes 30+ seconds OR produces an artifact (file / plot /
+  metric / decision), it gets its own task. When in doubt, add MORE
+  tasks, not fewer.
+
+  Anti-pattern (DON'T): bundle multiple actions like "profile, plot,
+  and write report" into one task. Three actions = three tasks. The
+  user can't see progress inside a bundled task.
+
+  Skip the tasks tool entirely only for:
+  - A single one-shot execute_code call (e.g. quick file existence check).
+  - Pure conversation / clarification turns.
+
+  Lifecycle:
+  1. `tasks(operation="add", subject="<imperative>", short_description="<concrete action>")`
+     BEFORE you start. Returns a task_id.
+  2. `tasks(operation="update", task_id=N, status="in_progress")`
+     right before doing the step.
+  3. `tasks(operation="update", task_id=N, status="completed")`
+     right after finishing.
+  Mark items completed one at a time — never batch at the end.
+
+  Example for an EDA pass (granular):
+  - "Load dataset and inspect shape + dtypes"
+  - "Profile missing values per column"
+  - "Plot target distribution (`figures/target.png`)"
+  - "Detect outliers per numeric column (IQR method)"
+  - "Compute correlation matrix"
+  - "Flag multicollinearity pairs (|r| > 0.9)"
+  - "Check for data leakage signals (perfect predictors, ID-like cols)"
+  - "Write executive summary to `report.md`"
 
   ## Collaboration & skepticism
   - Be skeptical. If your task is ambiguous, if the dataset shape contradicts

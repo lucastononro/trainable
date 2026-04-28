@@ -14,9 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import async_session, get_db
-from models import Artifact, Experiment, Message, Metric
+from models import Artifact, Experiment, Message, Metric, Task
 from models import Session as SessionModel
-from schemas import ClarificationReply, MessageCreate
+from schemas import ClarificationReply, MessageCreate, TaskCreate, TaskUpdate
 from services.agent import abort_agent, run_agent
 from services.agent.tasks import is_agent_running, register_task
 from services.broadcaster import broadcaster
@@ -269,3 +269,93 @@ async def get_metrics(
     q = q.order_by(Metric.step)
     result = await db.execute(q)
     return [m.to_dict() for m in result.scalars().all()]
+
+
+@router.get("/sessions/{session_id}/tasks")
+async def get_tasks(session_id: str, db: AsyncSession = Depends(get_db)):
+    """Return the session's task list. Used by the frontend Tasks tab to
+    hydrate on initial page load — SSE picks up new task_created /
+    task_updated events from there."""
+    result = await db.execute(
+        select(Task).where(Task.session_id == session_id).order_by(Task.id)
+    )
+    return [t.to_dict() for t in result.scalars().all()]
+
+
+@router.post("/sessions/{session_id}/tasks")
+async def create_task(
+    session_id: str,
+    body: TaskCreate,
+    db: AsyncSession = Depends(get_db),
+):
+    """User-initiated task creation from the Tasks tab UI. Mirrors the
+    `tasks` MCP tool's `add` operation but bypasses the agent — this is
+    for the user to add their own todos."""
+    # Sanity-check the session exists.
+    sess = await db.get(SessionModel, session_id)
+    if sess is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    t = Task(
+        session_id=session_id,
+        subject=body.subject.strip(),
+        active_form=body.active_form,
+        short_description=body.short_description,
+        description=body.description,
+        status=body.status,
+    )
+    db.add(t)
+    await db.commit()
+    await db.refresh(t)
+    payload = t.to_dict()
+    await broadcaster.publish(session_id, {"type": "task_created", "data": payload})
+    return payload
+
+
+@router.patch("/sessions/{session_id}/tasks/{task_id}")
+async def update_task(
+    session_id: str,
+    task_id: int,
+    body: TaskUpdate,
+    db: AsyncSession = Depends(get_db),
+):
+    """User-initiated task edit from the Tasks tab UI."""
+    t = await db.get(Task, task_id)
+    if t is None or t.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if body.subject is not None:
+        t.subject = body.subject.strip()
+    if body.short_description is not None:
+        t.short_description = body.short_description
+    if body.description is not None:
+        t.description = body.description
+    if body.active_form is not None:
+        t.active_form = body.active_form or None
+    if body.status is not None:
+        t.status = body.status
+    from datetime import datetime, timezone
+    t.updated_at = datetime.now(timezone.utc).isoformat()
+    await db.commit()
+    await db.refresh(t)
+    payload = t.to_dict()
+    await broadcaster.publish(session_id, {"type": "task_updated", "data": payload})
+    return payload
+
+
+@router.delete("/sessions/{session_id}/tasks/{task_id}")
+async def delete_task(
+    session_id: str,
+    task_id: int,
+    db: AsyncSession = Depends(get_db),
+):
+    """User-initiated task deletion from the Tasks tab UI."""
+    t = await db.get(Task, task_id)
+    if t is None or t.session_id != session_id:
+        raise HTTPException(status_code=404, detail="Task not found")
+    await db.delete(t)
+    await db.commit()
+    await broadcaster.publish(
+        session_id, {"type": "task_deleted", "data": {"id": task_id}}
+    )
+    return {"status": "deleted", "id": task_id}

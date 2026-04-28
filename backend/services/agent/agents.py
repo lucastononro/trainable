@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -13,7 +12,9 @@ logger = logging.getLogger(__name__)
 _AGENTS_DIR = Path(__file__).parent.parent.parent / "agents"
 
 
-@lru_cache(maxsize=None)
+# Intentionally NOT cached — agent YAML edits should hot-reload without
+# restarting the backend. Files are tiny and the OS page cache handles
+# repeat reads cheaply.
 def _load_agent_yaml(agent_type: str) -> dict:
     """Load a single agent YAML file."""
     path = _AGENTS_DIR / f"{agent_type}.yaml"
@@ -144,9 +145,10 @@ def can_delegate(agent_type: str, current_depth: int) -> bool:
 _TOOLS_DIR = Path(__file__).parent.parent.parent / "tools"
 
 
-@lru_cache(maxsize=None)
 def _load_tool_yaml(tool_name: str) -> dict:
-    """Load a tool's default YAML definition."""
+    """Load a tool's default YAML definition.
+
+    Not cached — see comment on _load_agent_yaml above; same reasoning."""
     path = _TOOLS_DIR / f"{tool_name}.yaml"
     if not path.exists():
         return {"name": tool_name, "description": tool_name, "input_schema": {}}

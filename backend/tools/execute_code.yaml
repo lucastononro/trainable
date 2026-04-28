@@ -3,7 +3,7 @@ description: |
   Execute Python code in an isolated Modal sandbox.
   Pre-installed: pandas, numpy, matplotlib, seaborn, scikit-learn,
   xgboost, lightgbm, pyarrow, openpyxl, duckdb, imbalanced-learn,
-  optuna, category_encoders, pandera, shap, statsmodels,
+  optuna, category_encoders, pandera, shap, statsmodels, pypdf,
   torch, torchvision, torchaudio, tensorflow.
   Dataset files at /data/datasets/{experiment_id}/.
   Save outputs to /data/sessions/{session_id}/{stage}/.

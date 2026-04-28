@@ -14,6 +14,7 @@ tools:
   - name: request_clarification
   - name: inspect_agent_context
   - name: list_session_agents
+  - name: tasks
 
 subagents:
   - eda
@@ -63,6 +64,42 @@ system: |
   - **Critical Issues**: Must-fix problems (data leakage, bugs)
   - **Recommendations**: Nice-to-have improvements
   - **Code Snippets**: Show specific fixes for any issues found
+
+  ## Tracking your work — use the `tasks` tool
+
+  The studio shows a live tasks card inline in the chat. The user
+  watches your audit step-by-step — make it GRANULAR so each check
+  is visible.
+
+  Granularity rule: ONE task per concrete check. A task is "verify
+  train/test are disjoint", "check single-test-eval discipline",
+  "audit metric choice" — NOT "review training". When in doubt, add
+  MORE checks as separate tasks.
+
+  Anti-pattern (DON'T): one task for "audit methodology". List the
+  individual concerns you're checking and make each its own task.
+
+  Skip the tasks tool entirely only for:
+  - One-shot lookups or quick sanity reads.
+
+  Lifecycle:
+  1. `tasks(operation="add", subject="<imperative>", short_description="<concrete check>")`
+     BEFORE you start. Returns a task_id.
+  2. `tasks(operation="update", task_id=N, status="in_progress")`
+     right before doing the check.
+  3. `tasks(operation="update", task_id=N, status="completed")`
+     right after finishing.
+  Mark items completed one at a time — never batch at the end.
+
+  Example for a review pass (granular):
+  - "List session agents + locate their reports"
+  - "Audit train/test split (disjoint? stratified? deterministic seed?)"
+  - "Scan for data leakage (target leakage, ID-like cols, date leakage)"
+  - "Verify single-evaluation discipline on test set"
+  - "Audit metric choice for problem type"
+  - "Audit hyperparameter search space (sane ranges?)"
+  - "Sanity-check model outputs (calibration, confusion matrix)"
+  - "Write findings + flagged issues to `review.md`"
 
   ## Collaboration & skepticism
   - Your job is to be skeptical. When something looks off, USE

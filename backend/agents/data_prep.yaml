@@ -14,6 +14,7 @@ tools:
   - name: request_clarification
   - name: inspect_agent_context
   - name: list_session_agents
+  - name: tasks
 
 subagents:
   - eda
@@ -111,6 +112,43 @@ system: |
   12. Save: `data/prep_pipeline.pkl` (fitted sklearn Pipeline or ColumnTransformer)
   13. Print ALL decisions and statistics to stdout
   14. Write `report.md` at the top level of the workspace covering: target column, problem type, cleaning decisions, feature engineering, split sizes, final column list, transform details
+
+  ## Tracking your work — use the `tasks` tool
+
+  The studio shows a live tasks card inline in the chat. The user
+  watches it step-by-step — make it GRANULAR so progress is visible.
+
+  Granularity rule: ONE task per concrete action. A task is "drop
+  duplicate rows", "impute missing values", "build train/val/test
+  split" — NOT "do prep". If a step takes 30+ seconds OR produces an
+  artifact (file / decision), it gets its own task. When in doubt,
+  add MORE tasks, not fewer.
+
+  Anti-pattern (DON'T): bundle multiple actions like "clean, encode,
+  and split" into one task. Three actions = three tasks.
+
+  Skip the tasks tool entirely only for:
+  - A single one-shot execute_code call.
+  - Pure conversation / clarification turns.
+
+  Lifecycle:
+  1. `tasks(operation="add", subject="<imperative>", short_description="<concrete action>")`
+     BEFORE you start. Returns a task_id.
+  2. `tasks(operation="update", task_id=N, status="in_progress")`
+     right before doing the step.
+  3. `tasks(operation="update", task_id=N, status="completed")`
+     right after finishing.
+  Mark items completed one at a time — never batch at the end.
+
+  Example for a prep pass (granular):
+  - "Read EDA report + decide target column"
+  - "Drop duplicate rows"
+  - "Impute missing values per chosen strategy"
+  - "Encode categorical columns"
+  - "Apply log1p to skewed numerics"
+  - "Build stratified train/val/test split"
+  - "Persist preprocessing pipeline (`prep_pipeline.pkl`)"
+  - "Save splits + `metadata.json`"
 
   ## Collaboration & skepticism
   - Be skeptical. If your task is ambiguous, if the EDA report contradicts what

@@ -1,0 +1,126 @@
+name: papers_search
+description: |
+  Search and read ML research papers. Backends:
+  - arXiv API           (free, no key)        — primary search + metadata + PDFs
+  - arXiv HTML / ar5iv                        — sectioned full-text reading
+  - Semantic Scholar Graph                    — citation graph, filtered search,
+                                                snippet search, TL;DR, recommendations
+  - Hugging Face Hub                          — `find_datasets/models/collections` only,
+                                                for resources tagged `arxiv:<id>`
+
+  Use `web_search` for non-paper queries (blog posts, GitHub repos,
+  dataset homepages, news, etc.).
+
+  Typical research flows:
+    search → read_paper → find_all_resources
+    search → paper_details → citation_graph → read_paper (trace influence)
+    snippet_search → paper_details → read_paper (find specific claims)
+    search → download_pdf (when HTML/ar5iv don't exist for that paper)
+
+  Operations:
+  - search: arXiv search by default. Supplying any of date_from /
+    date_to / categories / min_citations / sort_by switches to Semantic
+    Scholar bulk search with those filters.
+  - paper_details: Title, abstract, authors via arxiv. Enriched with
+    Semantic Scholar data when available (citation count, TLDR, venue).
+  - read_paper: Sectioned full text. Without `section`, returns
+    abstract + TOC. With `section` (e.g. "3" or "Experiments"), returns
+    the section's full text. Fallback chain: arXiv HTML → ar5iv →
+    PDF text → abstract only.
+  - download_pdf: Download a paper's PDF, extract text via pypdf, and
+    persist it under `/sessions/{session_id}/papers/{arxiv_id}.txt`
+    so other agents can re-read it via list_session_files /
+    read_session_file. Returns the extracted text (truncated for the
+    agent's context).
+  - citation_graph: References + citations with influence flags and
+    intent labels. Direction defaults to "both".
+  - snippet_search: Semantic search over 12M+ full-text passages on
+    Semantic Scholar.
+  - recommend: Find similar papers from a single paper or a list of
+    positive/negative examples.
+  - find_datasets / find_models / find_collections: HF Hub resources
+    tagged with `arxiv:<id>`.
+  - find_all_resources: Parallel fetch of datasets + models +
+    collections for one paper.
+
+input_schema:
+  type: object
+  properties:
+    operation:
+      type: string
+      enum:
+        - search
+        - paper_details
+        - read_paper
+        - download_pdf
+        - citation_graph
+        - snippet_search
+        - recommend
+        - find_datasets
+        - find_models
+        - find_collections
+        - find_all_resources
+      description: Operation to execute.
+    query:
+      type: string
+      description: >
+        Search query. Required for: search, snippet_search.
+        Optional for: trending (filters keyword).
+        Semantic Scholar supports boolean: "exact phrase" term1 | term2.
+    arxiv_id:
+      type: string
+      description: >
+        ArXiv paper ID, e.g. '2305.18290'. Required for: paper_details,
+        read_paper, download_pdf, citation_graph, find_datasets,
+        find_models, find_collections, find_all_resources. Optional
+        for: recommend.
+    section:
+      type: string
+      description: >
+        Section name or number, e.g. '3', '4.2', 'Experiments'. Optional
+        for read_paper. Without it, returns abstract + table of contents.
+    direction:
+      type: string
+      enum: [citations, references, both]
+      description: Direction for citation_graph. Default "both".
+    date:
+      type: string
+      description: YYYY-MM-DD. Optional for trending.
+    date_from:
+      type: string
+      description: YYYY-MM-DD start date. Triggers Semantic Scholar search.
+    date_to:
+      type: string
+      description: YYYY-MM-DD end date. Triggers Semantic Scholar search.
+    categories:
+      type: string
+      description: >
+        Field of study filter (e.g. 'Computer Science'). Triggers
+        Semantic Scholar search.
+    min_citations:
+      type: integer
+      description: Minimum citation count. Triggers Semantic Scholar search.
+    sort_by:
+      type: string
+      enum: [relevance, citationCount, publicationDate, submittedDate, lastUpdatedDate]
+      description: >
+        Sort order. relevance|citationCount|publicationDate route to
+        Semantic Scholar; submittedDate|lastUpdatedDate route to arXiv.
+        Default "relevance".
+    positive_ids:
+      type: string
+      description: >
+        Comma-separated arxiv IDs as positive examples for `recommend`.
+    negative_ids:
+      type: string
+      description: >
+        Comma-separated arxiv IDs as negative examples for `recommend`.
+    sort:
+      type: string
+      enum: [downloads, likes, trending]
+      description: Sort order for find_datasets and find_models. Default "downloads".
+    limit:
+      type: integer
+      description: Maximum results to return (default 10, max 50).
+  required:
+    - operation
