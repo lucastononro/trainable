@@ -12,6 +12,9 @@ import type {
   Mention,
   Artifact,
   MetricPoint,
+  Task,
+  TaskCreatePayload,
+  TaskUpdatePayload,
   ModelInfo,
   FileTreeNode,
   DeleteResponse,
@@ -142,6 +145,25 @@ export const api = {
   getArtifacts: (sessionId: string) => fetchJSON<Artifact[]>(`/sessions/${sessionId}/artifacts`),
 
   getMetrics: (sessionId: string) => fetchJSON<MetricPoint[]>(`/sessions/${sessionId}/metrics`),
+
+  getTasks: (sessionId: string) => fetchJSON<Task[]>(`/sessions/${sessionId}/tasks`),
+
+  createTask: (sessionId: string, body: TaskCreatePayload) =>
+    fetchJSON<Task>(`/sessions/${sessionId}/tasks`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+
+  updateTask: (sessionId: string, taskId: number, body: TaskUpdatePayload) =>
+    fetchJSON<Task>(`/sessions/${sessionId}/tasks/${taskId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }),
+
+  deleteTask: (sessionId: string, taskId: number) =>
+    fetchJSON<{ status: string; id: number }>(`/sessions/${sessionId}/tasks/${taskId}`, {
+      method: 'DELETE',
+    }),
 
   abortSession: (sessionId: string) =>
     fetchJSON<AbortResponse>(`/sessions/${sessionId}/abort`, { method: 'POST' }),

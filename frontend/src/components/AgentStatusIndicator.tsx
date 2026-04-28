@@ -54,11 +54,23 @@ const AGENT_META: Record<string, { label: string; color: string; description: st
     color: 'gray',
     description: 'Root conversational agent (always main)',
   },
+  research: {
+    label: 'Research Agent',
+    color: 'teal',
+    description: 'Reads PDFs + arxiv, extracts training recipes, briefs specialists',
+  },
+  data_search: {
+    label: 'Data Search Agent',
+    color: 'teal',
+    description: 'Finds where datasets and papers live (HF Hub, Kaggle, arxiv) — never downloads',
+  },
 };
 
 const ALL_AGENT_TYPES = [
   'chat',
   'orchestrator',
+  'research',
+  'data_search',
   'eda',
   'data_prep',
   'feature_eng',
@@ -350,7 +362,7 @@ function ConfigView({ onBack }: { onBack: () => void }) {
   );
 }
 
-function StatusIcon({ status, color }: { status: string; color: string }) {
+export function StatusIcon({ status, color }: { status: string; color: string }) {
   const c = getColors(color);
   if (status === 'running') {
     return <Loader2 className={`w-3 h-3 ${c.text} animate-spin shrink-0`} />;

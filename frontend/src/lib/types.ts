@@ -194,3 +194,47 @@ export interface GeneratedFile {
   path: string;
   type: string;
 }
+
+export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface Task {
+  id: number;
+  session_id: string;
+  subject: string;
+  active_form: string | null;
+  short_description: string;
+  description: string;
+  status: TaskStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskCreatePayload {
+  subject: string;
+  short_description?: string;
+  description?: string;
+  active_form?: string | null;
+  status?: TaskStatus;
+}
+
+export type TaskUpdatePayload = Partial<TaskCreatePayload>;
+
+// Structured search result emitted by web_search and papers_search(search)
+// alongside the markdown text output. Used by the chat to render a rich
+// ChatGPT-style source-card panel.
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+  source?: string;          // domain like "arxiv.org" or "blog.example.com"
+  arxiv_id?: string;
+  year?: string | number | null;
+  citations?: number;
+  authors?: string;
+  primary_category?: string;
+  backend?: string;          // 'tavily' | 'brave' | 'duckduckgo' | 'arxiv' | 'semanticscholar'
+}
+
+// SSE payloads for task_created and task_updated. Server pushes the full
+// Task dict — UI just upserts by id.
+export type TaskEventData = Task;

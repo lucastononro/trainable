@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
-import { SSEEvent, FileTreeNode, MetricPoint, ChartConfig, Mention, Draft } from '@/lib/types';
+import { SSEEvent, FileTreeNode, MetricPoint, ChartConfig, Mention, Draft, Task } from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
 import {
   ImperativePanelHandle,
@@ -54,6 +54,9 @@ import ModelSelector from '@/components/ModelSelector';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import MetricsTab from '@/components/MetricsTab';
+import InlineTasks from '@/components/InlineTasks';
+import SearchResults from '@/components/SearchResults';
+import type { TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
 import ProjectDataModal from '@/components/ProjectDataModal';
 import MentionInput, { MentionInputHandle } from '@/components/MentionInput';
@@ -108,10 +111,30 @@ interface ChatItem {
     | 'subagent_start'
     | 'subagent_end'
     | 'clarification'
-    | 'agent_tool';
+    | 'agent_tool'
+    | 'tasks_snapshot';
   content: string;
   meta?: any;
   timestamp: number;
+}
+
+const TASKS_SNAPSHOT_ID = '__tasks_snapshot__';
+
+// Move (or insert) the single tasks snapshot to the end of chatItems.
+// React stable key ensures the InlineTasks component doesn't remount —
+// it just slides to a new scroll position when the chat moves on.
+function ensureTasksSnapshotAtEnd(prev: ChatItem[]): ChatItem[] {
+  const idx = prev.findIndex((i) => i.type === 'tasks_snapshot');
+  if (idx === prev.length - 1 && idx >= 0) return prev;
+  const filtered = idx >= 0 ? prev.filter((_, i) => i !== idx) : prev;
+  return [
+    ...filtered,
+    { id: TASKS_SNAPSHOT_ID, type: 'tasks_snapshot', content: '', timestamp: Date.now() },
+  ];
+}
+
+function removeTasksSnapshot(prev: ChatItem[]): ChatItem[] {
+  return prev.filter((i) => i.type !== 'tasks_snapshot');
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +159,7 @@ const SUGGESTIONS = [
     prompt: 'Write a Python script to process this data.',
   },
 ];
+
 
 // ---------------------------------------------------------------------------
 // Main page component
@@ -172,6 +196,7 @@ export default function HomePage() {
   const [sseConnected, setSseConnected] = useState(false);
   const [experimentName, setExperimentName] = useState('');
 
+
   // Workspace state
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [canvasContent, setCanvasContent] = useState('');
@@ -188,6 +213,12 @@ export default function HomePage() {
   const [metricPoints, setMetricPoints] = useState<MetricPoint[]>([]);
   const [chartConfig, setChartConfig] = useState<ChartConfig | null>(null);
   const metricKeysRef = useRef(new Set<string>());
+
+  // Plan / tasks state — backed by `tasks` table on the backend, mirrors
+  // Claude Code's TaskCreate/TaskUpdate. Initial state hydrates via
+  // api.getTasks() on session open; SSE task_created/task_updated events
+  // upsert by id from there.
+  const [tasks, setTasks] = useState<Task[]>([]);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const sseRef = useRef<EventSource | null>(null);
@@ -351,6 +382,17 @@ export default function HomePage() {
                 const idx = prev.findLastIndex(
                   (i) => i.type === 'tool_start' && i.content === data.tool,
                 );
+                // Search-tool extras: web_search and papers_search(search) push
+                // a structured `results` array alongside `output`. Surface them
+                // through to the renderer so it can show source cards.
+                const searchExtras: Record<string, unknown> = {};
+                if (Array.isArray(data.results)) {
+                  searchExtras.results = data.results;
+                  if (typeof data.query === 'string') searchExtras.query = data.query;
+                  if (typeof data.backend === 'string') searchExtras.backend = data.backend;
+                  if (typeof data.operation === 'string')
+                    searchExtras.operation = data.operation;
+                }
                 if (idx >= 0) {
                   const updated = [...prev];
                   const duration = Math.max(
@@ -365,6 +407,7 @@ export default function HomePage() {
                       output: data.output,
                       outputs: updated[idx].meta?.outputs || [],
                       duration,
+                      ...searchExtras,
                     },
                   };
                   return updated;
@@ -375,7 +418,7 @@ export default function HomePage() {
                     id: `${Date.now()}-${Math.random()}`,
                     type: 'tool_end',
                     content: data.tool,
-                    meta: { output: data.output },
+                    meta: { output: data.output, ...searchExtras },
                     timestamp: Date.now(),
                   },
                 ];
@@ -512,6 +555,37 @@ export default function HomePage() {
                   ];
                 });
               }
+              break;
+            }
+            case 'task_created':
+            case 'task_updated': {
+              // Upsert by id. Server pushes the full Task dict so we
+              // don't need to merge.
+              const incoming = data as unknown as Task;
+              setTasks((prev) => {
+                const idx = prev.findIndex((t) => t.id === incoming.id);
+                if (idx === -1) return [...prev, incoming];
+                const next = prev.slice();
+                next[idx] = incoming;
+                return next;
+              });
+              // Anchor (or re-anchor) the inline tasks card to the bottom
+              // of the chat. If the agent or user has chatted since the
+              // last task event, this bumps the card down to the latest
+              // position so it stays in view.
+              setChatItems(ensureTasksSnapshotAtEnd);
+              break;
+            }
+            case 'task_deleted': {
+              const id = (data as { id: number }).id;
+              setTasks((prev) => {
+                const next = prev.filter((t) => t.id !== id);
+                if (next.length === 0) {
+                  // No more tasks — pull the snapshot card out of chat.
+                  setChatItems(removeTasksSnapshot);
+                }
+                return next;
+              });
               break;
             }
             case 'chart_config': {
@@ -717,6 +791,7 @@ export default function HomePage() {
     setMetricPoints([]);
     setChartConfig(null);
     metricKeysRef.current = new Set();
+    setTasks([]);
     setExperimentName('');
     // Critical: clear per-session agent indicators. If we don't, the previous
     // session's running sub-agents leak into the new one and `agent_message`
@@ -1047,6 +1122,18 @@ export default function HomePage() {
           })
           .catch((e) => console.error('Failed to load historical metrics', e));
 
+        // Load existing tasks. The inline tasks card is anchored at the
+        // end of the restored chat history.
+        api
+          .getTasks(sid)
+          .then((rows) => {
+            if (!cancelled && rows.length > 0) {
+              setTasks(rows);
+              setChatItems(ensureTasksSnapshotAtEnd);
+            }
+          })
+          .catch((e) => console.error('Failed to load tasks', e));
+
         // Set running state from session. `state` in the DB is only a stage
         // marker (e.g. "eda_done"), so the definitive "is this session still
         // working right now?" answer comes from the backend's in-memory task
@@ -1219,6 +1306,49 @@ export default function HomePage() {
   const removeAttachedFile = useCallback((index: number) => {
     setAttachedFiles((prev) => prev.filter((_, i) => i !== index));
   }, []);
+
+  // Task CRUD — wired into the Tasks tab. Optimistic upserts: the SSE
+  // event from the same write will be ignored by the upsert-by-id handler.
+  const handleCreateTask = useCallback(
+    async (body: import('@/lib/types').TaskCreatePayload) => {
+      if (!activeSessionId) return;
+      try {
+        const created = await api.createTask(activeSessionId, body);
+        setTasks((prev) =>
+          prev.find((t) => t.id === created.id) ? prev : [...prev, created]
+        );
+      } catch (e) {
+        console.error('createTask failed', e);
+      }
+    },
+    [activeSessionId]
+  );
+
+  const handleUpdateTask = useCallback(
+    async (id: number, body: import('@/lib/types').TaskUpdatePayload) => {
+      if (!activeSessionId) return;
+      try {
+        const updated = await api.updateTask(activeSessionId, id, body);
+        setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
+      } catch (e) {
+        console.error('updateTask failed', e);
+      }
+    },
+    [activeSessionId]
+  );
+
+  const handleDeleteTask = useCallback(
+    async (id: number) => {
+      if (!activeSessionId) return;
+      try {
+        await api.deleteTask(activeSessionId, id);
+        setTasks((prev) => prev.filter((t) => t.id !== id));
+      } catch (e) {
+        console.error('deleteTask failed', e);
+      }
+    },
+    [activeSessionId]
+  );
 
   const handleAttachAndSend = useCallback(async () => {
     if (attachedFiles.length === 0 && isDraftEmpty(draft)) return;
@@ -1640,6 +1770,7 @@ export default function HomePage() {
                   );
                 })}
               </div>
+
             </div>
           </div>
         ) : (
@@ -1658,7 +1789,12 @@ export default function HomePage() {
                   <div
                     className={`mx-auto w-full space-y-4 ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}
                   >
-                    {renderGroupedChatItems(chatItems, streamingItemIdRef.current, activeSessionId)}
+                    {renderGroupedChatItems(chatItems, streamingItemIdRef.current, activeSessionId, {
+                      tasks,
+                      onCreate: handleCreateTask,
+                      onUpdate: handleUpdateTask,
+                      onDelete: handleDeleteTask,
+                    })}
 
                     {isRunning &&
                       !streamingItemIdRef.current &&
@@ -1888,6 +2024,7 @@ export default function HomePage() {
 function getFileIconInfo(name: string): { icon: typeof FileText; color: string } {
   if (name.endsWith('.py')) return { icon: Code2, color: 'text-yellow-400' };
   if (name.endsWith('.md')) return { icon: FileText, color: 'text-blue-400' };
+  if (name.endsWith('.pdf')) return { icon: FileText, color: 'text-rose-400' };
   if (/\.(png|jpg|jpeg|svg|gif)$/i.test(name)) return { icon: Image, color: 'text-purple-400' };
   if (name.endsWith('.csv')) return { icon: Table, color: 'text-green-400' };
   if (name.endsWith('.parquet')) return { icon: Database, color: 'text-amber-400' };
@@ -2001,6 +2138,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
   const isMarkdown = fileName.endsWith('.md');
   const isJSON = fileName.endsWith('.json');
   const isNotebook = fileName.endsWith('.ipynb');
+  const isPDF = fileName.endsWith('.pdf');
   const isBinary = /\.(pkl|joblib|parquet|h5|hdf5|pt|pth|onnx)$/i.test(fileName);
 
   // Notebook files are rendered inline by a dedicated component — skip the
@@ -2012,7 +2150,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
   }, [filePath, isNotebook]);
 
   useEffect(() => {
-    if (isImage || isBinary || isNotebook) {
+    if (isImage || isBinary || isNotebook || isPDF) {
       setLoading(false);
       return;
     }
@@ -2028,10 +2166,40 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
         setError(err.message);
         setLoading(false);
       });
-  }, [filePath, isImage, isBinary, isNotebook]);
+  }, [filePath, isImage, isBinary, isNotebook, isPDF]);
 
   if (isNotebook && notebookName) {
     return <Notebook sessionId={sessionId} notebookName={notebookName} variant="inline" />;
+  }
+
+  if (isPDF) {
+    // Browser-native PDF viewer via <iframe>. Backend's /api/files/raw
+    // already returns application/pdf via mimetypes.guess_type, so the
+    // browser's built-in renderer (Chromium PDF viewer / Firefox PDF.js)
+    // handles paging, zoom, search, and download for free.
+    const url = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(filePath)}`;
+    return (
+      <div className="h-full flex flex-col bg-black">
+        <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.06] text-[11px] text-gray-500">
+          <FileText className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          <span className="truncate">{fileName}</span>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="ml-auto text-gray-500 hover:text-gray-300"
+            title="Open in a new tab"
+          >
+            Open ↗
+          </a>
+        </div>
+        <iframe
+          src={url}
+          title={fileName}
+          className="flex-1 w-full bg-white"
+        />
+      </div>
+    );
   }
 
   return (
@@ -3034,10 +3202,18 @@ function isToolItem(item: ChatItem) {
   return item.type === 'tool_start' || item.type === 'tool_end' || item.type === 'code_output';
 }
 
+interface TasksProps {
+  tasks: Task[];
+  onCreate: (body: TaskCreatePayload) => Promise<void> | void;
+  onUpdate: (id: number, body: TaskUpdatePayload) => Promise<void> | void;
+  onDelete: (id: number) => Promise<void> | void;
+}
+
 function renderGroupedChatItems(
   items: ChatItem[],
   streamingItemId?: string | null,
   sessionId?: string | null,
+  tasksProps?: TasksProps,
 ) {
   const result: React.ReactNode[] = [];
   let i = 0;
@@ -3052,7 +3228,7 @@ function renderGroupedChatItems(
       }
       result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
     } else {
-      result.push(renderChatItem(items[i], streamingItemId, sessionId));
+      result.push(renderChatItem(items[i], streamingItemId, sessionId, tasksProps));
       i++;
     }
   }
@@ -3068,8 +3244,25 @@ function renderChatItem(
   item: ChatItem,
   streamingItemId?: string | null,
   sessionId?: string | null,
+  tasksProps?: TasksProps,
 ) {
   switch (item.type) {
+    case 'tasks_snapshot': {
+      // The inline checklist card. Reads from page-level tasks state via
+      // tasksProps so updates re-render this single anchored widget
+      // instead of pushing a new card per task event.
+      if (!tasksProps) return null;
+      return (
+        <div key={item.id} className="animate-fade-in">
+          <InlineTasks
+            tasks={tasksProps.tasks}
+            onCreate={tasksProps.onCreate}
+            onUpdate={tasksProps.onUpdate}
+            onDelete={tasksProps.onDelete}
+          />
+        </div>
+      );
+    }
     case 'user': {
       const files: string[] = item.meta?.files || [];
       const mentions: Mention[] | undefined = item.meta?.mentions;
@@ -3139,8 +3332,26 @@ function renderChatItem(
       );
     }
     case 'tool_start':
-    case 'tool_end':
+    case 'tool_end': {
+      // Search tools (web_search, papers_search.search) ship a structured
+      // `results` array on tool_end. Render the rich source-card panel
+      // instead of the generic tool card.
+      const r = item.meta?.results;
+      if (item.type === 'tool_end' && Array.isArray(r) && r.length > 0) {
+        const isPapers = item.content === 'papers_search';
+        const label = isPapers ? 'Papers' : 'Searched';
+        return (
+          <SearchResults
+            key={item.id}
+            query={(item.meta?.query as string) || ''}
+            backend={item.meta?.backend as string | undefined}
+            results={r}
+            label={label}
+          />
+        );
+      }
       return <CollapsibleToolCard key={item.id} item={item} />;
+    }
     case 'code_output':
       return null; // folded into the tool card above
     case 'subagent_start':
