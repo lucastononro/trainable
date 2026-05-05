@@ -26,6 +26,7 @@ from services.volume import (
 )
 
 from observability import agent_span, bind_log_context, clear_log_context
+from services.usage import record_llm_usage
 
 from .agents import (
     get_agent_default_model,
@@ -607,6 +608,59 @@ async def run_agent(
 
                 elif isinstance(message, ResultMessage):
                     logger.info("Agent %s done", agent_type)
+                    # Record token usage. ResultMessage.model_usage carries
+                    # per-model breakdown when sub-agents ran on different
+                    # models; fall back to .usage when only one model was
+                    # involved. Each call is recorded via record_llm_usage
+                    # which spawns its own span via observability.record_usage_attributes.
+                    try:
+                        # Surface aggregate counters on the agent span itself
+                        # so trace UIs can show cost without drilling into
+                        # the usage child.
+                        agg = message.usage or {}
+                        try:
+                            _agent_span.set_attribute(
+                                "llm.input_tokens",
+                                int(agg.get("input_tokens", 0) or 0),
+                            )
+                            _agent_span.set_attribute(
+                                "llm.output_tokens",
+                                int(agg.get("output_tokens", 0) or 0),
+                            )
+                            _agent_span.set_attribute(
+                                "llm.cache_read_input_tokens",
+                                int(agg.get("cache_read_input_tokens", 0) or 0),
+                            )
+                            if message.total_cost_usd is not None:
+                                _agent_span.set_attribute(
+                                    "llm.cost_usd", float(message.total_cost_usd)
+                                )
+                        except Exception:
+                            pass
+
+                        if message.model_usage:
+                            for m_name, m_usage in message.model_usage.items():
+                                await record_llm_usage(
+                                    session_id=session_id,
+                                    agent_type=agent_type,
+                                    agent_id=agent_id,
+                                    provider="claude",
+                                    model=m_name,
+                                    usage=m_usage,
+                                    is_error=bool(message.is_error),
+                                )
+                        elif message.usage:
+                            await record_llm_usage(
+                                session_id=session_id,
+                                agent_type=agent_type,
+                                agent_id=agent_id,
+                                provider="claude",
+                                model=model,
+                                usage=message.usage,
+                                is_error=bool(message.is_error),
+                            )
+                    except Exception as e:
+                        logger.warning("record_llm_usage failed: %s", e)
 
         # After agent finishes, read back the report and file list from volume
         await publish_artifacts(session_id, experiment_id, stage)
