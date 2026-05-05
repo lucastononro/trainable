@@ -1,0 +1,67 @@
+# Trainable cost catalog — single source of truth for token + compute pricing.
+#
+# Edit this file when a provider changes rates. No code change required;
+# the backend reads it at startup (and on first request after a save in
+# dev, since the loader uses functools.lru_cache and is cleared by the
+# YAML hot-reload helper). Prod restarts re-read.
+#
+# Last reviewed: 2026-05
+
+# ---------------------------------------------------------------------------
+# LLM token pricing — USD per MILLION tokens.
+#
+# Lookup is flexible:
+#   - exact match wins                  ("claude-opus-4-7")
+#   - vendor prefix is stripped         ("anthropic:claude-opus-4-7" → ...)
+#   - longest-prefix fallback           ("claude-haiku-4-5-20251001" → "claude-haiku-4-5")
+#
+# The `cache.*_multiplier` values below are applied to the model's `input`
+# rate to price cached / cache-creation tokens. If a provider invents a
+# different cache pricing scheme, override per-model with `cache_read` or
+# `cache_creation` keys (USD/M) — both fall back to the multipliers when
+# absent.
+# ---------------------------------------------------------------------------
+llm:
+  # Anthropic — Claude
+  claude-opus-4-7:    { input: 15.00, output: 75.00 }
+  claude-opus-4-6:    { input: 15.00, output: 75.00 }
+  claude-sonnet-4-6:  { input: 3.00,  output: 15.00 }
+  claude-haiku-4-5:   { input: 0.80,  output: 4.00 }
+
+  # OpenAI — GPT
+  gpt-5:              { input: 5.00,  output: 15.00 }
+  gpt-5-mini:         { input: 0.50,  output: 2.00 }
+
+  # Google — Gemini
+  gemini-2.5-pro:     { input: 1.25,  output: 5.00 }
+  gemini-2.5-flash:   { input: 0.10,  output: 0.40 }
+
+# Anthropic ephemeral-cache pricing — applied to each model's `input` rate.
+# Override per-model in `llm.<model>` with explicit `cache_read` /
+# `cache_creation` (USD/M) if the provider charges differently.
+cache:
+  read_multiplier: 0.10
+  creation_multiplier: 1.25
+
+# ---------------------------------------------------------------------------
+# Sandbox compute pricing — USD per second per GPU type.
+#
+# Source: Modal public pricing (https://modal.com/pricing). Best-effort
+# approximation: Modal bills CPU + memory + GPU separately and adjusts
+# rates over time; the actual invoice will differ slightly. Memory cost
+# is not tracked here — most sandboxes use the default tier where GPU
+# dominates.
+#
+# Unknown gpu strings fall through to `cpu`.
+# ---------------------------------------------------------------------------
+compute:
+  cpu:        0.0000131    # ~$0.047/CPU-hr (no GPU)
+  T4:         0.000164     # ~$0.59/hr
+  L4:         0.000222     # ~$0.80/hr
+  A10G:       0.000306     # ~$1.10/hr
+  L40S:       0.000542     # ~$1.95/hr
+  A100:       0.000819     # 40GB — ~$2.95/hr
+  A100-80GB:  0.001270     # ~$4.57/hr
+  H100:       0.001899     # ~$6.84/hr
+  H200:       0.002500     # ~$9.00/hr
+  B200:       0.003500     # ~$12.60/hr

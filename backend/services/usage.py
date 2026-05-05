@@ -1,14 +1,17 @@
 """Cost tracking — record token & sandbox usage as `usage_events` rows.
 
-The single source of truth for pricing is `routers/models.py::MODELS`. Costs
+Pricing comes from `backend/pricing.yaml` (single source of truth). Costs
 are computed at insert time so rollups don't need to know the table.
 """
 
 from __future__ import annotations
 
 import logging
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
+import yaml
 from sqlalchemy import select
 
 from db import async_session
@@ -19,51 +22,85 @@ from services.broadcaster import broadcaster
 logger = logging.getLogger(__name__)
 
 
-# Per-million-token prices in USD. Mirrors backend/routers/models.py and
-# extends to non-Claude providers we plan to support behind the LLM factory.
-# Cache reads price at 10% of input; cache writes at 125% — Anthropic's
-# published ephemeral cache pricing. OpenAI and Gemini handle caching
-# differently (implicit / context-cached), so the `cache_read_*` columns may
-# be zero for those providers; we treat them as plain input tokens.
-_PRICING: dict[str, dict[str, float]] = {
-    # Claude
-    "claude-opus-4-7": {"input": 15.0, "output": 75.0},
-    "claude-opus-4-6": {"input": 15.0, "output": 75.0},
-    "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
-    "claude-haiku-4-5": {"input": 0.80, "output": 4.0},
-    # OpenAI (illustrative — kept here so the LLM factory can resolve costs
-    # without a separate config)
-    "gpt-5": {"input": 5.0, "output": 15.0},
-    "gpt-5-mini": {"input": 0.50, "output": 2.0},
-    # Gemini
-    "gemini-2.5-pro": {"input": 1.25, "output": 5.0},
-    "gemini-2.5-flash": {"input": 0.10, "output": 0.40},
-}
+# ---------------------------------------------------------------------------
+# Pricing catalog loader
+# ---------------------------------------------------------------------------
 
-# Sandbox compute pricing — USD/second per GPU type. Sourced from Modal's
-# public pricing page (https://modal.com/pricing). Treat as a best-effort
-# approximation: Modal bills CPU + memory + GPU separately and adjusts
-# rates over time, so the actual invoice will differ slightly. Memory cost
-# is not included here today — most sandboxes use the default tier where
-# GPU dominates total cost.
-#
-# Last reviewed: 2026-04. Update this map when Modal changes pricing.
-_SANDBOX_PRICING = {
-    "cpu": 0.0000131,  # ~$0.047/CPU-hr (no GPU)
-    "T4": 0.000164,  # ~$0.59/hr
-    "L4": 0.000222,  # ~$0.80/hr
-    "A10G": 0.000306,  # ~$1.10/hr
-    "L40S": 0.000542,  # ~$1.95/hr
-    "A100": 0.000819,  # 40GB — ~$2.95/hr
-    "A100-80GB": 0.001270,  # ~$4.57/hr
-    "H100": 0.001899,  # ~$6.84/hr
-    "H200": 0.002500,  # ~$9.00/hr
-    "B200": 0.003500,  # ~$12.60/hr
-}
+_PRICING_FILE = Path(__file__).parent.parent / "pricing.yaml"
+
+# Cache pricing fallback used when pricing.yaml is missing the `cache:`
+# block or hasn't been read yet. Matches Anthropic ephemeral-cache pricing.
+_DEFAULT_CACHE_READ_MULT = 0.10
+_DEFAULT_CACHE_CREATION_MULT = 1.25
+
+
+@lru_cache(maxsize=1)
+def _load_catalog() -> dict[str, Any]:
+    """Read pricing.yaml exactly once. Call `reload_pricing()` to drop the cache."""
+    try:
+        with open(_PRICING_FILE) as f:
+            data = yaml.safe_load(f) or {}
+    except FileNotFoundError:
+        logger.warning(
+            "[cost] pricing.yaml not found at %s — all costs will be 0",
+            _PRICING_FILE,
+        )
+        return {"llm": {}, "compute": {}, "cache": {}}
+    except yaml.YAMLError as e:
+        logger.error("[cost] pricing.yaml parse error: %s — all costs will be 0", e)
+        return {"llm": {}, "compute": {}, "cache": {}}
+
+    llm = data.get("llm") or {}
+    compute = data.get("compute") or {}
+    cache = data.get("cache") or {}
+
+    if not isinstance(llm, dict) or not isinstance(compute, dict):
+        logger.error(
+            "[cost] pricing.yaml: 'llm' and 'compute' must be mappings — got %s / %s",
+            type(llm).__name__,
+            type(compute).__name__,
+        )
+        return {"llm": {}, "compute": {}, "cache": {}}
+
+    return {"llm": llm, "compute": compute, "cache": cache}
+
+
+def reload_pricing() -> None:
+    """Drop the lru_cache so the next call re-reads pricing.yaml.
+
+    Useful after editing the file in dev (no backend restart needed).
+    """
+    _load_catalog.cache_clear()
 
 
 def _per_token(price_per_million: float) -> float:
     return price_per_million / 1_000_000.0
+
+
+def _resolve_llm_pricing(model: str) -> dict | None:
+    """Resolve a model id to its pricing entry. Three-stage lookup:
+
+    1. Exact match.
+    2. Strip vendor prefix ("anthropic:claude-opus-4-7" → "claude-opus-4-7").
+    3. Longest-prefix match — handles dated variants like
+       "claude-haiku-4-5-20251001" → "claude-haiku-4-5".
+    """
+    llm = _load_catalog()["llm"]
+    p = llm.get(model)
+    if p:
+        return p
+
+    bare = model.split(":")[-1]
+    p = llm.get(bare)
+    if p:
+        return p
+
+    candidates = [(key, llm[key]) for key in llm if model.startswith(key)]
+    if candidates:
+        candidates.sort(key=lambda kv: len(kv[0]), reverse=True)
+        return candidates[0][1]
+
+    return None
 
 
 def compute_llm_cost(
@@ -76,42 +113,48 @@ def compute_llm_cost(
 ) -> float:
     """Compute cost for a single LLM call. Unknown models return 0.0.
 
-    Resolves model id flexibly so dated variants work (e.g.
-    "claude-haiku-4-5-20251001" maps to "claude-haiku-4-5"). Strips
-    vendor prefixes like "anthropic:". Falls back to longest-prefix
-    match in _PRICING so future SDK variants (date suffixes, region
-    suffixes, etc.) keep working without a code change.
+    Per-model `cache_read` / `cache_creation` keys (USD/M) override the
+    global cache.read_multiplier / cache.creation_multiplier in
+    pricing.yaml. The multipliers are applied to the model's `input`
+    rate when no explicit override is set.
     """
     if not model:
         return 0.0
 
-    p = _PRICING.get(model)
-
-    if not p:
-        # Strip vendor prefixes like "anthropic:" or "openai:".
-        bare = model.split(":")[-1]
-        p = _PRICING.get(bare)
-
-    if not p:
-        # Longest-prefix match — handles "claude-haiku-4-5-20251001" etc.
-        candidates = [(key, _PRICING[key]) for key in _PRICING if model.startswith(key)]
-        if candidates:
-            # Pick the most specific (longest) prefix.
-            candidates.sort(key=lambda kv: len(kv[0]), reverse=True)
-            p = candidates[0][1]
-
+    p = _resolve_llm_pricing(model)
     if not p:
         return 0.0
-    in_rate = _per_token(p["input"])
-    out_rate = _per_token(p["output"])
+
+    cache_cfg = _load_catalog().get("cache") or {}
+    read_mult = float(cache_cfg.get("read_multiplier", _DEFAULT_CACHE_READ_MULT))
+    creation_mult = float(
+        cache_cfg.get("creation_multiplier", _DEFAULT_CACHE_CREATION_MULT)
+    )
+
+    in_rate = _per_token(float(p.get("input", 0) or 0))
+    out_rate = _per_token(float(p.get("output", 0) or 0))
+
+    # Per-model cache overrides take precedence over the multiplier path.
+    cache_read_rate = (
+        _per_token(float(p["cache_read"])) if "cache_read" in p else in_rate * read_mult
+    )
+    cache_creation_rate = (
+        _per_token(float(p["cache_creation"]))
+        if "cache_creation" in p
+        else in_rate * creation_mult
+    )
+
     cost = input_tokens * in_rate + output_tokens * out_rate
-    cost += cache_read_input_tokens * in_rate * 0.10
-    cost += cache_creation_input_tokens * in_rate * 1.25
+    cost += cache_read_input_tokens * cache_read_rate
+    cost += cache_creation_input_tokens * cache_creation_rate
     return cost
 
 
 def compute_sandbox_cost(seconds: float, gpu: str | None) -> float:
-    rate = _SANDBOX_PRICING.get(gpu or "cpu", _SANDBOX_PRICING["cpu"])
+    """USD/second × wall-time. Unknown gpu strings fall through to `cpu`."""
+    compute = _load_catalog()["compute"]
+    cpu_rate = float(compute.get("cpu", 0) or 0)
+    rate = float(compute.get(gpu or "cpu", cpu_rate) or cpu_rate)
     return max(0.0, seconds) * rate
 
 
