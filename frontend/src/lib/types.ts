@@ -217,6 +217,23 @@ export interface UsageEvent {
   cache_hit_pct?: number;
 }
 
+export interface SessionUsageRow {
+  session_id: string;
+  cost_usd: number;
+  llm_cost_usd: number;
+  compute_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  compute_seconds: number;
+  llm_calls: number;
+  compute_runs: number;
+  agents: string[];
+  models: string[];
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
 export interface UsageSummary {
   totals: {
     input_tokens: number;
@@ -224,15 +241,21 @@ export interface UsageSummary {
     cache_read_input_tokens: number;
     cache_creation_input_tokens: number;
     cost_usd: number;
-    sandbox_seconds: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
+    sandbox_seconds: number; // legacy alias of compute_seconds
+    compute_seconds: number;
     llm_calls: number;
-    sandbox_runs: number;
+    sandbox_runs: number; // legacy alias of compute_runs
+    compute_runs: number;
   };
   by_day: Array<{
     date: string;
     input_tokens: number;
     output_tokens: number;
     cost_usd: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
     sandbox_seconds: number;
   }>;
   by_agent: Array<{
@@ -241,6 +264,8 @@ export interface UsageSummary {
     input_tokens: number;
     output_tokens: number;
     cost_usd: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
     sandbox_seconds: number;
   }>;
   by_model: Array<{
@@ -250,5 +275,6 @@ export interface UsageSummary {
     output_tokens: number;
     cost_usd: number;
   }>;
+  by_session: SessionUsageRow[];
   events: UsageEvent[];
 }

@@ -97,9 +97,9 @@ export default function CostBadge({ totals = ZERO, recent = [] }: Props) {
             )}
             {totals.sandbox_seconds > 0 && (
               <Stat
-                label="Sandbox"
+                label="Compute"
                 value={`${totals.sandbox_seconds.toFixed(0)}s`}
-                hint={`${totals.llm_calls + (recent.filter((e) => e.kind === 'sandbox').length || 0)} runs`}
+                hint={`${recent.filter((e) => e.kind === 'sandbox').length} runs`}
               />
             )}
           </div>
