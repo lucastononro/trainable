@@ -63,6 +63,7 @@ const ZERO_USAGE: UsageTotals = {
   input_tokens: 0,
   output_tokens: 0,
   cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
   llm_calls: 0,
   sandbox_seconds: 0,
   compute_runs: 0,
@@ -448,6 +449,9 @@ export default function HomePage() {
                   output_tokens: prev.output_tokens + (ev.output_tokens || 0),
                   cache_read_input_tokens:
                     prev.cache_read_input_tokens + (ev.cache_read_input_tokens || 0),
+                  cache_creation_input_tokens:
+                    prev.cache_creation_input_tokens +
+                    (ev.cache_creation_input_tokens || 0),
                   llm_calls: prev.llm_calls + (isLlm ? 1 : 0),
                   sandbox_seconds: prev.sandbox_seconds + (ev.sandbox_seconds || 0),
                   compute_runs: prev.compute_runs + (isLlm ? 0 : 1),
@@ -812,6 +816,7 @@ export default function HomePage() {
             input_tokens: t.input_tokens || 0,
             output_tokens: t.output_tokens || 0,
             cache_read_input_tokens: t.cache_read_input_tokens || 0,
+            cache_creation_input_tokens: t.cache_creation_input_tokens || 0,
             llm_calls: t.llm_calls || 0,
             sandbox_seconds: t.sandbox_seconds || 0,
             compute_runs: t.compute_runs || 0,

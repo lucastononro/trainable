@@ -150,11 +150,57 @@ def compute_llm_cost(
     return cost
 
 
-def compute_sandbox_cost(seconds: float, gpu: str | None) -> float:
-    """USD/second × wall-time. Unknown gpu strings fall through to `cpu`."""
-    compute = _load_catalog()["compute"]
-    cpu_rate = float(compute.get("cpu", 0) or 0)
-    rate = float(compute.get(gpu or "cpu", cpu_rate) or cpu_rate)
+_DEFAULT_COMPUTE_PROVIDER = "modal"
+
+
+def _resolve_compute_rate(provider: str | None, gpu: str | None) -> float:
+    """Look up a USD/second rate for (provider, gpu).
+
+    Resolution order, in priority:
+      1. compute.<provider>.<gpu>      ← preferred
+      2. compute.<provider>.cpu        ← when gpu missing/unknown for that provider
+      3. compute.<gpu>                 ← legacy flat layout (back-compat)
+      4. compute.cpu                   ← legacy flat cpu fallback
+      5. 0.0                           ← give up; row will record cost=0
+
+    `provider` defaults to "modal" since that's the only sandbox runner
+    today. Pass an explicit provider once we add others (RunPod, Together,
+    AWS Bedrock, etc.).
+    """
+    compute = _load_catalog().get("compute") or {}
+    p = (provider or _DEFAULT_COMPUTE_PROVIDER).lower()
+    gpu_key = gpu or "cpu"
+
+    # 1) provider-nested
+    nested = compute.get(p)
+    if isinstance(nested, dict):
+        rate = nested.get(gpu_key)
+        if rate is not None:
+            return float(rate)
+        rate = nested.get("cpu")
+        if rate is not None:
+            return float(rate)
+
+    # 2) legacy flat (e.g. someone still has old pricing.yaml without
+    #    provider nesting)
+    rate = compute.get(gpu_key)
+    if isinstance(rate, (int, float)):
+        return float(rate)
+    rate = compute.get("cpu")
+    if isinstance(rate, (int, float)):
+        return float(rate)
+
+    return 0.0
+
+
+def compute_sandbox_cost(
+    seconds: float,
+    gpu: str | None,
+    provider: str | None = None,
+) -> float:
+    """USD/second × wall-time. Unknown gpu strings fall through to `cpu` for
+    that provider; unknown providers fall through to legacy flat keys."""
+    rate = _resolve_compute_rate(provider, gpu)
     return max(0.0, seconds) * rate
 
 
