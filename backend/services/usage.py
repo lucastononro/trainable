@@ -1,7 +1,9 @@
 """Cost tracking — record token & sandbox usage as `usage_events` rows.
 
-Pricing comes from `backend/pricing.yaml` (single source of truth). Costs
-are computed at insert time so rollups don't need to know the table.
+Pricing is split across two YAML files (single source of truth):
+  - backend/llm-models.yml    LLM catalog: per-model cost + display metadata
+  - backend/sandbox.yml       Per-(provider, gpu) compute rates
+Costs are computed at insert time so rollups don't need to know the table.
 """
 
 from __future__ import annotations
@@ -25,52 +27,106 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Pricing catalog loader
 # ---------------------------------------------------------------------------
+#
+# Two YAML files:
+#   - backend/llm-models.yml   model catalog (cost + display) + cache fallback
+#   - backend/sandbox.yml      compute pricing per (provider, gpu)
+#
+# Each can be edited independently and the loader picks them up on next
+# call (after reload_pricing() in dev, on backend restart in prod).
 
-_PRICING_FILE = Path(__file__).parent.parent / "pricing.yaml"
+_BACKEND_DIR = Path(__file__).parent.parent
+_LLM_MODELS_FILE = _BACKEND_DIR / "llm-models.yml"
+_SANDBOX_FILE = _BACKEND_DIR / "sandbox.yml"
 
-# Cache pricing fallback used when pricing.yaml is missing the `cache:`
-# block or hasn't been read yet. Matches Anthropic ephemeral-cache pricing.
+# Cache pricing fallback used when llm-models.yml is missing the `cache:`
+# block. Matches Anthropic ephemeral-cache pricing.
 _DEFAULT_CACHE_READ_MULT = 0.10
 _DEFAULT_CACHE_CREATION_MULT = 1.25
 
 
-@lru_cache(maxsize=1)
-def _load_catalog() -> dict[str, Any]:
-    """Read pricing.yaml exactly once. Call `reload_pricing()` to drop the cache."""
+def _read_yaml(path: Path, kind: str) -> dict:
+    """Read a YAML file as a mapping. Returns {} on missing/malformed."""
     try:
-        with open(_PRICING_FILE) as f:
+        with open(path) as f:
             data = yaml.safe_load(f) or {}
     except FileNotFoundError:
-        logger.warning(
-            "[cost] pricing.yaml not found at %s — all costs will be 0",
-            _PRICING_FILE,
-        )
-        return {"llm": {}, "compute": {}, "cache": {}}
+        logger.warning("[cost] %s not found at %s — falling back to empty", kind, path)
+        return {}
     except yaml.YAMLError as e:
-        logger.error("[cost] pricing.yaml parse error: %s — all costs will be 0", e)
-        return {"llm": {}, "compute": {}, "cache": {}}
-
-    llm = data.get("llm") or {}
-    compute = data.get("compute") or {}
-    cache = data.get("cache") or {}
-
-    if not isinstance(llm, dict) or not isinstance(compute, dict):
+        logger.error("[cost] %s parse error: %s — falling back to empty", kind, e)
+        return {}
+    if not isinstance(data, dict):
         logger.error(
-            "[cost] pricing.yaml: 'llm' and 'compute' must be mappings — got %s / %s",
-            type(llm).__name__,
-            type(compute).__name__,
+            "[cost] %s root must be a mapping, got %s", kind, type(data).__name__
         )
-        return {"llm": {}, "compute": {}, "cache": {}}
+        return {}
+    return data
+
+
+@lru_cache(maxsize=1)
+def _load_catalog() -> dict[str, Any]:
+    """Read llm-models.yml + sandbox.yml exactly once. Call `reload_pricing()`
+    to drop the cache.
+
+    Returned shape (kept stable across the file split for back-compat):
+        {
+            "llm":     {<model_id>: {input, output, cache_read?, cache_creation?,
+                                     name?, provider?, tier?, context?,
+                                     description?, experimental?}},
+            "compute": {<provider>: {<gpu>: usd_per_second}},
+            "cache":   {read_multiplier: float, creation_multiplier: float},
+        }
+    """
+    llm_doc = _read_yaml(_LLM_MODELS_FILE, "llm-models.yml")
+    sandbox_doc = _read_yaml(_SANDBOX_FILE, "sandbox.yml")
+
+    llm = llm_doc.get("models") or {}
+    cache = llm_doc.get("cache") or {}
+
+    if not isinstance(llm, dict):
+        logger.error(
+            "[cost] llm-models.yml: 'models' must be a mapping — got %s",
+            type(llm).__name__,
+        )
+        llm = {}
+
+    # sandbox.yml is just `<provider>: {<gpu>: rate}` at the top level.
+    compute: dict = {}
+    for prov, rates in sandbox_doc.items():
+        if isinstance(rates, dict):
+            compute[prov] = rates
+        else:
+            logger.error(
+                "[cost] sandbox.yml: provider %r must be a mapping — got %s",
+                prov,
+                type(rates).__name__,
+            )
 
     return {"llm": llm, "compute": compute, "cache": cache}
 
 
 def reload_pricing() -> None:
-    """Drop the lru_cache so the next call re-reads pricing.yaml.
+    """Drop the lru_cache so the next call re-reads llm-models.yml + sandbox.yml.
 
-    Useful after editing the file in dev (no backend restart needed).
+    Useful after editing either file in dev (no backend restart needed).
     """
     _load_catalog.cache_clear()
+
+
+def get_llm_catalog() -> dict[str, dict]:
+    """Public accessor for the LLM model catalog (llm-models.yml `models`).
+
+    Returns a snake_case dict keyed on model id, with each entry carrying
+    both the pricing fields (input/output/cache_*) AND the display
+    metadata (name/provider/tier/context/description/experimental) used
+    by the model-picker UI.
+
+    Lives here because the loader + cache are here. The /api/models
+    endpoint in routers/models.py projects this to the response shape
+    the frontend expects.
+    """
+    return dict(_load_catalog().get("llm") or {})
 
 
 def _per_token(price_per_million: float) -> float:
@@ -115,7 +171,7 @@ def compute_llm_cost(
 
     Per-model `cache_read` / `cache_creation` keys (USD/M) override the
     global cache.read_multiplier / cache.creation_multiplier in
-    pricing.yaml. The multipliers are applied to the model's `input`
+    llm-models.yml. The multipliers are applied to the model's `input`
     rate when no explicit override is set.
     """
     if not model:
@@ -157,11 +213,9 @@ def _resolve_compute_rate(provider: str | None, gpu: str | None) -> float:
     """Look up a USD/second rate for (provider, gpu).
 
     Resolution order, in priority:
-      1. compute.<provider>.<gpu>      ← preferred
-      2. compute.<provider>.cpu        ← when gpu missing/unknown for that provider
-      3. compute.<gpu>                 ← legacy flat layout (back-compat)
-      4. compute.cpu                   ← legacy flat cpu fallback
-      5. 0.0                           ← give up; row will record cost=0
+      1. <provider>.<gpu>           ← preferred (sandbox.yml entry)
+      2. <provider>.cpu             ← gpu missing/unknown for that provider
+      3. 0.0                        ← provider absent from sandbox.yml; cost=0
 
     `provider` defaults to "modal" since that's the only sandbox runner
     today. Pass an explicit provider once we add others (RunPod, Together,
@@ -171,7 +225,6 @@ def _resolve_compute_rate(provider: str | None, gpu: str | None) -> float:
     p = (provider or _DEFAULT_COMPUTE_PROVIDER).lower()
     gpu_key = gpu or "cpu"
 
-    # 1) provider-nested
     nested = compute.get(p)
     if isinstance(nested, dict):
         rate = nested.get(gpu_key)
@@ -180,15 +233,6 @@ def _resolve_compute_rate(provider: str | None, gpu: str | None) -> float:
         rate = nested.get("cpu")
         if rate is not None:
             return float(rate)
-
-    # 2) legacy flat (e.g. someone still has old pricing.yaml without
-    #    provider nesting)
-    rate = compute.get(gpu_key)
-    if isinstance(rate, (int, float)):
-        return float(rate)
-    rate = compute.get("cpu")
-    if isinstance(rate, (int, float)):
-        return float(rate)
 
     return 0.0
 

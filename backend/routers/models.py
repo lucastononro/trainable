@@ -1,107 +1,46 @@
-"""Model and agent catalog endpoints."""
+"""Model and agent catalog endpoints.
+
+Model metadata + pricing live in `backend/pricing.yaml` (single source of
+truth). This router projects the catalog into the JSON shape the frontend's
+model-picker expects.
+"""
 
 from fastapi import APIRouter
 
 from services.agent.agents import list_all_agents
 from services.llm.factory import list_providers
+from services.usage import get_llm_catalog
 
 router = APIRouter()
 
-MODELS = [
-    # Claude
-    {
-        "id": "claude-opus-4-7",
-        "provider": "claude",
-        "name": "Claude Opus 4.7",
-        "tier": "premium",
-        "context": "1M",
-        "input_cost": 15,
-        "output_cost": 75,
-        "description": "Latest flagship model. Strongest reasoning and long-horizon planning.",
-    },
-    {
-        "id": "claude-opus-4-6",
-        "provider": "claude",
-        "name": "Claude Opus 4.6",
-        "tier": "premium",
-        "context": "1M",
-        "input_cost": 15,
-        "output_cost": 75,
-        "description": "Previous-generation flagship. Great for complex analysis and multi-step reasoning.",
-    },
-    {
-        "id": "claude-sonnet-4-6",
-        "provider": "claude",
-        "name": "Claude Sonnet 4.6",
-        "tier": "standard",
-        "context": "1M",
-        "input_cost": 3,
-        "output_cost": 15,
-        "description": "Balanced speed and intelligence. Great for everyday tasks and agentic workflows.",
-    },
-    {
-        "id": "claude-haiku-4-5",
-        "provider": "claude",
-        "name": "Claude Haiku 4.5",
-        "tier": "fast",
-        "context": "200K",
-        "input_cost": 0.80,
-        "output_cost": 4,
-        "description": "Fastest model. Ideal for quick iterations, code review, and high-volume tasks.",
-    },
-    # OpenAI — surfaced once OPENAI_API_KEY is set; the factory will accept
-    # them only if the openai SDK is installed.
-    {
-        "id": "gpt-5",
-        "provider": "openai",
-        "name": "GPT-5",
-        "tier": "premium",
-        "context": "400K",
-        "input_cost": 5,
-        "output_cost": 15,
-        "description": "OpenAI flagship. Strong reasoning + tool use; no sub-agent delegation.",
-        "experimental": True,
-    },
-    {
-        "id": "gpt-5-mini",
-        "provider": "openai",
-        "name": "GPT-5 Mini",
-        "tier": "fast",
-        "context": "400K",
-        "input_cost": 0.50,
-        "output_cost": 2,
-        "description": "OpenAI cost-efficient model. Best for high-volume tool calls.",
-        "experimental": True,
-    },
-    # Gemini
-    {
-        "id": "gemini-2.5-pro",
-        "provider": "gemini",
-        "name": "Gemini 2.5 Pro",
-        "tier": "premium",
-        "context": "2M",
-        "input_cost": 1.25,
-        "output_cost": 5,
-        "description": "Google flagship. Best for very long context windows.",
-        "experimental": True,
-    },
-    {
-        "id": "gemini-2.5-flash",
-        "provider": "gemini",
-        "name": "Gemini 2.5 Flash",
-        "tier": "fast",
-        "context": "1M",
-        "input_cost": 0.10,
-        "output_cost": 0.40,
-        "description": "Cheapest streaming model. Good for EDA on cost-sensitive runs.",
-        "experimental": True,
-    },
-]
+
+def _to_api_model(model_id: str, entry: dict) -> dict:
+    """Project one pricing.yaml LLM entry into the /api/models response shape.
+
+    The frontend expects `input_cost` / `output_cost` (USD/M tokens) on top
+    of the existing display fields. We don't expose `cache_read` /
+    `cache_creation` here yet — the picker doesn't render them. Add to the
+    response when there's a UI for it.
+    """
+    out: dict = {
+        "id": model_id,
+        "provider": entry.get("provider", "claude"),
+        "name": entry.get("name", model_id),
+        "tier": entry.get("tier"),
+        "context": entry.get("context"),
+        "input_cost": float(entry.get("input", 0) or 0),
+        "output_cost": float(entry.get("output", 0) or 0),
+        "description": entry.get("description", ""),
+    }
+    if entry.get("experimental"):
+        out["experimental"] = True
+    return out
 
 
 @router.get("/models")
 async def get_models():
-    return MODELS
+    """Catalog of LLM models the picker can offer. Sourced from pricing.yaml."""
+    return [_to_api_model(mid, entry) for mid, entry in get_llm_catalog().items()]
 
 
 @router.get("/providers")
