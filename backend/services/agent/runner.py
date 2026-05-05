@@ -25,6 +25,8 @@ from services.volume import (
     reload_volume_async,
 )
 
+from observability import agent_span, bind_log_context, clear_log_context
+
 from .agents import (
     get_agent_default_model,
     get_agent_opener,
@@ -197,6 +199,9 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
                     display = display[1:]
                 entries.append(f"- /data/{display}")
             if entries:
+                # Sort for cache prefix stability — listdir order is not
+                # guaranteed and would invalidate the prompt-cache hit.
+                entries.sort()
                 files_listing = "\n".join(entries[:50])
                 if len(entries) > 50:
                     files_listing += f"\n  …({len(entries) - 50} more)"
@@ -367,6 +372,13 @@ async def run_agent(
 
     collected_text = ""
 
+    bind_log_context(
+        session_id=session_id,
+        agent_type=agent_type,
+        agent_id=agent_id,
+        depth=depth,
+    )
+
     try:
         prev_context = await _load_prev_context(session_id, stage)
         project_id, project_name, project_files = await _load_project_context(
@@ -483,6 +495,24 @@ async def run_agent(
             depth,
             agent_tools,
         )
+
+        # Open the OTel span over the whole SDK loop. Using a manual
+        # __enter__/__exit__ keeps the existing async-for indentation
+        # untouched — important because nested-with would re-indent ~100
+        # lines of message-handling code.
+        _agent_span_cm = agent_span(
+            agent_type=agent_type,
+            session_id=session_id,
+            model=model,
+            depth=depth,
+            agent_id=agent_id,
+        )
+        _agent_span = _agent_span_cm.__enter__()
+        try:
+            _agent_span.set_attribute("agent.parent_id", parent_agent_id or "")
+            _agent_span.set_attribute("agent.tools.count", len(agent_tools))
+        except Exception:
+            pass
 
         async with asyncio.timeout(settings.agent_timeout_seconds):
             async for message in query(prompt=prompt, options=options):
@@ -628,6 +658,18 @@ async def run_agent(
         raise
 
     finally:
+        # Close the agent span (manually opened above so we didn't have to
+        # re-indent the SDK message loop). Pass exc info if we exited via
+        # an unhandled exception path.
+        try:
+            cm = locals().get("_agent_span_cm")
+            if cm is not None:
+                import sys
+
+                cm.__exit__(*sys.exc_info())
+        except Exception:
+            pass
+        clear_log_context()
         # Only clean up session-wide state when the root run finishes — sub-agents
         # share the same session and would otherwise wipe each other out.
         if depth == 0:

@@ -32,6 +32,19 @@ services:
       timeout: 3s
       retries: 10
 
+  # Jaeger v2 — OTLP is the native ingestion path (no extra env var needed).
+  # UI at http://localhost:16686. Backend ships traces via OTLP/gRPC on 4317.
+  # In a real production deployment, replace this with whatever collector
+  # your infra runs (Datadog, Honeycomb, SigNoz, Grafana Tempo, etc.) and
+  # point OTEL_EXPORTER_OTLP_ENDPOINT at it instead.
+  jaeger:
+    image: jaegertracing/jaeger:2.17.0
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP
+    restart: unless-stopped
+
   backend:
     image: ghcr.io/lucastononro/trainable-backend:latest
     ports:
@@ -45,11 +58,16 @@ services:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: trainable-backend
     depends_on:
       postgres:
         condition: service_healthy
       minio:
         condition: service_healthy
+      jaeger:
+        condition: service_started
 
   frontend:
     image: ghcr.io/lucastononro/trainable-frontend:latest

@@ -32,10 +32,22 @@ services:
       timeout: 3s
       retries: 10
 
+  # Jaeger v2 — OTLP is the native ingestion path (no extra env var needed).
+  # UI at http://localhost:16686. Backend ships traces via OTLP/gRPC on 4317.
+  jaeger:
+    image: jaegertracing/jaeger:2.17.0
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "4317:4317"    # OTLP gRPC (what the backend uses)
+      - "4318:4318"    # OTLP HTTP (alternative)
+
   backend:
     build: ./backend
     ports:
-      - "8000:8000"
+      # Host port is overridable via $BACKEND_PORT (e.g. when 8000 is taken
+      # by another local process). Container side stays 8000 so the
+      # frontend's BACKEND_URL=http://backend:8000 keeps working.
+      - "${BACKEND_PORT:-8000}:8000"
     env_file:
       - .env
     environment:
@@ -46,6 +58,12 @@ services:
       AWS_SECRET_ACCESS_KEY: minioadmin
       AWS_REGION: us-east-1
       WATCHFILES_FORCE_POLLING: "true"
+      # OTel — point at the Jaeger sidecar by default in dev so traces
+      # land without extra configuration. Override via .env if you want
+      # to ship to a different collector.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_SERVICE_NAME: trainable-backend
     volumes:
       - ./backend:/app
       - ~/.modal.toml:/home/trainable/.modal.toml:ro
@@ -56,6 +74,8 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      jaeger:
+        condition: service_started
 
   frontend:
     build:
