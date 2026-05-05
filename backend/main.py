@@ -20,6 +20,7 @@ from routers import (
     s3_browser,
     sessions,
     stream,
+    usage,
 )
 from services.kernel_manager import kernel_manager
 from services.s3_client import get_s3_client
@@ -82,6 +83,7 @@ app.include_router(files.router, prefix="/api")
 app.include_router(data_explorer.router, prefix="/api")
 app.include_router(models.router, prefix="/api")
 app.include_router(notebook.router, prefix="/api")
+app.include_router(usage.router, prefix="/api")
 
 
 @app.get("/api/health")

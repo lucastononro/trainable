@@ -3,7 +3,7 @@
 import enum
 from datetime import datetime, timezone
 
-from sqlalchemy import JSON, Column, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from db import Base
@@ -269,5 +269,63 @@ class Metric(Base):
             "value": self.value,
             "stage": self.stage,
             "run_tag": self.run_tag,
+            "created_at": self.created_at,
+        }
+
+
+class UsageEvent(Base):
+    """One row per LLM call or sandbox execution. The unit of cost accounting.
+
+    `kind` discriminates: 'llm' rows have token fields populated, 'sandbox'
+    rows have wall-time + gpu fields. Cost is precomputed at insert time so
+    rollups don't need to know per-model pricing tables.
+    """
+
+    __tablename__ = "usage_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+    )
+    project_id = Column(String(36), index=True, nullable=True)
+    kind = Column(String(20), nullable=False, default="llm")
+    agent_type = Column(String(50), nullable=True)
+    agent_id = Column(String(100), nullable=True)
+
+    provider = Column(String(50), nullable=True)
+    model = Column(String(100), nullable=True)
+
+    input_tokens = Column(Integer, default=0)
+    output_tokens = Column(Integer, default=0)
+    cache_read_input_tokens = Column(Integer, default=0)
+    cache_creation_input_tokens = Column(Integer, default=0)
+
+    sandbox_seconds = Column(Float, default=0.0)
+    gpu_type = Column(String(50), nullable=True)
+
+    cost_usd = Column(Float, default=0.0)
+    is_error = Column(Boolean, default=False)
+    extra = Column(JSON, default=dict)
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "project_id": self.project_id,
+            "kind": self.kind,
+            "agent_type": self.agent_type,
+            "agent_id": self.agent_id,
+            "provider": self.provider,
+            "model": self.model,
+            "input_tokens": self.input_tokens or 0,
+            "output_tokens": self.output_tokens or 0,
+            "cache_read_input_tokens": self.cache_read_input_tokens or 0,
+            "cache_creation_input_tokens": self.cache_creation_input_tokens or 0,
+            "sandbox_seconds": self.sandbox_seconds or 0.0,
+            "gpu_type": self.gpu_type,
+            "cost_usd": self.cost_usd or 0.0,
+            "is_error": bool(self.is_error),
+            "extra": self.extra or {},
             "created_at": self.created_at,
         }

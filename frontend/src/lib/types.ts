@@ -194,3 +194,87 @@ export interface GeneratedFile {
   path: string;
   type: string;
 }
+
+export interface UsageEvent {
+  id: number;
+  session_id: string;
+  project_id: string | null;
+  kind: 'llm' | 'sandbox';
+  agent_type: string | null;
+  agent_id: string | null;
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  sandbox_seconds: number;
+  gpu_type: string | null;
+  cost_usd: number;
+  is_error: boolean;
+  extra: Record<string, unknown>;
+  created_at: string;
+  cache_hit_pct?: number;
+}
+
+export interface SessionUsageRow {
+  session_id: string;
+  cost_usd: number;
+  llm_cost_usd: number;
+  compute_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  compute_seconds: number;
+  llm_calls: number;
+  compute_runs: number;
+  agents: string[];
+  models: string[];
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
+export interface UsageSummary {
+  totals: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+    cost_usd: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
+    sandbox_seconds: number; // legacy alias of compute_seconds
+    compute_seconds: number;
+    llm_calls: number;
+    sandbox_runs: number; // legacy alias of compute_runs
+    compute_runs: number;
+  };
+  by_day: Array<{
+    date: string;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
+    sandbox_seconds: number;
+  }>;
+  by_agent: Array<{
+    agent: string;
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
+    sandbox_seconds: number;
+  }>;
+  by_model: Array<{
+    model: string;
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+  }>;
+  by_session: SessionUsageRow[];
+  events: UsageEvent[];
+}

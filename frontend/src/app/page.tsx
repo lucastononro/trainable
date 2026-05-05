@@ -53,6 +53,21 @@ import Sidebar from '@/components/Sidebar';
 import ModelSelector from '@/components/ModelSelector';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
+import CostBadge, { UsageTotals } from '@/components/CostBadge';
+import type { UsageEvent } from '@/lib/types';
+
+const ZERO_USAGE: UsageTotals = {
+  cost_usd: 0,
+  llm_cost_usd: 0,
+  compute_cost_usd: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  llm_calls: 0,
+  sandbox_seconds: 0,
+  compute_runs: 0,
+};
 import MetricsTab from '@/components/MetricsTab';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
 import ProjectDataModal from '@/components/ProjectDataModal';
@@ -208,6 +223,10 @@ export default function HomePage() {
     // Run on the next frame so the expand takes effect before we resize.
     requestAnimationFrame(() => p.resize(CANVAS_DEFAULT_SIZE));
   }, []);
+
+  // Live usage totals for the active session (cost badge in header)
+  const [usageTotals, setUsageTotals] = useState<UsageTotals>(ZERO_USAGE);
+  const [recentUsage, setRecentUsage] = useState<UsageEvent[]>([]);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -416,6 +435,29 @@ export default function HomePage() {
               addItem({ type: 'error', content: data.error });
               setIsRunning(false);
               break;
+            case 'usage_event': {
+              const ev = data as UsageEvent;
+              setRecentUsage((prev) => [...prev.slice(-49), ev]);
+              setUsageTotals((prev) => {
+                const c = ev.cost_usd || 0;
+                const isLlm = ev.kind === 'llm';
+                return {
+                  cost_usd: prev.cost_usd + c,
+                  llm_cost_usd: prev.llm_cost_usd + (isLlm ? c : 0),
+                  compute_cost_usd: prev.compute_cost_usd + (isLlm ? 0 : c),
+                  input_tokens: prev.input_tokens + (ev.input_tokens || 0),
+                  output_tokens: prev.output_tokens + (ev.output_tokens || 0),
+                  cache_read_input_tokens:
+                    prev.cache_read_input_tokens + (ev.cache_read_input_tokens || 0),
+                  cache_creation_input_tokens:
+                    prev.cache_creation_input_tokens + (ev.cache_creation_input_tokens || 0),
+                  llm_calls: prev.llm_calls + (isLlm ? 1 : 0),
+                  sandbox_seconds: prev.sandbox_seconds + (ev.sandbox_seconds || 0),
+                  compute_runs: prev.compute_runs + (isLlm ? 0 : 1),
+                };
+              });
+              break;
+            }
             case 'report_ready':
               setCanvasContent(data.content);
               setCanvasTitle(`${(data.stage || 'EDA').toUpperCase()} Report`);
@@ -725,6 +767,8 @@ export default function HomePage() {
     // so the SSE handler closure sees an empty list immediately.
     setActiveAgents([]);
     activeAgentsRef.current = [];
+    setUsageTotals(ZERO_USAGE);
+    setRecentUsage([]);
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -755,6 +799,32 @@ export default function HomePage() {
     const load = async () => {
       setLoading(true);
       resetSessionState();
+
+      // Hydrate the CostBadge from the session's historical usage rows.
+      // Without this, reopening a session shows 0/0 until the next live
+      // usage_event SSE arrives. Fire-and-forget — non-fatal on failure.
+      api
+        .sessionUsage(activeSessionId!)
+        .then((s) => {
+          if (cancelled) return;
+          const t = s.totals;
+          setUsageTotals({
+            cost_usd: t.cost_usd || 0,
+            llm_cost_usd: t.llm_cost_usd || 0,
+            compute_cost_usd: t.compute_cost_usd || 0,
+            input_tokens: t.input_tokens || 0,
+            output_tokens: t.output_tokens || 0,
+            cache_read_input_tokens: t.cache_read_input_tokens || 0,
+            cache_creation_input_tokens: t.cache_creation_input_tokens || 0,
+            llm_calls: t.llm_calls || 0,
+            sandbox_seconds: t.sandbox_seconds || 0,
+            compute_runs: t.compute_runs || 0,
+          });
+          setRecentUsage(s.events ?? []);
+        })
+        .catch(() => {
+          /* historical usage is best-effort; live SSE will fill in */
+        });
 
       try {
         const exp = await api.getExperiment(activeExperimentId);
@@ -1432,6 +1502,8 @@ export default function HomePage() {
           <div className="flex-1" />
 
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
+
+          {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
 
           <ModelSelector />
 

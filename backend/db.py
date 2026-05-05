@@ -167,6 +167,8 @@ def _run_migrations(connection):
             "processed_dataset_meta",
             "experiment_id",
         ),
+        ("ix_usage_events_session_id", "usage_events", "session_id"),
+        ("ix_usage_events_project_id", "usage_events", "project_id"),
     ]
     for idx_name, table, column in indexes:
         if insp.has_table(table):
@@ -187,6 +189,7 @@ async def init_db():
         ProcessedDatasetMeta,
         Project,
         Session,
+        UsageEvent,
     )
 
     async with engine.begin() as conn:

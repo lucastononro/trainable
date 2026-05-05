@@ -26,6 +26,8 @@ from services.volume import (
 )
 
 from observability import agent_span, bind_log_context, clear_log_context
+from services.broadcaster import broadcaster
+from services.usage import compute_llm_cost, record_llm_usage
 
 from .agents import (
     get_agent_default_model,
@@ -372,6 +374,130 @@ async def run_agent(
 
     collected_text = ""
 
+    # Per-turn usage accumulator. claude-agent-sdk yields usage in two
+    # different shapes depending on the surface:
+    #   - AssistantMessage.usage  → snake_case (input_tokens, output_tokens,
+    #     cache_*_input_tokens) — Anthropic API raw shape.
+    #   - ResultMessage.model_usage[model] → camelCase (inputTokens,
+    #     outputTokens, cacheReadInputTokens, cacheCreationInputTokens,
+    #     costUSD).
+    # We normalize to snake_case so the rest of the cost path is uniform
+    # regardless of provider/SDK convention.
+    _accumulated_usage: dict[str, dict] = {}
+
+    # camelCase → snake_case key map covering Anthropic + claude-agent-sdk
+    # variants. Add entries here when a new provider lands with a different
+    # casing convention; the rest of the stack stays unchanged.
+    _USAGE_KEY_ALIASES: dict[str, str] = {
+        "inputTokens": "input_tokens",
+        "outputTokens": "output_tokens",
+        "cacheReadInputTokens": "cache_read_input_tokens",
+        "cacheCreationInputTokens": "cache_creation_input_tokens",
+        "promptTokens": "input_tokens",
+        "completionTokens": "output_tokens",
+        "prompt_tokens": "input_tokens",
+        "completion_tokens": "output_tokens",
+        "costUSD": "cost_usd",
+    }
+
+    def _normalize_usage(u: dict | None) -> dict:
+        """Coerce a usage dict into snake_case Anthropic-shaped keys."""
+        if not isinstance(u, dict):
+            return {}
+        out: dict = {}
+        for k, v in u.items():
+            target = _USAGE_KEY_ALIASES.get(k, k)
+            try:
+                if target == "cost_usd":
+                    out[target] = float(v or 0.0)
+                else:
+                    out[target] = int(v or 0)
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def _bump_usage(model_name: str, turn_usage: dict | None) -> None:
+        norm = _normalize_usage(turn_usage)
+        if not norm:
+            return
+        bucket = _accumulated_usage.setdefault(model_name, {})
+        for k in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ):
+            v = norm.get(k, 0)
+            try:
+                bucket[k] = bucket.get(k, 0) + int(v)
+            except (TypeError, ValueError):
+                continue
+
+    # Live LLM cost feedback. claude-agent-sdk only fires ResultMessage at the
+    # END of an agent run, so without these per-turn broadcasts the LLM-cost
+    # tile in the badge sits at 0 for the entire run while the user watches
+    # `execute-code` rack up sandbox time. We broadcast a synthetic
+    # `usage_event` per AssistantMessage with that turn's usage delta. The
+    # canonical DB row still gets written at ResultMessage time via
+    # record_llm_usage(broadcast=False) — no double-count.
+    #
+    # Dedupe: the SDK occasionally emits AssistantMessage twice for one turn
+    # (streaming partial + complete). message_id is stable per turn; fall
+    # back to a usage-tuple key when missing.
+    _seen_partial_keys: set = set()
+
+    async def _broadcast_partial_llm(
+        message_obj,
+        turn_model: str,
+        norm_usage: dict,
+    ) -> None:
+        in_tok = int(norm_usage.get("input_tokens", 0) or 0)
+        out_tok = int(norm_usage.get("output_tokens", 0) or 0)
+        cache_r = int(norm_usage.get("cache_read_input_tokens", 0) or 0)
+        cache_w = int(norm_usage.get("cache_creation_input_tokens", 0) or 0)
+        if in_tok == 0 and out_tok == 0 and cache_r == 0 and cache_w == 0:
+            return  # nothing to report
+
+        mid = getattr(message_obj, "message_id", None) or getattr(
+            message_obj, "uuid", None
+        )
+        dedupe_key = mid or (turn_model, in_tok, out_tok, cache_r, cache_w)
+        if dedupe_key in _seen_partial_keys:
+            return
+        _seen_partial_keys.add(dedupe_key)
+
+        cost = compute_llm_cost(
+            model=turn_model,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cache_read_input_tokens=cache_r,
+            cache_creation_input_tokens=cache_w,
+        )
+
+        try:
+            await broadcaster.publish(
+                session_id,
+                {
+                    "type": "usage_event",
+                    "data": {
+                        "kind": "llm",
+                        "agent_type": agent_type,
+                        "agent_id": agent_id,
+                        "provider": "claude",
+                        "model": turn_model,
+                        "input_tokens": in_tok,
+                        "output_tokens": out_tok,
+                        "cache_read_input_tokens": cache_r,
+                        "cache_creation_input_tokens": cache_w,
+                        "sandbox_seconds": 0.0,
+                        "cost_usd": cost,
+                        "is_partial": True,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.debug("Partial usage broadcast failed: %s", e)
+
     bind_log_context(
         session_id=session_id,
         agent_type=agent_type,
@@ -514,9 +640,48 @@ async def run_agent(
         except Exception:
             pass
 
+        # Collected user-side text for the lower-bound output token estimate
+        # we use when the SDK doesn't surface usage at all (some OAuth paths).
+        _collected_assistant_text = ""
+        # Track whether the SDK ever gave us real usage. If not, we'll
+        # fall back to a char-based heuristic at the end of the run.
+        _saw_real_usage = False
+
         async with asyncio.timeout(settings.agent_timeout_seconds):
             async for message in query(prompt=prompt, options=options):
+                # One-line dump of every message type the SDK yields. INFO
+                # level for now so OAuth-quirk debugging is visible without
+                # log_level=DEBUG. Trim heavy fields so logs stay readable.
+                try:
+                    _msg_type = type(message).__name__
+                    _msg_usage = getattr(message, "usage", None)
+                    _msg_model = getattr(message, "model", None)
+                    _msg_subtype = getattr(message, "subtype", None)
+                    logger.info(
+                        "[sdk-event] %s subtype=%s model=%s usage=%s",
+                        _msg_type,
+                        _msg_subtype,
+                        _msg_model,
+                        _msg_usage,
+                    )
+                except Exception:
+                    pass
+
                 if isinstance(message, AssistantMessage):
+                    # Per-turn usage. AssistantMessage.usage is the source of
+                    # truth for OAuth users (where ResultMessage.usage is
+                    # often empty). Accumulate against the message's model.
+                    turn_usage = getattr(message, "usage", None)
+                    turn_model = getattr(message, "model", None) or model
+                    if turn_usage:
+                        _saw_real_usage = True
+                    _bump_usage(turn_model, turn_usage)
+                    # Live LLM cost feedback — broadcast a partial usage_event
+                    # so the badge ticks up during the run, not just at end.
+                    if turn_usage:
+                        await _broadcast_partial_llm(
+                            message, turn_model, _normalize_usage(turn_usage)
+                        )
                     for block in message.content:
                         # 1) Plain text — keep the existing agent_message stream
                         #    that the frontend already renders, AND mirror it
@@ -524,6 +689,7 @@ async def run_agent(
                         if hasattr(block, "text") and getattr(block, "text", None):
                             text = block.text
                             collected_text += text
+                            _collected_assistant_text += text
                             await _publish(
                                 "agent_message",
                                 {"text": text},
@@ -607,6 +773,194 @@ async def run_agent(
 
                 elif isinstance(message, ResultMessage):
                     logger.info("Agent %s done", agent_type)
+                    # Record token usage. Resolution order, in priority:
+                    #   1. ResultMessage.model_usage  (per-model aggregate)
+                    #   2. ResultMessage.usage        (single-model aggregate)
+                    #   3. _accumulated_usage         (per-turn fallback —
+                    #      the Claude OAuth path leaves 1/2 empty)
+                    # Each call records via record_llm_usage which spawns
+                    # its own span via observability.record_usage_attributes.
+                    logger.info(
+                        "ResultMessage usage shapes — usage=%s, model_usage=%s, "
+                        "total_cost_usd=%s, accumulated_models=%s",
+                        message.usage,
+                        message.model_usage,
+                        message.total_cost_usd,
+                        list(_accumulated_usage.keys()),
+                    )
+
+                    sdk_has_usage = bool(message.model_usage) or bool(message.usage)
+                    if not sdk_has_usage and _accumulated_usage:
+                        logger.info(
+                            "Using per-turn accumulated usage as fallback "
+                            "(SDK aggregate was empty — likely OAuth path)"
+                        )
+
+                    # Pick the canonical source for span attributes.
+                    if message.usage:
+                        agg = message.usage
+                    elif _accumulated_usage:
+                        # Sum across models for the agent-span aggregate.
+                        agg = {}
+                        for bucket in _accumulated_usage.values():
+                            for k, v in bucket.items():
+                                agg[k] = agg.get(k, 0) + v
+                    else:
+                        agg = {}
+
+                    try:
+                        try:
+                            _agent_span.set_attribute(
+                                "llm.input_tokens",
+                                int(agg.get("input_tokens", 0) or 0),
+                            )
+                            _agent_span.set_attribute(
+                                "llm.output_tokens",
+                                int(agg.get("output_tokens", 0) or 0),
+                            )
+                            _agent_span.set_attribute(
+                                "llm.cache_read_input_tokens",
+                                int(agg.get("cache_read_input_tokens", 0) or 0),
+                            )
+                            if message.total_cost_usd is not None:
+                                _agent_span.set_attribute(
+                                    "llm.cost_usd", float(message.total_cost_usd)
+                                )
+                        except Exception:
+                            pass
+
+                        # Decision tree, in order:
+                        #   1. ResultMessage.model_usage  → per-model rows
+                        #      (preferred — gives correct per-model cost
+                        #      attribution since each model has its own
+                        #      pricing). camelCase keys are normalized.
+                        #   2. ResultMessage.usage        → single row
+                        #      (the aggregate; mis-attributes when multiple
+                        #      models ran). Used only when (1) is empty.
+                        #   3. _accumulated_usage         → per-turn fallback
+                        #      built from AssistantMessage.usage events.
+                        #   4. Char-based heuristic       → if nothing above
+                        #      gave us real tokens.
+                        def _has_tokens(u) -> bool:
+                            if not isinstance(u, dict):
+                                return False
+                            n = _normalize_usage(u)
+                            return (
+                                int(n.get("input_tokens", 0) or 0) > 0
+                                or int(n.get("output_tokens", 0) or 0) > 0
+                            )
+
+                        # Normalize all three potential sources up-front.
+                        norm_model_usage = {
+                            m_name: _normalize_usage(m_usage)
+                            for m_name, m_usage in (message.model_usage or {}).items()
+                        }
+                        norm_message_usage = _normalize_usage(message.usage)
+
+                        model_usage_has_tokens = any(
+                            _has_tokens(u) for u in norm_model_usage.values()
+                        )
+                        message_usage_has_tokens = _has_tokens(norm_message_usage)
+                        accumulated_has_tokens = any(
+                            _has_tokens(u) for u in _accumulated_usage.values()
+                        )
+
+                        if not (
+                            model_usage_has_tokens
+                            or message_usage_has_tokens
+                            or accumulated_has_tokens
+                        ):
+                            logger.warning(
+                                "[cost] SDK returned no non-zero token counts. "
+                                "raw usage=%r model_usage=%r accumulated=%r",
+                                message.usage,
+                                message.model_usage,
+                                dict(_accumulated_usage),
+                            )
+
+                        # broadcast=False on every record_llm_usage call: live
+                        # SSE has already been emitted per-turn via
+                        # `_broadcast_partial_llm` above. The DB row is the
+                        # canonical source for hydration on session reload —
+                        # broadcasting it again would double-count in the
+                        # frontend's accumulator.
+                        if model_usage_has_tokens:
+                            for m_name, m_usage in norm_model_usage.items():
+                                if not _has_tokens(m_usage):
+                                    continue
+                                await record_llm_usage(
+                                    session_id=session_id,
+                                    agent_type=agent_type,
+                                    agent_id=agent_id,
+                                    provider="claude",
+                                    model=m_name,
+                                    usage=m_usage,
+                                    is_error=bool(message.is_error),
+                                    broadcast=False,
+                                )
+                        elif message_usage_has_tokens:
+                            await record_llm_usage(
+                                session_id=session_id,
+                                agent_type=agent_type,
+                                agent_id=agent_id,
+                                provider="claude",
+                                model=model,
+                                usage=norm_message_usage,
+                                is_error=bool(message.is_error),
+                                broadcast=False,
+                            )
+                        elif accumulated_has_tokens:
+                            # OAuth fallback: write one row per model we saw
+                            # across AssistantMessage turns.
+                            for m_name, m_usage in _accumulated_usage.items():
+                                if not _has_tokens(m_usage):
+                                    continue
+                                await record_llm_usage(
+                                    session_id=session_id,
+                                    agent_type=agent_type,
+                                    agent_id=agent_id,
+                                    provider="claude",
+                                    model=m_name,
+                                    usage=m_usage,
+                                    is_error=bool(message.is_error),
+                                    broadcast=False,
+                                )
+                        else:
+                            # Last-resort heuristic: SDK gave us NO usage on
+                            # any event (Claude Code OAuth + older claude-
+                            # agent-sdk versions sometimes leaves it null).
+                            # Estimate from char length so the user sees a
+                            # ballpark cost instead of zero. Tag the row so
+                            # later we can distinguish estimated vs real.
+                            est_in = max(0, (len(prompt) + len(system_prompt)) // 4)
+                            est_out = max(0, len(_collected_assistant_text) // 4)
+                            if est_in or est_out:
+                                logger.warning(
+                                    "[cost] SDK never reported usage — falling "
+                                    "back to char-based estimate (in≈%d out≈%d). "
+                                    "Tool calls + intermediate context not counted, "
+                                    "so this is a LOWER bound.",
+                                    est_in,
+                                    est_out,
+                                )
+                                # Broadcast THIS one — heuristic path means no
+                                # partials were fired, so the canonical event
+                                # IS the user's only signal.
+                                await record_llm_usage(
+                                    session_id=session_id,
+                                    agent_type=agent_type,
+                                    agent_id=agent_id,
+                                    provider="claude",
+                                    model=model,
+                                    usage={
+                                        "input_tokens": est_in,
+                                        "output_tokens": est_out,
+                                    },
+                                    is_error=bool(message.is_error),
+                                    extra={"estimate": "char_div_4"},
+                                )
+                    except Exception as e:
+                        logger.warning("record_llm_usage failed: %s", e)
 
         # After agent finishes, read back the report and file list from volume
         await publish_artifacts(session_id, experiment_id, stage)
