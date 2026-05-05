@@ -16,6 +16,7 @@ import type {
   FileTreeNode,
   DeleteResponse,
   AbortResponse,
+  UsageSummary,
 } from './types';
 
 const API_BASE = '/api';
@@ -201,4 +202,11 @@ export const api = {
     if (!res.ok) throw new Error(`Attach failed: ${res.status}`);
     return res.json();
   },
+
+  // Usage / cost
+  usageSummary: () => fetchJSON<UsageSummary>(`/usage/summary`),
+  projectUsage: (projectId: string) =>
+    fetchJSON<UsageSummary>(`/projects/${projectId}/usage`),
+  sessionUsage: (sessionId: string) =>
+    fetchJSON<UsageSummary>(`/sessions/${sessionId}/usage`),
 };
