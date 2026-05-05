@@ -373,16 +373,51 @@ async def run_agent(
 
     collected_text = ""
 
-    # Per-turn usage accumulator. claude-agent-sdk's ResultMessage.usage is
-    # often empty for Claude Code OAuth (subscription) users — Anthropic
-    # doesn't bill them per call so the SDK skips the aggregate. But every
-    # AssistantMessage still carries a `usage` dict with the real token
-    # counts from the underlying Messages API. We accumulate per model here
-    # and fall back to this on ResultMessage when the aggregate is empty.
+    # Per-turn usage accumulator. claude-agent-sdk yields usage in two
+    # different shapes depending on the surface:
+    #   - AssistantMessage.usage  → snake_case (input_tokens, output_tokens,
+    #     cache_*_input_tokens) — Anthropic API raw shape.
+    #   - ResultMessage.model_usage[model] → camelCase (inputTokens,
+    #     outputTokens, cacheReadInputTokens, cacheCreationInputTokens,
+    #     costUSD).
+    # We normalize to snake_case so the rest of the cost path is uniform
+    # regardless of provider/SDK convention.
     _accumulated_usage: dict[str, dict] = {}
 
+    # camelCase → snake_case key map covering Anthropic + claude-agent-sdk
+    # variants. Add entries here when a new provider lands with a different
+    # casing convention; the rest of the stack stays unchanged.
+    _USAGE_KEY_ALIASES: dict[str, str] = {
+        "inputTokens": "input_tokens",
+        "outputTokens": "output_tokens",
+        "cacheReadInputTokens": "cache_read_input_tokens",
+        "cacheCreationInputTokens": "cache_creation_input_tokens",
+        "promptTokens": "input_tokens",
+        "completionTokens": "output_tokens",
+        "prompt_tokens": "input_tokens",
+        "completion_tokens": "output_tokens",
+        "costUSD": "cost_usd",
+    }
+
+    def _normalize_usage(u: dict | None) -> dict:
+        """Coerce a usage dict into snake_case Anthropic-shaped keys."""
+        if not isinstance(u, dict):
+            return {}
+        out: dict = {}
+        for k, v in u.items():
+            target = _USAGE_KEY_ALIASES.get(k, k)
+            try:
+                if target == "cost_usd":
+                    out[target] = float(v or 0.0)
+                else:
+                    out[target] = int(v or 0)
+            except (TypeError, ValueError):
+                continue
+        return out
+
     def _bump_usage(model_name: str, turn_usage: dict | None) -> None:
-        if not turn_usage:
+        norm = _normalize_usage(turn_usage)
+        if not norm:
             return
         bucket = _accumulated_usage.setdefault(model_name, {})
         for k in (
@@ -391,7 +426,7 @@ async def run_agent(
             "cache_creation_input_tokens",
             "cache_read_input_tokens",
         ):
-            v = turn_usage.get(k, 0) or 0
+            v = norm.get(k, 0)
             try:
                 bucket[k] = bucket.get(k, 0) + int(v)
             except (TypeError, ValueError):
@@ -724,32 +759,38 @@ async def run_agent(
                         except Exception:
                             pass
 
-                        # A usage dict is only "real" if it has non-zero
-                        # input_tokens OR output_tokens. The SDK sometimes
-                        # passes us {"input_tokens": 0, "output_tokens": 0,
-                        # "service_tier": "..."} for OAuth users — non-empty
-                        # but useless. Treat those as missing and fall
-                        # through to the next-best source.
+                        # Decision tree, in order:
+                        #   1. ResultMessage.model_usage  → per-model rows
+                        #      (preferred — gives correct per-model cost
+                        #      attribution since each model has its own
+                        #      pricing). camelCase keys are normalized.
+                        #   2. ResultMessage.usage        → single row
+                        #      (the aggregate; mis-attributes when multiple
+                        #      models ran). Used only when (1) is empty.
+                        #   3. _accumulated_usage         → per-turn fallback
+                        #      built from AssistantMessage.usage events.
+                        #   4. Char-based heuristic       → if nothing above
+                        #      gave us real tokens.
                         def _has_tokens(u) -> bool:
                             if not isinstance(u, dict):
                                 return False
-                            for key in (
-                                "input_tokens",
-                                "output_tokens",
-                                "prompt_tokens",
-                                "completion_tokens",
-                            ):
-                                try:
-                                    if int(u.get(key, 0) or 0) > 0:
-                                        return True
-                                except (TypeError, ValueError):
-                                    continue
-                            return False
+                            n = _normalize_usage(u)
+                            return (
+                                int(n.get("input_tokens", 0) or 0) > 0
+                                or int(n.get("output_tokens", 0) or 0) > 0
+                            )
 
-                        model_usage_has_tokens = bool(message.model_usage) and any(
-                            _has_tokens(u) for u in (message.model_usage or {}).values()
+                        # Normalize all three potential sources up-front.
+                        norm_model_usage = {
+                            m_name: _normalize_usage(m_usage)
+                            for m_name, m_usage in (message.model_usage or {}).items()
+                        }
+                        norm_message_usage = _normalize_usage(message.usage)
+
+                        model_usage_has_tokens = any(
+                            _has_tokens(u) for u in norm_model_usage.values()
                         )
-                        message_usage_has_tokens = _has_tokens(message.usage)
+                        message_usage_has_tokens = _has_tokens(norm_message_usage)
                         accumulated_has_tokens = any(
                             _has_tokens(u) for u in _accumulated_usage.values()
                         )
@@ -768,7 +809,7 @@ async def run_agent(
                             )
 
                         if model_usage_has_tokens:
-                            for m_name, m_usage in message.model_usage.items():
+                            for m_name, m_usage in norm_model_usage.items():
                                 if not _has_tokens(m_usage):
                                     continue
                                 await record_llm_usage(
@@ -787,7 +828,7 @@ async def run_agent(
                                 agent_id=agent_id,
                                 provider="claude",
                                 model=model,
-                                usage=message.usage,
+                                usage=norm_message_usage,
                                 is_error=bool(message.is_error),
                             )
                         elif accumulated_has_tokens:

@@ -74,14 +74,32 @@ def compute_llm_cost(
     cache_read_input_tokens: int = 0,
     cache_creation_input_tokens: int = 0,
 ) -> float:
-    """Compute cost for a single LLM call. Unknown models return 0.0."""
+    """Compute cost for a single LLM call. Unknown models return 0.0.
+
+    Resolves model id flexibly so dated variants work (e.g.
+    "claude-haiku-4-5-20251001" maps to "claude-haiku-4-5"). Strips
+    vendor prefixes like "anthropic:". Falls back to longest-prefix
+    match in _PRICING so future SDK variants (date suffixes, region
+    suffixes, etc.) keep working without a code change.
+    """
     if not model:
         return 0.0
+
     p = _PRICING.get(model)
+
     if not p:
         # Strip vendor prefixes like "anthropic:" or "openai:".
         bare = model.split(":")[-1]
-        p = _PRICING.get(bare, {})
+        p = _PRICING.get(bare)
+
+    if not p:
+        # Longest-prefix match — handles "claude-haiku-4-5-20251001" etc.
+        candidates = [(key, _PRICING[key]) for key in _PRICING if model.startswith(key)]
+        if candidates:
+            # Pick the most specific (longest) prefix.
+            candidates.sort(key=lambda kv: len(kv[0]), reverse=True)
+            p = candidates[0][1]
+
     if not p:
         return 0.0
     in_rate = _per_token(p["input"])
