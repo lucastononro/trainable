@@ -1,0 +1,7 @@
+type: object
+properties:
+  slug:
+    type: string
+    description: The skill identifier (e.g. "eda-report", "train-tabular").
+required:
+- slug
