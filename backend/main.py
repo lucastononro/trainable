@@ -19,6 +19,7 @@ from routers import (
     projects,
     s3_browser,
     sessions,
+    skills as skills_router,
     stream,
     usage,
 )
@@ -84,6 +85,7 @@ app.include_router(data_explorer.router, prefix="/api")
 app.include_router(models.router, prefix="/api")
 app.include_router(notebook.router, prefix="/api")
 app.include_router(usage.router, prefix="/api")
+app.include_router(skills_router.router, prefix="/api")
 
 
 @app.get("/api/health")
