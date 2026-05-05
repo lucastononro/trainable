@@ -136,8 +136,7 @@ export default function UsagePage() {
                   summary.totals.input_tokens + summary.totals.cache_read_input_tokens > 0
                     ? `${(
                         (summary.totals.cache_read_input_tokens /
-                          (summary.totals.input_tokens +
-                            summary.totals.cache_read_input_tokens)) *
+                          (summary.totals.input_tokens + summary.totals.cache_read_input_tokens)) *
                         100
                       ).toFixed(0)}%`
                     : '—'
@@ -365,17 +364,12 @@ function SessionBreakdown({ sessions }: { sessions: SessionUsageRow[] }) {
 
   // Sort to put highest-cost sessions on top — those are the ones the user
   // is most likely investigating first.
-  const sorted = useMemo(
-    () => [...sessions].sort((a, b) => b.cost_usd - a.cost_usd),
-    [sessions],
-  );
+  const sorted = useMemo(() => [...sessions].sort((a, b) => b.cost_usd - a.cost_usd), [sessions]);
 
   return (
     <section className="space-y-2">
       <div className="flex items-center gap-2">
-        <h2 className="text-xs uppercase tracking-wider text-gray-500 font-semibold">
-          By session
-        </h2>
+        <h2 className="text-xs uppercase tracking-wider text-gray-500 font-semibold">By session</h2>
         <span className="text-[10px] text-gray-600">{sorted.length} sessions</span>
       </div>
       <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl overflow-hidden">

@@ -450,8 +450,7 @@ export default function HomePage() {
                   cache_read_input_tokens:
                     prev.cache_read_input_tokens + (ev.cache_read_input_tokens || 0),
                   cache_creation_input_tokens:
-                    prev.cache_creation_input_tokens +
-                    (ev.cache_creation_input_tokens || 0),
+                    prev.cache_creation_input_tokens + (ev.cache_creation_input_tokens || 0),
                   llm_calls: prev.llm_calls + (isLlm ? 1 : 0),
                   sandbox_seconds: prev.sandbox_seconds + (ev.sandbox_seconds || 0),
                   compute_runs: prev.compute_runs + (isLlm ? 0 : 1),

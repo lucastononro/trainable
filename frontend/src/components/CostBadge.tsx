@@ -66,13 +66,9 @@ export default function CostBadge({ totals = ZERO, recent = [] }: Props) {
   // This way "100%" only happens when we literally only read cache and never
   // wrote / sent fresh tokens — which is rare and meaningful.
   const totalInputCharged =
-    totals.input_tokens +
-    totals.cache_read_input_tokens +
-    totals.cache_creation_input_tokens;
+    totals.input_tokens + totals.cache_read_input_tokens + totals.cache_creation_input_tokens;
   const cacheHit =
-    totalInputCharged > 0
-      ? (totals.cache_read_input_tokens / totalInputCharged) * 100
-      : 0;
+    totalInputCharged > 0 ? (totals.cache_read_input_tokens / totalInputCharged) * 100 : 0;
 
   return (
     <div ref={ref} className="relative">
@@ -131,8 +127,7 @@ export default function CostBadge({ totals = ZERO, recent = [] }: Props) {
               icon={<Cpu className="w-3 h-3 text-emerald-400" />}
             />
 
-            {(totals.cache_read_input_tokens > 0 ||
-              totals.cache_creation_input_tokens > 0) && (
+            {(totals.cache_read_input_tokens > 0 || totals.cache_creation_input_tokens > 0) && (
               <Stat
                 label="Cache hit"
                 value={`${cacheHit.toFixed(0)}%`}
@@ -201,8 +196,7 @@ function TokenBreakdown({
 }) {
   const rows: Array<{ label: string; value: number; color: string }> = [];
   if (fresh > 0) rows.push({ label: 'fresh input', value: fresh, color: 'text-gray-400' });
-  if (cacheRead > 0)
-    rows.push({ label: 'cache read', value: cacheRead, color: 'text-violet-300' });
+  if (cacheRead > 0) rows.push({ label: 'cache read', value: cacheRead, color: 'text-violet-300' });
   if (cacheWrite > 0)
     rows.push({ label: 'cache write', value: cacheWrite, color: 'text-amber-300' });
   if (output > 0) rows.push({ label: 'output', value: output, color: 'text-emerald-300' });

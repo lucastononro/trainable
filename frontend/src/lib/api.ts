@@ -205,8 +205,6 @@ export const api = {
 
   // Usage / cost
   usageSummary: () => fetchJSON<UsageSummary>(`/usage/summary`),
-  projectUsage: (projectId: string) =>
-    fetchJSON<UsageSummary>(`/projects/${projectId}/usage`),
-  sessionUsage: (sessionId: string) =>
-    fetchJSON<UsageSummary>(`/sessions/${sessionId}/usage`),
+  projectUsage: (projectId: string) => fetchJSON<UsageSummary>(`/projects/${projectId}/usage`),
+  sessionUsage: (sessionId: string) => fetchJSON<UsageSummary>(`/sessions/${sessionId}/usage`),
 };
