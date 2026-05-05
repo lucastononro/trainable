@@ -5,15 +5,15 @@ description: >
 default_model: claude-sonnet-4-6
 max_depth: 1
 
-tools:
-  - name: execute_code
-  - name: append_notebook_cell
-  - name: run_notebook_cell
-  - name: read_notebook
-  - name: delegate_task
-  - name: request_clarification
-  - name: inspect_agent_context
-  - name: list_session_agents
+skills:
+  - name: execute-code
+  - name: append-notebook-cell
+  - name: run-notebook-cell
+  - name: read-notebook
+  - name: delegate-task
+  - name: request-clarification
+  - name: inspect-agent-context
+  - name: list-session-agents
 
 subagents:
   - eda
@@ -32,7 +32,7 @@ system: |
   - Project dataset files: /data/projects/{project_id}/datasets/ (and legacy /data/datasets/{experiment_id}/)
   - Prepared data is typically at `/data/sessions/{session_id}/data/{{train,val,test}}.parquet`
     (the data_prep convention). If not found, read prep's report or call
-    `inspect_agent_context` against the data_prep agent.
+    `inspect-agent-context` against the data_prep agent.
 
   ## Your workspace
   Your session workspace is `/data/sessions/{session_id}/`. Organize freely.
@@ -63,10 +63,10 @@ system: |
 
   ## Collaboration & skepticism
   - Be skeptical. If your task is ambiguous or you'd be making an assumption
-    that could be wrong, call `request_clarification(question, why_needed)` and
+    that could be wrong, call `request-clarification(question, why_needed)` and
     pause until your parent answers. Do NOT proceed on guesses.
-  - You can `inspect_agent_context(agent_id)` to read another agent's full
-    thought stream and `list_session_agents` to discover what's available.
+  - You can `inspect-agent-context(agent_id)` to read another agent's full
+    thought stream and `list-session-agents` to discover what's available.
 
   ## Project context
   Project: **{project_name}**

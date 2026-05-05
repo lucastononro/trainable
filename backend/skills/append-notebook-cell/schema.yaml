@@ -1,0 +1,37 @@
+type: object
+properties:
+  notebook_name:
+    type: string
+    description: 'Target notebook (e.g. "data-overview"). Creates the file if it
+
+      doesn''t exist. Defaults to "scratch" if omitted.
+
+      '
+  cell_type:
+    type: string
+    enum:
+    - code
+    - markdown
+    description: '''code'' for a runnable Python cell; ''markdown'' for narrative/headings.'
+  source:
+    type: string
+    description: 'The full cell source. For code cells this is Python; for markdown
+      it
+
+      is standard markdown. Markdown cells can reference session-local
+
+      images with `![alt](figures/chart.png)` — the UI will rewrite
+
+      relative paths to the session workspace.
+
+      '
+  after_cell_id:
+    type: string
+    description: 'Optional — insert directly after this existing cell. Otherwise
+
+      the cell is appended at the end.
+
+      '
+required:
+- cell_type
+- source

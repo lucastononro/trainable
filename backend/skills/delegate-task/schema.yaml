@@ -1,0 +1,14 @@
+type: object
+properties:
+  agent_type:
+    type: string
+    description: The type of specialist agent to invoke
+  task:
+    type: string
+    description: Specific instructions for the sub-agent
+  context:
+    type: string
+    description: Optional context from prior agent results to pass along
+required:
+- agent_type
+- task

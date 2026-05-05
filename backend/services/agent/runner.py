@@ -31,7 +31,7 @@ from services.usage import record_llm_usage
 from .agents import (
     get_agent_default_model,
     get_agent_opener,
-    get_agent_tools,
+    get_agent_skills,
     render_agent_system_prompt,
 )
 from .events import post_stage_hook, publish_artifacts, save_and_publish
@@ -462,14 +462,14 @@ async def run_agent(
             parent_agent_id=parent_agent_id,
         )
 
-        # Build tool list from agent config
-        agent_tools = get_agent_tools(agent_type)
-        tool_names = [f"mcp__trainable__{t}" for t in agent_tools]
-        # Only include delegate_task if depth allows it
+        # Build skill list from agent config
+        agent_skills = get_agent_skills(agent_type)
+        tool_names = [f"mcp__trainable__{t}" for t in agent_skills]
+        # Only include delegate-task if depth allows it
         from .agents import can_delegate
 
-        if "delegate_task" in agent_tools and not can_delegate(agent_type, depth):
-            tool_names = [t for t in tool_names if "delegate_task" not in t]
+        if "delegate-task" in agent_skills and not can_delegate(agent_type, depth):
+            tool_names = [t for t in tool_names if "delegate-task" not in t]
 
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
@@ -486,7 +486,7 @@ async def run_agent(
         )
 
         logger.info(
-            "Starting agent=%s id=%s parent=%s stage=%s session=%s model=%s depth=%d tools=%s",
+            "Starting agent=%s id=%s parent=%s stage=%s session=%s model=%s depth=%d skills=%s",
             agent_type,
             agent_id,
             parent_agent_id,
@@ -494,7 +494,7 @@ async def run_agent(
             session_id,
             model,
             depth,
-            agent_tools,
+            agent_skills,
         )
 
         # Open the OTel span over the whole SDK loop. Using a manual
@@ -511,7 +511,7 @@ async def run_agent(
         _agent_span = _agent_span_cm.__enter__()
         try:
             _agent_span.set_attribute("agent.parent_id", parent_agent_id or "")
-            _agent_span.set_attribute("agent.tools.count", len(agent_tools))
+            _agent_span.set_attribute("agent.skills.count", len(agent_skills))
         except Exception:
             pass
 

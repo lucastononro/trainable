@@ -1,0 +1,24 @@
+type: object
+properties:
+  session_id:
+    type: string
+    description: The session_id whose workspace you want to read from.
+  path:
+    type: string
+    description: 'File path. Either absolute (/sessions/{sid}/...) or relative to
+      that
+
+      session''s workspace ("report.md", "figures/loss.png"). Must stay
+
+      inside the target session''s workspace.
+
+      '
+  offset:
+    type: integer
+    description: Starting character offset for text files (default 0).
+  limit:
+    type: integer
+    description: Max characters to return for text files (default 12000, max 12000).
+required:
+- session_id
+- path
