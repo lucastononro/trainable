@@ -12,9 +12,12 @@ See the [README](README.md) for prerequisites and quick start instructions.
 
 ```bash
 cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
 ```
+
+(`pip install -r requirements.txt` still works if you don't have uv —
+install uv once with `curl -LsSf https://astral.sh/uv/install.sh | sh`.)
 
 ### Frontend
 
@@ -28,7 +31,7 @@ npm ci
 We use [pre-commit](https://pre-commit.com/) to run checks before each commit:
 
 ```bash
-pip install pre-commit
+uv tool install pre-commit  # or: pip install pre-commit
 pre-commit install
 ```
 

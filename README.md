@@ -15,7 +15,12 @@ You need **Docker** and one of:
 ### One-liner (recommended)
 
 ```bash
+# With uv (fast, isolated env per tool — preferred):
+uv tool install trainable-ai
+
+# Or with pip:
 pip install trainable-ai
+
 trainable init
 ```
 
@@ -102,10 +107,13 @@ cp .env.example .env
 
 ```bash
 cd backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
+uv venv && source .venv/bin/activate
+uv pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 ```
+
+Don't have uv? Install it once with `curl -LsSf https://astral.sh/uv/install.sh | sh`,
+or fall back to `python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt`.
 
 ### Frontend
 
@@ -136,7 +144,7 @@ pytest tests/ -v
 ## Project Structure
 
 ```
-cli/               CLI installer (pip install trainable-ai)
+cli/               CLI installer (uv tool install trainable-ai)
 backend/           FastAPI application
   routers/         API endpoints (experiments, sessions, stream, files)
   services/        Agent orchestration, sandbox, broadcaster, validators

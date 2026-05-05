@@ -14,12 +14,15 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install build tools
-        run: pip install build
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
 
+      # `uv build` ships its own PEP-517 builder — no need to install the
+      # `build` package separately, and it's an order of magnitude faster.
       - name: Build package
         working-directory: cli
-        run: python -m build
+        run: uv build
 
       - uses: actions/upload-artifact@v4
         with:

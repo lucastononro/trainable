@@ -5,6 +5,10 @@ AI-powered ML experimentation platform — local installer.
 ## Install
 
 ```bash
+# With uv (preferred — isolated env per tool, no PATH conflicts):
+uv tool install trainable-ai
+
+# Or with pip:
 pip install trainable-ai
 ```
 

@@ -359,7 +359,7 @@ USAGE = f"""\
   trainable down    Stop all services
 
 {BOLD}Quick start:{RESET}
-  pip install trainable-ai
+  uv tool install trainable-ai   # or: pip install trainable-ai
   trainable init
 """
 

@@ -8,7 +8,6 @@ input_schema are sourced from the skill's SKILL.md frontmatter and schema.yaml.
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
 from pathlib import Path
 
 import yaml
@@ -20,9 +19,12 @@ logger = logging.getLogger(__name__)
 _AGENTS_DIR = Path(__file__).parent.parent.parent / "agents"
 
 
-@lru_cache(maxsize=None)
 def _load_agent_yaml(agent_type: str) -> dict:
-    """Load a single agent YAML file."""
+    """Load a single agent YAML file.
+
+    Not cached: prompt edits land without a backend restart, which is the
+    whole point of YAML-driven agent definitions during iteration.
+    """
     path = _AGENTS_DIR / f"{agent_type}.yaml"
     if not path.exists():
         raise KeyError(f"Agent definition not found: {path}")
