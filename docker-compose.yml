@@ -32,17 +32,14 @@ services:
       timeout: 3s
       retries: 10
 
-  # Jaeger all-in-one with the built-in OTLP collector. Local-dev only —
-  # not in docker-compose.prod.yml. UI lives at http://localhost:16686.
-  # The backend ships traces to it via OTLP/gRPC on port 4317.
+  # Jaeger v2 — OTLP is the native ingestion path (no extra env var needed).
+  # UI at http://localhost:16686. Backend ships traces via OTLP/gRPC on 4317.
   jaeger:
-    image: jaegertracing/all-in-one:1.76.0
+    image: jaegertracing/jaeger:2.17.0
     ports:
       - "16686:16686"  # Jaeger UI
       - "4317:4317"    # OTLP gRPC (what the backend uses)
       - "4318:4318"    # OTLP HTTP (alternative)
-    environment:
-      COLLECTOR_OTLP_ENABLED: "true"
 
   backend:
     build: ./backend
