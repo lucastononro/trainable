@@ -13,6 +13,14 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+
+def pytest_configure(config):
+    """Register custom markers so pytest doesn't warn on @pytest.mark.e2e."""
+    config.addinivalue_line(
+        "markers",
+        "e2e: marks tests that hit live LLM APIs; gated on RUN_LLM_E2E=1.",
+    )
+
 # Use in-memory SQLite for tests (no Postgres needed)
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 

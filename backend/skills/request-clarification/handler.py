@@ -3,10 +3,10 @@
 Flow:
   1. Sub-agent calls the skill with a question.
   2. We persist the Q under the asker's agent_id.
-  3. We run a short, isolated `claude_agent_sdk.query()` impersonating the
-     parent — same system prompt, same accumulated thought stream — and ask
-     it to either answer or prefix its response with `ESCALATE:` if the
-     question requires user input.
+  3. We run a short, isolated impersonator call (routed through the LLM
+     factory using the parent's configured provider) — same system prompt,
+     same accumulated thought stream — and ask it to either answer or prefix
+     its response with `ESCALATE:` if the question requires user input.
   4. If the parent answers directly, we return the answer.
   5. If the parent escalates, we register a future, publish a
      `clarification_request` SSE event, and `await` until the HTTP endpoint
@@ -19,17 +19,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-
 import time
 
-from claude_agent_sdk import AssistantMessage, ClaudeAgentOptions, query
 from sqlalchemy import select
 
 from config import settings
 from db import async_session
 from models import Message
 from services.clarifications import get_session_semaphore, register
-
+from services.llm import factory as llm_factory
 from services.skills.visible_events import emit_clarification_exchange, new_call_id
 
 logger = logging.getLogger(__name__)
@@ -76,32 +74,15 @@ async def _load_parent_thought_stream(session_id: str, parent_agent_id: str) -> 
     return "\n\n".join(parts)
 
 
-async def _run_impersonator(
-    parent_agent_type: str,
+def _build_impersonator_prompt(
+    *,
+    parent_system: str,
     parent_thought_stream: str,
     question: str,
     why_needed: str,
     asker_agent_type: str,
-    parent_model: str | None,
 ) -> str:
-    """One-shot Claude call that impersonates the parent to answer one question.
-
-    No tools — pure text in, pure text out.
-    """
-    from services.agent.agents import (
-        get_agent_default_model,
-        render_agent_system_prompt,
-    )
-
-    parent_system = render_agent_system_prompt(
-        parent_agent_type,
-        experiment_id="",
-        session_id="",
-        instructions="",
-        prev_context="(see thought stream below)",
-    )
-
-    impersonator_prompt = (
+    return (
         f"{parent_system}\n\n"
         f"## Your recent thought stream (for context)\n"
         f"{parent_thought_stream or '(empty)'}\n\n"
@@ -117,35 +98,82 @@ async def _run_impersonator(
         f"answer yourself."
     )
 
+
+async def _run_impersonator(
+    parent_agent_type: str,
+    parent_thought_stream: str,
+    question: str,
+    why_needed: str,
+    asker_agent_type: str,
+    parent_model: str | None,
+) -> str:
+    """One-shot LLM call routed through the parent's configured provider.
+
+    Provider-agnostic: the parent's `provider:` field in agents/<type>.yaml
+    decides which LLMProvider to invoke. No tools — pure text in, text out.
+    On error or timeout, escalate to the user rather than failing silently.
+    """
+    from services.agent.agents import (
+        get_agent_default_model,
+        get_agent_provider,
+        render_agent_system_prompt,
+    )
+
+    parent_system = render_agent_system_prompt(
+        parent_agent_type,
+        experiment_id="",
+        session_id="",
+        instructions="",
+        prev_context="(see thought stream below)",
+    )
+    impersonator_prompt = _build_impersonator_prompt(
+        parent_system=parent_system,
+        parent_thought_stream=parent_thought_stream,
+        question=question,
+        why_needed=why_needed,
+        asker_agent_type=asker_agent_type,
+    )
+
+    provider_id = get_agent_provider(parent_agent_type)
     model = (
         parent_model
         or get_agent_default_model(parent_agent_type)
         or settings.claude_model
     )
 
-    options = ClaudeAgentOptions(
-        system_prompt="You are answering a brief clarifying question for one of your sub-agents.",
-        model=model,
-        permission_mode="bypassPermissions",
-        max_turns=1,
-        tools=[],
-        allowed_tools=[],
-        env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
-    )
+    try:
+        provider = llm_factory.get_provider(provider_id)
+    except KeyError as e:
+        logger.warning("Impersonator: provider '%s' not registered: %s", provider_id, e)
+        return f"{_ESCALATE_PREFIX} {question} (provider {provider_id} unavailable)"
 
     collected = ""
     try:
         async with asyncio.timeout(60):
-            async for message in query(prompt=impersonator_prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        if hasattr(block, "text") and block.text:
-                            collected += block.text
+            async for event in provider.run(
+                prompt=impersonator_prompt,
+                system_prompt="You are answering a brief clarifying question for one of your sub-agents.",
+                model=model,
+                tools=[],
+                mcp_servers={},
+                max_turns=1,
+                timeout_seconds=60,
+                permission_mode="bypassPermissions",
+                env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
+            ):
+                if event.kind == "text":
+                    collected += event.data.get("text", "")
+                elif event.kind == "error":
+                    logger.warning(
+                        "Impersonator (%s) error event: %s",
+                        provider_id,
+                        event.data.get("message"),
+                    )
     except (asyncio.TimeoutError, TimeoutError):
-        logger.warning("Impersonator call timed out")
+        logger.warning("Impersonator call timed out (provider=%s)", provider_id)
         return f"{_ESCALATE_PREFIX} {question}"
     except Exception as e:
-        logger.exception("Impersonator call failed")
+        logger.exception("Impersonator call failed (provider=%s)", provider_id)
         return f"{_ESCALATE_PREFIX} {question} (parent could not answer: {e})"
 
     return collected.strip()

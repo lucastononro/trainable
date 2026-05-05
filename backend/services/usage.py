@@ -38,6 +38,10 @@ _PRICING: dict[str, dict[str, float]] = {
     # Gemini
     "gemini-2.5-pro": {"input": 1.25, "output": 5.0},
     "gemini-2.5-flash": {"input": 0.10, "output": 0.40},
+    # LiteLLM-routed backends (model-id encodes the backend)
+    "groq/llama-3.3-70b-versatile": {"input": 0.59, "output": 0.79},
+    "mistral/mistral-large-latest": {"input": 2.0, "output": 6.0},
+    "deepseek/deepseek-chat": {"input": 0.14, "output": 0.28},
 }
 
 # Sandbox compute pricing (approximate, USD/second). Real Modal pricing is
