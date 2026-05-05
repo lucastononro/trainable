@@ -44,7 +44,10 @@ services:
   backend:
     build: ./backend
     ports:
-      - "8000:8000"
+      # Host port is overridable via $BACKEND_PORT (e.g. when 8000 is taken
+      # by another local process). Container side stays 8000 so the
+      # frontend's BACKEND_URL=http://backend:8000 keeps working.
+      - "${BACKEND_PORT:-8000}:8000"
     env_file:
       - .env
     environment:
