@@ -37,7 +37,9 @@ def test_compute_llm_cost_with_cache_write():
 
 
 def test_compute_llm_cost_unknown_model_returns_zero():
-    assert compute_llm_cost(model="my-totally-fake-model", input_tokens=1_000_000) == 0.0
+    assert (
+        compute_llm_cost(model="my-totally-fake-model", input_tokens=1_000_000) == 0.0
+    )
 
 
 def test_compute_sandbox_cost_cpu_default():

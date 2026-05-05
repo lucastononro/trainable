@@ -40,17 +40,25 @@ _PRICING: dict[str, dict[str, float]] = {
     "gemini-2.5-flash": {"input": 0.10, "output": 0.40},
 }
 
-# Sandbox compute pricing (approximate, USD/second). Real Modal pricing is
-# per-CPU-second and varies by GPU; this is a coarse upper bound for
-# user-facing cost visibility.
+# Sandbox compute pricing — USD/second per GPU type. Sourced from Modal's
+# public pricing page (https://modal.com/pricing). Treat as a best-effort
+# approximation: Modal bills CPU + memory + GPU separately and adjusts
+# rates over time, so the actual invoice will differ slightly. Memory cost
+# is not included here today — most sandboxes use the default tier where
+# GPU dominates total cost.
+#
+# Last reviewed: 2026-04. Update this map when Modal changes pricing.
 _SANDBOX_PRICING = {
-    "cpu": 0.0000168,        # ~$0.06/hr equivalent
-    "T4": 0.000162,          # ~$0.59/hr
-    "L4": 0.000222,          # ~$0.80/hr
-    "A10G": 0.000305,        # ~$1.10/hr
-    "A100": 0.001100,        # ~$3.96/hr
-    "A100-80GB": 0.001533,   # ~$5.52/hr
-    "H100": 0.002317,        # ~$8.34/hr
+    "cpu": 0.0000131,  # ~$0.047/CPU-hr (no GPU)
+    "T4": 0.000164,  # ~$0.59/hr
+    "L4": 0.000222,  # ~$0.80/hr
+    "A10G": 0.000306,  # ~$1.10/hr
+    "L40S": 0.000542,  # ~$1.95/hr
+    "A100": 0.000819,  # 40GB — ~$2.95/hr
+    "A100-80GB": 0.001270,  # ~$4.57/hr
+    "H100": 0.001899,  # ~$6.84/hr
+    "H200": 0.002500,  # ~$9.00/hr
+    "B200": 0.003500,  # ~$12.60/hr
 }
 
 
@@ -191,9 +199,7 @@ async def record_llm_usage(
         cache_hit_pct = (cache_r / total_input * 100.0) if total_input else 0.0
         payload = dict(row_dict)
         payload["cache_hit_pct"] = round(cache_hit_pct, 1)
-        await broadcaster.publish(
-            session_id, {"type": "usage_event", "data": payload}
-        )
+        await broadcaster.publish(session_id, {"type": "usage_event", "data": payload})
     except Exception as e:
         logger.debug("Usage broadcast failed: %s", e)
 
@@ -256,9 +262,7 @@ async def record_sandbox_usage(
         return None
 
     try:
-        await broadcaster.publish(
-            session_id, {"type": "usage_event", "data": row_dict}
-        )
+        await broadcaster.publish(session_id, {"type": "usage_event", "data": row_dict})
     except Exception as e:
         logger.debug("Usage broadcast failed: %s", e)
 

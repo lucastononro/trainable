@@ -194,7 +194,10 @@ async def run_code(
                 stdout_parts.append(chunk)
                 await broadcaster.publish(
                     session_id,
-                    {"type": "code_output", "data": {"stream": "stdout", "text": chunk}},
+                    {
+                        "type": "code_output",
+                        "data": {"stream": "stdout", "text": chunk},
+                    },
                 )
 
                 if stage:

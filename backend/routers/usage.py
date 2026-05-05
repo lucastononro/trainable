@@ -27,10 +27,21 @@ def _day_bucket(iso_ts: str | None) -> str:
 def _summarize(events: list[dict]) -> dict:
     """Aggregate raw events by day/agent/model + totals."""
     by_day: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "sandbox_seconds": 0.0}
+        lambda: {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "sandbox_seconds": 0.0,
+        }
     )
     by_agent: dict[str, dict[str, float]] = defaultdict(
-        lambda: {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0, "sandbox_seconds": 0.0}
+        lambda: {
+            "calls": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "cost_usd": 0.0,
+            "sandbox_seconds": 0.0,
+        }
     )
     by_model: dict[str, dict[str, float]] = defaultdict(
         lambda: {"calls": 0, "input_tokens": 0, "output_tokens": 0, "cost_usd": 0.0}
@@ -58,8 +69,12 @@ def _summarize(events: list[dict]) -> dict:
         if kind == "llm":
             totals["input_tokens"] += int(ev.get("input_tokens") or 0)
             totals["output_tokens"] += int(ev.get("output_tokens") or 0)
-            totals["cache_read_input_tokens"] += int(ev.get("cache_read_input_tokens") or 0)
-            totals["cache_creation_input_tokens"] += int(ev.get("cache_creation_input_tokens") or 0)
+            totals["cache_read_input_tokens"] += int(
+                ev.get("cache_read_input_tokens") or 0
+            )
+            totals["cache_creation_input_tokens"] += int(
+                ev.get("cache_creation_input_tokens") or 0
+            )
             totals["llm_calls"] += 1
 
             by_day[day]["input_tokens"] += int(ev.get("input_tokens") or 0)
@@ -78,7 +93,9 @@ def _summarize(events: list[dict]) -> dict:
             totals["sandbox_seconds"] += float(ev.get("sandbox_seconds") or 0.0)
             totals["sandbox_runs"] += 1
             by_day[day]["sandbox_seconds"] += float(ev.get("sandbox_seconds") or 0.0)
-            by_agent[agent]["sandbox_seconds"] += float(ev.get("sandbox_seconds") or 0.0)
+            by_agent[agent]["sandbox_seconds"] += float(
+                ev.get("sandbox_seconds") or 0.0
+            )
             by_agent[agent]["cost_usd"] += float(ev.get("cost_usd") or 0.0)
 
     return {

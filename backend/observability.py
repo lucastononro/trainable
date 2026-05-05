@@ -68,10 +68,16 @@ def _init_tracing() -> None:
     sampler = TraceIdRatioBased(max(0.0, min(1.0, settings.otel_traces_sampler_ratio)))
     provider = TracerProvider(resource=_build_resource(), sampler=sampler)
 
-    endpoint = settings.otel_exporter_otlp_endpoint or os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT")
+    endpoint = settings.otel_exporter_otlp_endpoint or os.getenv(
+        "OTEL_EXPORTER_OTLP_ENDPOINT"
+    )
     if _truthy(endpoint):
         try:
-            if (settings.otel_exporter_otlp_protocol or "grpc").lower().startswith("http"):
+            if (
+                (settings.otel_exporter_otlp_protocol or "grpc")
+                .lower()
+                .startswith("http")
+            ):
                 from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
                     OTLPSpanExporter,
                 )
@@ -80,7 +86,9 @@ def _init_tracing() -> None:
                     OTLPSpanExporter,
                 )
 
-            provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+            provider.add_span_processor(
+                BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint))
+            )
             logger.info("[telemetry] OTLP exporter → %s", endpoint)
         except Exception as e:
             logger.warning("[telemetry] OTLP exporter init failed: %s", e)
@@ -211,6 +219,7 @@ def get_tracer():
 
         return trace.get_tracer("trainable")
     except ImportError:  # pragma: no cover — defensive
+
         class _NoopTracer:
             @contextmanager
             def start_as_current_span(self, *_a, **_kw):  # type: ignore[no-untyped-def]
@@ -303,7 +312,9 @@ def bind_log_context(**kwargs) -> None:
     try:
         import structlog
 
-        structlog.contextvars.bind_contextvars(**{k: v for k, v in kwargs.items() if v is not None})
+        structlog.contextvars.bind_contextvars(
+            **{k: v for k, v in kwargs.items() if v is not None}
+        )
     except Exception:
         pass
 
