@@ -36,7 +36,7 @@ services:
   # not in docker-compose.prod.yml. UI lives at http://localhost:16686.
   # The backend ships traces to it via OTLP/gRPC on port 4317.
   jaeger:
-    image: jaegertracing/all-in-one:1.62
+    image: jaegertracing/all-in-one:1.76.0
     ports:
       - "16686:16686"  # Jaeger UI
       - "4317:4317"    # OTLP gRPC (what the backend uses)

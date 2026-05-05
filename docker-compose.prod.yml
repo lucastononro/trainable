@@ -38,7 +38,7 @@ services:
   # your infra runs (Datadog, Honeycomb, SigNoz, Grafana Tempo, etc.) and
   # point OTEL_EXPORTER_OTLP_ENDPOINT at it instead.
   jaeger:
-    image: jaegertracing/all-in-one:1.62
+    image: jaegertracing/all-in-one:1.76.0
     ports:
       - "16686:16686"  # Jaeger UI
       - "4317:4317"    # OTLP gRPC
