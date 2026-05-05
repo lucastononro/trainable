@@ -60,6 +60,16 @@ const AGENT_META: Record<string, { label: string; color: string; description: st
     color: 'emerald',
     description: 'Generates Modal serving apps + ships models to production',
   },
+  research: {
+    label: 'Research Agent',
+    color: 'teal',
+    description: 'Reads PDFs + arxiv, extracts training recipes, briefs specialists',
+  },
+  data_search: {
+    label: 'Data Search Agent',
+    color: 'teal',
+    description: 'Finds where datasets and papers live (HF Hub, Kaggle, arxiv) — never downloads',
+  },
 };
 
 // Order matches the natural ML pipeline so the picker reads
@@ -69,6 +79,8 @@ const AGENT_META: Record<string, { label: string; color: string; description: st
 const ALL_AGENT_TYPES = [
   'chat',
   'orchestrator',
+  'research',
+  'data_search',
   'eda',
   'data_prep',
   'feature_eng',
