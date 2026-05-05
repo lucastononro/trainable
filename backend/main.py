@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from db import init_db
 from errors import generic_exception_handler
+from observability import init_telemetry
 from routers import (
     data_explorer,
     experiments,
@@ -58,6 +59,10 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Trainable v2", lifespan=lifespan)
+# Init telemetry before middleware/routes so FastAPI auto-instrumentation
+# captures every request span. Safe when OTEL_EXPORTER_OTLP_ENDPOINT is unset
+# — exporter is a no-op in that case.
+init_telemetry(app)
 app.add_exception_handler(Exception, generic_exception_handler)
 
 app.add_middleware(
