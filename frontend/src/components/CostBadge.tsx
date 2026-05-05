@@ -2,16 +2,19 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronDown, DollarSign, Database, Zap } from 'lucide-react';
+import { ChevronDown, Cpu, Database, DollarSign, Sparkles } from 'lucide-react';
 import type { UsageEvent } from '@/lib/types';
 
 export interface UsageTotals {
   cost_usd: number;
+  llm_cost_usd: number;
+  compute_cost_usd: number;
   input_tokens: number;
   output_tokens: number;
   cache_read_input_tokens: number;
   llm_calls: number;
   sandbox_seconds: number;
+  compute_runs: number;
 }
 
 interface Props {
@@ -21,11 +24,14 @@ interface Props {
 
 const ZERO: UsageTotals = {
   cost_usd: 0,
+  llm_cost_usd: 0,
+  compute_cost_usd: 0,
   input_tokens: 0,
   output_tokens: 0,
   cache_read_input_tokens: 0,
   llm_calls: 0,
   sandbox_seconds: 0,
+  compute_runs: 0,
 };
 
 function formatTokens(n: number): string {
@@ -80,12 +86,26 @@ export default function CostBadge({ totals = ZERO, recent = [] }: Props) {
           </div>
 
           <div className="px-3 py-3 space-y-3">
-            <Stat label="Total cost" value={formatCost(totals.cost_usd)} icon="$" />
             <Stat
-              label="LLM calls"
-              value={`${totals.llm_calls}`}
-              hint={`${formatTokens(totals.input_tokens)} in · ${formatTokens(totals.output_tokens)} out`}
-              icon={<Zap className="w-3 h-3 text-amber-400" />}
+              label="Total cost"
+              value={formatCost(totals.cost_usd)}
+              icon={<DollarSign className="w-3 h-3 text-emerald-400" />}
+            />
+            <Stat
+              label="LLM (tokens)"
+              value={formatCost(totals.llm_cost_usd)}
+              hint={`${totals.llm_calls} calls · ${formatTokens(totals.input_tokens)} in · ${formatTokens(totals.output_tokens)} out`}
+              icon={<Sparkles className="w-3 h-3 text-violet-400" />}
+            />
+            <Stat
+              label="Compute (infra)"
+              value={formatCost(totals.compute_cost_usd)}
+              hint={
+                totals.compute_runs > 0 || totals.sandbox_seconds > 0
+                  ? `${totals.compute_runs} runs · ${totals.sandbox_seconds.toFixed(1)}s`
+                  : 'no runs yet'
+              }
+              icon={<Cpu className="w-3 h-3 text-emerald-400" />}
             />
             {totals.cache_read_input_tokens > 0 && (
               <Stat
@@ -93,13 +113,6 @@ export default function CostBadge({ totals = ZERO, recent = [] }: Props) {
                 value={`${cacheHit.toFixed(0)}%`}
                 hint={`${formatTokens(totals.cache_read_input_tokens)} cached input tokens`}
                 icon={<Database className="w-3 h-3 text-violet-400" />}
-              />
-            )}
-            {totals.sandbox_seconds > 0 && (
-              <Stat
-                label="Compute"
-                value={`${totals.sandbox_seconds.toFixed(0)}s`}
-                hint={`${recent.filter((e) => e.kind === 'sandbox').length} runs`}
               />
             )}
           </div>
