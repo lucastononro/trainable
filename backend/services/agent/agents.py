@@ -89,6 +89,12 @@ def get_agent_default_model(agent_type: str) -> str:
     return get_agent(agent_type).get("default_model", "claude-sonnet-4-6")
 
 
+def get_agent_provider(agent_type: str) -> str:
+    """Return the LLM provider id for this agent. Defaults to 'claude' so
+    legacy YAMLs without a provider field continue to work unchanged."""
+    return get_agent(agent_type).get("provider", "claude")
+
+
 def render_agent_system_prompt(
     agent_type: str,
     *,
