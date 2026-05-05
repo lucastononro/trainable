@@ -10,7 +10,6 @@ interface AppState {
   experiments: Experiment[];
   activeExperimentId: string | null;
   activeSessionId: string | null;
-  selectedModel: string;
   sidebarOpen: boolean;
   models: ModelInfo[];
   /** Per-agent model overrides, persisted in localStorage. */
@@ -20,7 +19,6 @@ interface AppState {
   setActiveExperiment: (id: string | null, sessionId?: string | null) => void;
   refreshExperiments: () => Promise<Experiment[]>;
   setSidebarOpen: (open: boolean) => void;
-  setSelectedModel: (model: string) => void;
   setAgentModel: (agentType: string, modelId: string | null) => void;
 }
 
@@ -40,7 +38,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [activeExperimentId, setActiveExperimentId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6');
   // Always start false for SSR — hydrate from localStorage in effect below
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -186,7 +183,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         experiments,
         activeExperimentId,
         activeSessionId,
-        selectedModel,
         sidebarOpen,
         models,
         agentModels,
@@ -195,7 +191,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setActiveExperiment,
         refreshExperiments,
         setSidebarOpen,
-        setSelectedModel,
         setAgentModel,
       }}
     >

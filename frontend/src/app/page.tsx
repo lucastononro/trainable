@@ -50,7 +50,6 @@ import {
   Wrench,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
-import ModelSelector from '@/components/ModelSelector';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import CostBadge, { UsageTotals } from '@/components/CostBadge';
@@ -163,7 +162,6 @@ export default function HomePage() {
     activeExperimentId,
     activeSessionId,
     activeProjectId,
-    selectedModel,
     sidebarOpen,
     setSidebarOpen,
     setActiveExperiment,
@@ -1504,8 +1502,6 @@ export default function HomePage() {
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
           {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
-
-          <ModelSelector />
 
           {hasActiveSession && (
             <>
