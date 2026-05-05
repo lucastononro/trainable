@@ -373,6 +373,30 @@ async def run_agent(
 
     collected_text = ""
 
+    # Per-turn usage accumulator. claude-agent-sdk's ResultMessage.usage is
+    # often empty for Claude Code OAuth (subscription) users — Anthropic
+    # doesn't bill them per call so the SDK skips the aggregate. But every
+    # AssistantMessage still carries a `usage` dict with the real token
+    # counts from the underlying Messages API. We accumulate per model here
+    # and fall back to this on ResultMessage when the aggregate is empty.
+    _accumulated_usage: dict[str, dict] = {}
+
+    def _bump_usage(model_name: str, turn_usage: dict | None) -> None:
+        if not turn_usage:
+            return
+        bucket = _accumulated_usage.setdefault(model_name, {})
+        for k in (
+            "input_tokens",
+            "output_tokens",
+            "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        ):
+            v = turn_usage.get(k, 0) or 0
+            try:
+                bucket[k] = bucket.get(k, 0) + int(v)
+            except (TypeError, ValueError):
+                continue
+
     bind_log_context(
         session_id=session_id,
         agent_type=agent_type,
@@ -518,6 +542,13 @@ async def run_agent(
         async with asyncio.timeout(settings.agent_timeout_seconds):
             async for message in query(prompt=prompt, options=options):
                 if isinstance(message, AssistantMessage):
+                    # Per-turn usage. AssistantMessage.usage is the source of
+                    # truth for OAuth users (where ResultMessage.usage is
+                    # often empty). Accumulate against the message's model.
+                    _bump_usage(
+                        getattr(message, "model", None) or model,
+                        getattr(message, "usage", None),
+                    )
                     for block in message.content:
                         # 1) Plain text — keep the existing agent_message stream
                         #    that the frontend already renders, AND mirror it
@@ -608,16 +639,42 @@ async def run_agent(
 
                 elif isinstance(message, ResultMessage):
                     logger.info("Agent %s done", agent_type)
-                    # Record token usage. ResultMessage.model_usage carries
-                    # per-model breakdown when sub-agents ran on different
-                    # models; fall back to .usage when only one model was
-                    # involved. Each call is recorded via record_llm_usage
-                    # which spawns its own span via observability.record_usage_attributes.
+                    # Record token usage. Resolution order, in priority:
+                    #   1. ResultMessage.model_usage  (per-model aggregate)
+                    #   2. ResultMessage.usage        (single-model aggregate)
+                    #   3. _accumulated_usage         (per-turn fallback —
+                    #      the Claude OAuth path leaves 1/2 empty)
+                    # Each call records via record_llm_usage which spawns
+                    # its own span via observability.record_usage_attributes.
+                    logger.info(
+                        "ResultMessage usage shapes — usage=%s, model_usage=%s, "
+                        "total_cost_usd=%s, accumulated_models=%s",
+                        message.usage,
+                        message.model_usage,
+                        message.total_cost_usd,
+                        list(_accumulated_usage.keys()),
+                    )
+
+                    sdk_has_usage = bool(message.model_usage) or bool(message.usage)
+                    if not sdk_has_usage and _accumulated_usage:
+                        logger.info(
+                            "Using per-turn accumulated usage as fallback "
+                            "(SDK aggregate was empty — likely OAuth path)"
+                        )
+
+                    # Pick the canonical source for span attributes.
+                    if message.usage:
+                        agg = message.usage
+                    elif _accumulated_usage:
+                        # Sum across models for the agent-span aggregate.
+                        agg = {}
+                        for bucket in _accumulated_usage.values():
+                            for k, v in bucket.items():
+                                agg[k] = agg.get(k, 0) + v
+                    else:
+                        agg = {}
+
                     try:
-                        # Surface aggregate counters on the agent span itself
-                        # so trace UIs can show cost without drilling into
-                        # the usage child.
-                        agg = message.usage or {}
                         try:
                             _agent_span.set_attribute(
                                 "llm.input_tokens",
@@ -659,6 +716,20 @@ async def run_agent(
                                 usage=message.usage,
                                 is_error=bool(message.is_error),
                             )
+                        elif _accumulated_usage:
+                            # OAuth fallback: write one row per model we saw
+                            # across AssistantMessage turns.
+                            for m_name, m_usage in _accumulated_usage.items():
+                                if any(v for v in m_usage.values()):
+                                    await record_llm_usage(
+                                        session_id=session_id,
+                                        agent_type=agent_type,
+                                        agent_id=agent_id,
+                                        provider="claude",
+                                        model=m_name,
+                                        usage=m_usage,
+                                        is_error=bool(message.is_error),
+                                    )
                     except Exception as e:
                         logger.warning("record_llm_usage failed: %s", e)
 
