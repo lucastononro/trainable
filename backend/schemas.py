@@ -78,3 +78,6 @@ class ExperimentUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
     project_id: Optional[str] = Field(default=None, max_length=_UUID_MAX)
     instructions: Optional[str] = Field(default=None, max_length=_INSTRUCTIONS_MAX)
+    tags: Optional[list[str]] = None
+    pinned: Optional[bool] = None
+    archived: Optional[bool] = None

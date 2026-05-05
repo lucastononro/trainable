@@ -37,6 +37,9 @@ export interface Experiment {
   description: string;
   dataset_ref: string;
   instructions: string;
+  tags?: string[];
+  pinned?: boolean;
+  archived?: boolean;
   created_at: string;
   updated_at: string;
   latest_session_id: string | null;
@@ -305,4 +308,83 @@ export interface SkillCatalogEntry {
   when_to_use: string;
   version: string;
   files: number;
+}
+
+export interface RegisteredModel {
+  id: string;
+  project_id: string;
+  name: string;
+  version: number;
+  source_session_id: string;
+  artifact_uri: string;
+  artifact_size_bytes: number;
+  metrics_summary: Record<string, number>;
+  framework: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface DeploymentRow {
+  id: string;
+  model_id: string;
+  endpoint_url: string | null;
+  status: string;
+  error: string | null;
+  modal_app: string | null;
+  modal_function: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunSnapshotRow {
+  id: number;
+  session_id: string;
+  dataset_hash: string | null;
+  code_hash: string | null;
+  hyperparams: Record<string, unknown>;
+  env_lockfile_size: number;
+  manifest_uri: string | null;
+  created_at: string;
+}
+
+export interface DatasetVersionRow {
+  id: number;
+  project_id: string;
+  hash: string;
+  path: string;
+  size_bytes: number;
+  parent_hash: string | null;
+  created_at: string;
+}
+
+export interface CompareResponse {
+  sessions: Array<{
+    id: string;
+    experiment_id?: string;
+    experiment_name?: string;
+    state?: string;
+    model?: string | null;
+    created_at?: string;
+    missing: boolean;
+  }>;
+  metrics: Record<
+    string,
+    Array<{
+      session_id: string;
+      points: Array<{ step: number; value: number; stage: string }>;
+    }>
+  >;
+  feature_overlap?: {
+    common: string[];
+    per_session: Record<string, string[]>;
+  };
+  totals: Record<
+    string,
+    {
+      cost_usd: number;
+      input_tokens: number;
+      output_tokens: number;
+      sandbox_seconds: number;
+    }
+  >;
 }
