@@ -724,8 +724,53 @@ async def run_agent(
                         except Exception:
                             pass
 
-                        if message.model_usage:
+                        # A usage dict is only "real" if it has non-zero
+                        # input_tokens OR output_tokens. The SDK sometimes
+                        # passes us {"input_tokens": 0, "output_tokens": 0,
+                        # "service_tier": "..."} for OAuth users — non-empty
+                        # but useless. Treat those as missing and fall
+                        # through to the next-best source.
+                        def _has_tokens(u) -> bool:
+                            if not isinstance(u, dict):
+                                return False
+                            for key in (
+                                "input_tokens",
+                                "output_tokens",
+                                "prompt_tokens",
+                                "completion_tokens",
+                            ):
+                                try:
+                                    if int(u.get(key, 0) or 0) > 0:
+                                        return True
+                                except (TypeError, ValueError):
+                                    continue
+                            return False
+
+                        model_usage_has_tokens = bool(message.model_usage) and any(
+                            _has_tokens(u) for u in (message.model_usage or {}).values()
+                        )
+                        message_usage_has_tokens = _has_tokens(message.usage)
+                        accumulated_has_tokens = any(
+                            _has_tokens(u) for u in _accumulated_usage.values()
+                        )
+
+                        if not (
+                            model_usage_has_tokens
+                            or message_usage_has_tokens
+                            or accumulated_has_tokens
+                        ):
+                            logger.warning(
+                                "[cost] SDK returned no non-zero token counts. "
+                                "raw usage=%r model_usage=%r accumulated=%r",
+                                message.usage,
+                                message.model_usage,
+                                dict(_accumulated_usage),
+                            )
+
+                        if model_usage_has_tokens:
                             for m_name, m_usage in message.model_usage.items():
+                                if not _has_tokens(m_usage):
+                                    continue
                                 await record_llm_usage(
                                     session_id=session_id,
                                     agent_type=agent_type,
@@ -735,7 +780,7 @@ async def run_agent(
                                     usage=m_usage,
                                     is_error=bool(message.is_error),
                                 )
-                        elif message.usage:
+                        elif message_usage_has_tokens:
                             await record_llm_usage(
                                 session_id=session_id,
                                 agent_type=agent_type,
@@ -745,20 +790,21 @@ async def run_agent(
                                 usage=message.usage,
                                 is_error=bool(message.is_error),
                             )
-                        elif _saw_real_usage and _accumulated_usage:
+                        elif accumulated_has_tokens:
                             # OAuth fallback: write one row per model we saw
                             # across AssistantMessage turns.
                             for m_name, m_usage in _accumulated_usage.items():
-                                if any(v for v in m_usage.values()):
-                                    await record_llm_usage(
-                                        session_id=session_id,
-                                        agent_type=agent_type,
-                                        agent_id=agent_id,
-                                        provider="claude",
-                                        model=m_name,
-                                        usage=m_usage,
-                                        is_error=bool(message.is_error),
-                                    )
+                                if not _has_tokens(m_usage):
+                                    continue
+                                await record_llm_usage(
+                                    session_id=session_id,
+                                    agent_type=agent_type,
+                                    agent_id=agent_id,
+                                    provider="claude",
+                                    model=m_name,
+                                    usage=m_usage,
+                                    is_error=bool(message.is_error),
+                                )
                         else:
                             # Last-resort heuristic: SDK gave us NO usage on
                             # any event (Claude Code OAuth + older claude-
