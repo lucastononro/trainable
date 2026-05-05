@@ -36,6 +36,7 @@ function fileIcon(name: string) {
   const n = name.toLowerCase();
   if (n.endsWith('.csv') || n.endsWith('.tsv')) return FileSpreadsheet;
   if (n.endsWith('.parquet') || n.endsWith('.feather')) return Database;
+  if (n.endsWith('.pdf')) return FileText;
   if (n.endsWith('.json') || n.endsWith('.md') || n.endsWith('.txt')) return FileText;
   return FileIcon;
 }
@@ -44,6 +45,7 @@ function fileIconColor(name: string): string {
   const n = name.toLowerCase();
   if (n.endsWith('.csv') || n.endsWith('.tsv')) return 'text-green-400';
   if (n.endsWith('.parquet') || n.endsWith('.feather')) return 'text-amber-400';
+  if (n.endsWith('.pdf')) return 'text-rose-400';
   if (n.endsWith('.json')) return 'text-orange-400';
   if (n.endsWith('.md') || n.endsWith('.txt')) return 'text-blue-400';
   return 'text-gray-400';
