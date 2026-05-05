@@ -228,12 +228,18 @@ async def record_llm_usage(
     usage: dict[str, Any] | None,
     is_error: bool = False,
     extra: dict | None = None,
+    broadcast: bool = True,
 ) -> dict | None:
-    """Persist + broadcast a single LLM call's token usage.
+    """Persist (and optionally broadcast) a single LLM call's token usage.
 
     `usage` is the raw Anthropic-shaped dict returned by claude-agent-sdk's
     ResultMessage.usage (input_tokens, output_tokens, cache_*_input_tokens).
     Other providers should normalize to this shape before calling.
+
+    Pass `broadcast=False` when the caller is already emitting per-turn
+    `usage_event` SSE messages on its own (the runner does this for live
+    badge updates) — otherwise the frontend would double-count at end of
+    run when both partials AND the canonical aggregate land.
     """
     if not usage:
         return None
@@ -300,15 +306,18 @@ async def record_llm_usage(
         logger.error("Failed to record LLM usage: %s", e)
         return None
 
-    try:
-        # Compute cache-hit ratio inline so the frontend doesn't have to.
-        total_input = in_tok + cache_r + cache_w
-        cache_hit_pct = (cache_r / total_input * 100.0) if total_input else 0.0
-        payload = dict(row_dict)
-        payload["cache_hit_pct"] = round(cache_hit_pct, 1)
-        await broadcaster.publish(session_id, {"type": "usage_event", "data": payload})
-    except Exception as e:
-        logger.debug("Usage broadcast failed: %s", e)
+    if broadcast:
+        try:
+            # Compute cache-hit ratio inline so the frontend doesn't have to.
+            total_input = in_tok + cache_r + cache_w
+            cache_hit_pct = (cache_r / total_input * 100.0) if total_input else 0.0
+            payload = dict(row_dict)
+            payload["cache_hit_pct"] = round(cache_hit_pct, 1)
+            await broadcaster.publish(
+                session_id, {"type": "usage_event", "data": payload}
+            )
+        except Exception as e:
+            logger.debug("Usage broadcast failed: %s", e)
 
     return row_dict
 

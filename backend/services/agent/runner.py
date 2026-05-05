@@ -26,7 +26,8 @@ from services.volume import (
 )
 
 from observability import agent_span, bind_log_context, clear_log_context
-from services.usage import record_llm_usage
+from services.broadcaster import broadcaster
+from services.usage import compute_llm_cost, record_llm_usage
 
 from .agents import (
     get_agent_default_model,
@@ -432,6 +433,71 @@ async def run_agent(
             except (TypeError, ValueError):
                 continue
 
+    # Live LLM cost feedback. claude-agent-sdk only fires ResultMessage at the
+    # END of an agent run, so without these per-turn broadcasts the LLM-cost
+    # tile in the badge sits at 0 for the entire run while the user watches
+    # `execute-code` rack up sandbox time. We broadcast a synthetic
+    # `usage_event` per AssistantMessage with that turn's usage delta. The
+    # canonical DB row still gets written at ResultMessage time via
+    # record_llm_usage(broadcast=False) — no double-count.
+    #
+    # Dedupe: the SDK occasionally emits AssistantMessage twice for one turn
+    # (streaming partial + complete). message_id is stable per turn; fall
+    # back to a usage-tuple key when missing.
+    _seen_partial_keys: set = set()
+
+    async def _broadcast_partial_llm(
+        message_obj,
+        turn_model: str,
+        norm_usage: dict,
+    ) -> None:
+        in_tok = int(norm_usage.get("input_tokens", 0) or 0)
+        out_tok = int(norm_usage.get("output_tokens", 0) or 0)
+        cache_r = int(norm_usage.get("cache_read_input_tokens", 0) or 0)
+        cache_w = int(norm_usage.get("cache_creation_input_tokens", 0) or 0)
+        if in_tok == 0 and out_tok == 0 and cache_r == 0 and cache_w == 0:
+            return  # nothing to report
+
+        mid = getattr(message_obj, "message_id", None) or getattr(
+            message_obj, "uuid", None
+        )
+        dedupe_key = mid or (turn_model, in_tok, out_tok, cache_r, cache_w)
+        if dedupe_key in _seen_partial_keys:
+            return
+        _seen_partial_keys.add(dedupe_key)
+
+        cost = compute_llm_cost(
+            model=turn_model,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cache_read_input_tokens=cache_r,
+            cache_creation_input_tokens=cache_w,
+        )
+
+        try:
+            await broadcaster.publish(
+                session_id,
+                {
+                    "type": "usage_event",
+                    "data": {
+                        "kind": "llm",
+                        "agent_type": agent_type,
+                        "agent_id": agent_id,
+                        "provider": "claude",
+                        "model": turn_model,
+                        "input_tokens": in_tok,
+                        "output_tokens": out_tok,
+                        "cache_read_input_tokens": cache_r,
+                        "cache_creation_input_tokens": cache_w,
+                        "sandbox_seconds": 0.0,
+                        "cost_usd": cost,
+                        "is_partial": True,
+                    },
+                },
+            )
+        except Exception as e:
+            logger.debug("Partial usage broadcast failed: %s", e)
+
     bind_log_context(
         session_id=session_id,
         agent_type=agent_type,
@@ -606,12 +672,16 @@ async def run_agent(
                     # truth for OAuth users (where ResultMessage.usage is
                     # often empty). Accumulate against the message's model.
                     turn_usage = getattr(message, "usage", None)
+                    turn_model = getattr(message, "model", None) or model
                     if turn_usage:
                         _saw_real_usage = True
-                    _bump_usage(
-                        getattr(message, "model", None) or model,
-                        turn_usage,
-                    )
+                    _bump_usage(turn_model, turn_usage)
+                    # Live LLM cost feedback — broadcast a partial usage_event
+                    # so the badge ticks up during the run, not just at end.
+                    if turn_usage:
+                        await _broadcast_partial_llm(
+                            message, turn_model, _normalize_usage(turn_usage)
+                        )
                     for block in message.content:
                         # 1) Plain text — keep the existing agent_message stream
                         #    that the frontend already renders, AND mirror it
@@ -808,6 +878,12 @@ async def run_agent(
                                 dict(_accumulated_usage),
                             )
 
+                        # broadcast=False on every record_llm_usage call: live
+                        # SSE has already been emitted per-turn via
+                        # `_broadcast_partial_llm` above. The DB row is the
+                        # canonical source for hydration on session reload —
+                        # broadcasting it again would double-count in the
+                        # frontend's accumulator.
                         if model_usage_has_tokens:
                             for m_name, m_usage in norm_model_usage.items():
                                 if not _has_tokens(m_usage):
@@ -820,6 +896,7 @@ async def run_agent(
                                     model=m_name,
                                     usage=m_usage,
                                     is_error=bool(message.is_error),
+                                    broadcast=False,
                                 )
                         elif message_usage_has_tokens:
                             await record_llm_usage(
@@ -830,6 +907,7 @@ async def run_agent(
                                 model=model,
                                 usage=norm_message_usage,
                                 is_error=bool(message.is_error),
+                                broadcast=False,
                             )
                         elif accumulated_has_tokens:
                             # OAuth fallback: write one row per model we saw
@@ -845,6 +923,7 @@ async def run_agent(
                                     model=m_name,
                                     usage=m_usage,
                                     is_error=bool(message.is_error),
+                                    broadcast=False,
                                 )
                         else:
                             # Last-resort heuristic: SDK gave us NO usage on
@@ -864,6 +943,9 @@ async def run_agent(
                                     est_in,
                                     est_out,
                                 )
+                                # Broadcast THIS one — heuristic path means no
+                                # partials were fired, so the canonical event
+                                # IS the user's only signal.
                                 await record_llm_usage(
                                     session_id=session_id,
                                     agent_type=agent_type,
