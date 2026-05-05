@@ -19,6 +19,7 @@ skills:
   - name: read-project-session
   - name: list-session-files
   - name: read-session-file
+  - name: tasks
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset
