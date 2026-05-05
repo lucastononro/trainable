@@ -539,15 +539,43 @@ async def run_agent(
         except Exception:
             pass
 
+        # Collected user-side text for the lower-bound output token estimate
+        # we use when the SDK doesn't surface usage at all (some OAuth paths).
+        _collected_assistant_text = ""
+        # Track whether the SDK ever gave us real usage. If not, we'll
+        # fall back to a char-based heuristic at the end of the run.
+        _saw_real_usage = False
+
         async with asyncio.timeout(settings.agent_timeout_seconds):
             async for message in query(prompt=prompt, options=options):
+                # One-line dump of every message type the SDK yields. INFO
+                # level for now so OAuth-quirk debugging is visible without
+                # log_level=DEBUG. Trim heavy fields so logs stay readable.
+                try:
+                    _msg_type = type(message).__name__
+                    _msg_usage = getattr(message, "usage", None)
+                    _msg_model = getattr(message, "model", None)
+                    _msg_subtype = getattr(message, "subtype", None)
+                    logger.info(
+                        "[sdk-event] %s subtype=%s model=%s usage=%s",
+                        _msg_type,
+                        _msg_subtype,
+                        _msg_model,
+                        _msg_usage,
+                    )
+                except Exception:
+                    pass
+
                 if isinstance(message, AssistantMessage):
                     # Per-turn usage. AssistantMessage.usage is the source of
                     # truth for OAuth users (where ResultMessage.usage is
                     # often empty). Accumulate against the message's model.
+                    turn_usage = getattr(message, "usage", None)
+                    if turn_usage:
+                        _saw_real_usage = True
                     _bump_usage(
                         getattr(message, "model", None) or model,
-                        getattr(message, "usage", None),
+                        turn_usage,
                     )
                     for block in message.content:
                         # 1) Plain text — keep the existing agent_message stream
@@ -556,6 +584,7 @@ async def run_agent(
                         if hasattr(block, "text") and getattr(block, "text", None):
                             text = block.text
                             collected_text += text
+                            _collected_assistant_text += text
                             await _publish(
                                 "agent_message",
                                 {"text": text},
@@ -716,7 +745,7 @@ async def run_agent(
                                 usage=message.usage,
                                 is_error=bool(message.is_error),
                             )
-                        elif _accumulated_usage:
+                        elif _saw_real_usage and _accumulated_usage:
                             # OAuth fallback: write one row per model we saw
                             # across AssistantMessage turns.
                             for m_name, m_usage in _accumulated_usage.items():
@@ -730,6 +759,37 @@ async def run_agent(
                                         usage=m_usage,
                                         is_error=bool(message.is_error),
                                     )
+                        else:
+                            # Last-resort heuristic: SDK gave us NO usage on
+                            # any event (Claude Code OAuth + older claude-
+                            # agent-sdk versions sometimes leaves it null).
+                            # Estimate from char length so the user sees a
+                            # ballpark cost instead of zero. Tag the row so
+                            # later we can distinguish estimated vs real.
+                            est_in = max(0, (len(prompt) + len(system_prompt)) // 4)
+                            est_out = max(0, len(_collected_assistant_text) // 4)
+                            if est_in or est_out:
+                                logger.warning(
+                                    "[cost] SDK never reported usage — falling "
+                                    "back to char-based estimate (in≈%d out≈%d). "
+                                    "Tool calls + intermediate context not counted, "
+                                    "so this is a LOWER bound.",
+                                    est_in,
+                                    est_out,
+                                )
+                                await record_llm_usage(
+                                    session_id=session_id,
+                                    agent_type=agent_type,
+                                    agent_id=agent_id,
+                                    provider="claude",
+                                    model=model,
+                                    usage={
+                                        "input_tokens": est_in,
+                                        "output_tokens": est_out,
+                                    },
+                                    is_error=bool(message.is_error),
+                                    extra={"estimate": "char_div_4"},
+                                )
                     except Exception as e:
                         logger.warning("record_llm_usage failed: %s", e)
 
