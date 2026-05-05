@@ -197,6 +197,7 @@ def _run_migrations(connection):
         ),
         ("ix_usage_events_session_id", "usage_events", "session_id"),
         ("ix_usage_events_project_id", "usage_events", "project_id"),
+        ("ix_tasks_session_id", "tasks", "session_id"),
         ("ix_registered_models_project_id", "registered_models", "project_id"),
         ("ix_registered_models_source_session", "registered_models", "source_session_id"),
         ("ix_deployments_model_id", "deployments", "model_id"),
@@ -227,6 +228,7 @@ async def init_db():
         RegisteredModel,
         RunSnapshot,
         Session,
+        Task,
         UsageEvent,
     )
 

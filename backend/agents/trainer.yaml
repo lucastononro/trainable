@@ -17,6 +17,7 @@ skills:
   - name: list-session-agents
   - name: list-available-skills
   - name: use-skill
+  - name: tasks
 
 subagents:
   - reviewer
