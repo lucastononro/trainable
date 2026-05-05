@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
-import pytest
-
 
 def test_get_tracer_works_without_init():
     """Calling get_tracer() before init_telemetry() returns a usable tracer."""
@@ -73,7 +69,9 @@ def test_init_with_otlp_endpoint(monkeypatch):
 
     monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     monkeypatch.setattr(observability, "_telemetry_initialized", False)
-    monkeypatch.setattr(observability.settings, "otel_exporter_otlp_endpoint", "http://localhost:4317")
+    monkeypatch.setattr(
+        observability.settings, "otel_exporter_otlp_endpoint", "http://localhost:4317"
+    )
     app = FastAPI()
     observability.init_telemetry(app)
 
