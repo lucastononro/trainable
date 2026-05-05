@@ -96,6 +96,42 @@ MODELS = [
         "description": "Cheapest streaming model. Good for EDA on cost-sensitive runs.",
         "experimental": True,
     },
+    # LiteLLM — model id encodes the backend ("groq/<model>", "mistral/<model>", etc.)
+    # so the same provider can route to many backends. Pricing varies; the
+    # values here are illustrative defaults.
+    {
+        "id": "groq/llama-3.3-70b-versatile",
+        "provider": "litellm",
+        "name": "Llama 3.3 70B (Groq)",
+        "tier": "fast",
+        "context": "128K",
+        "input_cost": 0.59,
+        "output_cost": 0.79,
+        "description": "Meta's Llama 3.3 70B served by Groq — very fast tool-call loops.",
+        "experimental": True,
+    },
+    {
+        "id": "mistral/mistral-large-latest",
+        "provider": "litellm",
+        "name": "Mistral Large",
+        "tier": "premium",
+        "context": "128K",
+        "input_cost": 2.0,
+        "output_cost": 6.0,
+        "description": "Mistral flagship. Strong reasoning, multilingual.",
+        "experimental": True,
+    },
+    {
+        "id": "deepseek/deepseek-chat",
+        "provider": "litellm",
+        "name": "DeepSeek Chat",
+        "tier": "fast",
+        "context": "64K",
+        "input_cost": 0.14,
+        "output_cost": 0.28,
+        "description": "DeepSeek V3 chat model — cheap reasoning baseline.",
+        "experimental": True,
+    },
 ]
 
 

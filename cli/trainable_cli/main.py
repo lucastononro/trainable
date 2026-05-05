@@ -115,6 +115,24 @@ def write_env(dest: Path, config: dict[str, str]):
             f"CLAUDE_CODE_OAUTH_TOKEN={config['CLAUDE_CODE_OAUTH_TOKEN']}",
         ]
 
+    if config.get("OPENAI_API_KEY"):
+        lines += ["", "# OpenAI", f"OPENAI_API_KEY={config['OPENAI_API_KEY']}"]
+    if config.get("GEMINI_API_KEY"):
+        lines += ["", "# Gemini", f"GEMINI_API_KEY={config['GEMINI_API_KEY']}"]
+
+    # Generic LiteLLM-routed backend keys (free-form add-loop in the wizard).
+    extra_keys = sorted(
+        k for k in config.keys()
+        if k not in (
+            "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY",
+            "GEMINI_API_KEY", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET",
+        )
+    )
+    if extra_keys:
+        lines += ["", "# LiteLLM backends"]
+        for k in extra_keys:
+            lines.append(f"{k}={config[k]}")
+
     lines += [
         "",
         "# Modal (sandboxed code execution)",
@@ -153,6 +171,94 @@ def prompt_claude_auth() -> dict[str, str]:
     return {"CLAUDE_CODE_OAUTH_TOKEN": token}
 
 
+def prompt_openai_auth() -> dict[str, str]:
+    print()
+    choice = prompt_choice(
+        "How would you like to authenticate with OpenAI?",
+        [
+            "OpenAI API key",
+            "ChatGPT-Plus via Codex CLI OAuth (local dev only)",
+        ],
+    )
+    print()
+    if choice == 1:
+        key = prompt_secret("OpenAI API key", "https://platform.openai.com/api-keys")
+        return {"OPENAI_API_KEY": key}
+    print("  To use ChatGPT-Plus OAuth locally, run in another terminal:\n")
+    print(f"    {BOLD}npm install -g @openai/codex && codex login{RESET}\n")
+    print("  This stores OAuth state at ~/.codex which docker-compose mounts in dev.")
+    print(f"  {DIM}(In production this falls back to OPENAI_API_KEY.){RESET}\n")
+    input(f"  {DIM}Press Enter when codex login is complete (or Enter to skip){RESET}")
+    return {}
+
+
+def prompt_gemini_auth() -> dict[str, str]:
+    print()
+    choice = prompt_choice(
+        "How would you like to authenticate with Gemini?",
+        [
+            "Gemini API key",
+            "Gemini CLI OAuth (local dev only)",
+        ],
+    )
+    print()
+    if choice == 1:
+        key = prompt_secret("Gemini API key", "https://aistudio.google.com/apikey")
+        return {"GEMINI_API_KEY": key}
+    print("  To use Gemini CLI OAuth locally, run in another terminal:\n")
+    print(f"    {BOLD}npm install -g @google/gemini-cli && gemini auth login{RESET}\n")
+    print("  This stores OAuth state at ~/.gemini which docker-compose mounts in dev.")
+    print(f"  {DIM}(In production this falls back to GEMINI_API_KEY.){RESET}\n")
+    input(f"  {DIM}Press Enter when gemini auth login is complete (or Enter to skip){RESET}")
+    return {}
+
+
+def prompt_litellm_keys() -> dict[str, str]:
+    """Free-form add-loop for LiteLLM backend API keys (Groq, Mistral, etc.)."""
+    print()
+    print("  LiteLLM routes calls to many backends — each needs its own key env var.")
+    print(f"  {DIM}Examples: GROQ_API_KEY, MISTRAL_API_KEY, TOGETHER_API_KEY, DEEPSEEK_API_KEY{RESET}\n")
+    out: dict[str, str] = {}
+    while True:
+        name = input(f"  Backend env var name {DIM}(blank to finish){RESET}: ").strip()
+        if not name:
+            break
+        if not name.replace("_", "").isalnum():
+            warn("Invalid env var name — letters / digits / underscores only.")
+            continue
+        out[name.upper()] = prompt_secret(f"{name.upper()} value")
+    return out
+
+
+def prompt_extra_providers() -> dict[str, str]:
+    """Ask whether to configure additional providers; collect their secrets."""
+    print()
+    answer = input(
+        f"  Configure additional LLM providers (OpenAI / Gemini / LiteLLM)? {DIM}[y/N]{RESET}: "
+    ).strip().lower()
+    if answer not in ("y", "yes"):
+        return {}
+
+    selected = []
+    print("\n  Select providers to configure (space-separated numbers, blank to skip):")
+    options = ["OpenAI", "Gemini", "LiteLLM (catch-all: Groq, Mistral, etc.)"]
+    for i, opt in enumerate(options, 1):
+        print(f"    {BOLD}{i}{RESET}) {opt}")
+    raw = input(f"  {DIM}Choices [1-{len(options)}]{RESET}: ").strip()
+    for tok in raw.replace(",", " ").split():
+        if tok.isdigit() and 1 <= int(tok) <= len(options):
+            selected.append(int(tok))
+
+    out: dict[str, str] = {}
+    if 1 in selected:
+        out.update(prompt_openai_auth())
+    if 2 in selected:
+        out.update(prompt_gemini_auth())
+    if 3 in selected:
+        out.update(prompt_litellm_keys())
+    return out
+
+
 def cmd_init():
     banner()
 
@@ -177,6 +283,9 @@ def cmd_init():
 
     # Claude auth
     config.update(prompt_claude_auth())
+
+    # Optional: OpenAI / Gemini / LiteLLM
+    config.update(prompt_extra_providers())
 
     # Modal auth
     print()

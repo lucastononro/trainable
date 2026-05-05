@@ -1,24 +1,26 @@
-"""Core agent loop — orchestrates Claude Agent SDK calls."""
+"""Core agent loop — orchestrates LLM provider calls via the factory.
+
+For Claude (`supports_mcp=True`), the provider exposes the Claude Agent SDK's
+MCP-aware loop and dispatches tool calls internally. For other providers, the
+runner owns the tool-execution loop: it dispatches each tool_call event to a
+skill handler and feeds the result back as the next round's input messages.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ResultMessage,
-    UserMessage,
-    query,
-)
 from sqlalchemy import select
 
 from config import settings
 from db import async_session
 from models import Artifact, Experiment, Message, ProcessedDatasetMeta, Project
+from services.llm import factory as llm_factory
+from services.skills import build_skill_entries
 from services.volume import (
     listdir_async,
     read_volume_file_async,
@@ -31,7 +33,9 @@ from services.usage import record_llm_usage
 from .agents import (
     get_agent_default_model,
     get_agent_opener,
+    get_agent_provider,
     get_agent_skills,
+    get_skill_for_agent,
     render_agent_system_prompt,
 )
 from .events import post_stage_hook, publish_artifacts, save_and_publish
@@ -315,6 +319,322 @@ async def _load_prev_context(session_id: str, stage: str) -> str:
     return prev_context
 
 
+def _normalize_handler_text(result) -> tuple[str, bool]:
+    """Coerce a skill-handler return into (text, is_error).
+
+    Handlers return {"content": [{"type":"text","text":"..."}], "is_error": bool?}.
+    """
+    if isinstance(result, dict):
+        is_error = bool(result.get("is_error"))
+        parts = []
+        for item in result.get("content", []) or []:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif hasattr(item, "text"):
+                parts.append(item.text or "")
+            else:
+                parts.append(str(item))
+        text = "\n".join(p for p in parts if p) or "(no output)"
+        return text, is_error
+    return _block_to_text(result), False
+
+
+def _record_skill_specs(agent_type: str, agent_skills: list[str]) -> list[dict]:
+    """Build the normalized [{name, description, input_schema}] list the
+    non-Claude providers consume."""
+    specs = []
+    for slug in agent_skills:
+        merged = get_skill_for_agent(agent_type, slug)
+        specs.append(
+            {
+                "name": merged["name"],
+                "description": merged["description"],
+                "input_schema": merged["input_schema"] or {"type": "object", "properties": {}},
+            }
+        )
+    return specs
+
+
+async def _drive_provider(
+    *,
+    provider_id: str,
+    prompt: str,
+    system_prompt: str,
+    model: str,
+    agent_type: str,
+    session_id: str,
+    experiment_id: str,
+    stage: str,
+    depth: int,
+    agent_id: str,
+    parent_agent_id: str | None,
+    agent_skills: list[str],
+    sandbox_config: dict,
+    instructions: str,
+    agent_models: dict,
+    publish,
+    agent_span,
+) -> str:
+    """Drive one agent run via the LLM factory.
+
+    For Claude (`supports_mcp=True`), the provider runs the MCP-aware loop
+    internally and emits text/tool_call/tool_result/usage events. For other
+    providers, this function maintains the messages list and dispatches each
+    `tool_call` to the matching skill handler.
+    """
+    provider = llm_factory.get_provider(provider_id)
+    caps = provider.capabilities
+    collected_text = ""
+
+    # Build skill specs + handlers once. The MCP server is only built for
+    # Claude; OpenAI/Gemini/LiteLLM dispatch handlers in this function.
+    skill_specs = _record_skill_specs(agent_type, agent_skills)
+    skill_entries = build_skill_entries(
+        agent_type=agent_type,
+        session_id=session_id,
+        experiment_id=experiment_id,
+        stage=stage,
+        depth=depth,
+        publish_fn=save_and_publish,
+        sandbox_config=sandbox_config,
+        model=model,
+        instructions=instructions,
+        agent_models=agent_models,
+        agent_id=agent_id,
+        parent_agent_id=parent_agent_id,
+    )
+    skill_handlers = {slug: entry["handler"] for slug, entry in skill_entries.items()}
+
+    async def _persist_text(text: str) -> None:
+        nonlocal collected_text
+        collected_text += text
+        await publish("agent_message", {"text": text}, role="assistant")
+        truncated_text, was_trunc, orig_bytes = _truncate(text)
+        await publish(
+            "agent_thought",
+            {
+                "text": truncated_text,
+                "block_type": "text",
+                "truncated": was_trunc,
+                "original_bytes": orig_bytes,
+            },
+            role="assistant",
+            publish=False,
+        )
+
+    async def _persist_tool_call(tool_name: str, tool_use_id: str, args: dict) -> None:
+        payload_text = _block_to_text(args)
+        truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
+        await publish(
+            "agent_thought",
+            {
+                "text": truncated_text,
+                "block_type": "tool_use",
+                "tool_name": tool_name,
+                "tool_use_id": tool_use_id,
+                "truncated": was_trunc,
+                "original_bytes": orig_bytes,
+            },
+            role="assistant",
+            publish=False,
+        )
+
+    async def _persist_tool_result(tool_use_id: str, content, is_error: bool) -> None:
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if hasattr(item, "text"):
+                    parts.append(item.text or "")
+                elif isinstance(item, dict):
+                    parts.append(item.get("text", ""))
+                else:
+                    parts.append(str(item))
+            payload_text = "\n".join(p for p in parts if p)
+        else:
+            payload_text = _block_to_text(content)
+        truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
+        await publish(
+            "agent_thought",
+            {
+                "text": truncated_text,
+                "block_type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "is_error": is_error,
+                "truncated": was_trunc,
+                "original_bytes": orig_bytes,
+            },
+            role="user",
+            publish=False,
+        )
+
+    async def _record_usage(model_name: str, usage: dict, is_error: bool, total_cost: float | None):
+        try:
+            try:
+                agent_span.set_attribute(
+                    "llm.input_tokens", int(usage.get("input_tokens", 0) or 0)
+                )
+                agent_span.set_attribute(
+                    "llm.output_tokens", int(usage.get("output_tokens", 0) or 0)
+                )
+                agent_span.set_attribute(
+                    "llm.cache_read_input_tokens",
+                    int(usage.get("cache_read_input_tokens", 0) or 0),
+                )
+                if total_cost is not None:
+                    agent_span.set_attribute("llm.cost_usd", float(total_cost))
+            except Exception:
+                pass
+            await record_llm_usage(
+                session_id=session_id,
+                agent_type=agent_type,
+                agent_id=agent_id,
+                provider=provider_id,
+                model=model_name,
+                usage=usage,
+                is_error=is_error,
+            )
+        except Exception as e:
+            logger.warning("record_llm_usage failed: %s", e)
+
+    timeout_s = settings.agent_timeout_seconds
+
+    # ---- Claude / MCP path -------------------------------------------------
+    if caps.supports_mcp:
+        # Build the MCP server with all skill handlers attached.
+        mcp_server = create_mcp_server(
+            session_id,
+            experiment_id,
+            stage,
+            sandbox_config=sandbox_config,
+            agent_type=agent_type,
+            depth=depth,
+            instructions=instructions,
+            model=model,
+            agent_models=agent_models,
+            agent_id=agent_id,
+            parent_agent_id=parent_agent_id,
+        )
+        prefixed_tool_names = [f"mcp__trainable__{s}" for s in agent_skills]
+
+        async with asyncio.timeout(timeout_s):
+            async for event in provider.run(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=model,
+                tools=prefixed_tool_names,
+                mcp_servers={"trainable": mcp_server},
+                max_turns=settings.agent_max_turns,
+                timeout_seconds=timeout_s,
+                env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
+            ):
+                if event.kind == "text":
+                    await _persist_text(event.data.get("text", ""))
+                elif event.kind == "tool_call":
+                    await _persist_tool_call(
+                        event.data.get("tool_name", ""),
+                        event.data.get("tool_call_id", ""),
+                        event.data.get("arguments", {}) or {},
+                    )
+                elif event.kind == "tool_result":
+                    await _persist_tool_result(
+                        event.data.get("tool_call_id", ""),
+                        event.data.get("content"),
+                        bool(event.data.get("is_error")),
+                    )
+                elif event.kind == "usage":
+                    await _record_usage(
+                        event.data.get("model") or model,
+                        event.data.get("usage") or {},
+                        is_error=False,
+                        total_cost=event.data.get("total_cost_usd"),
+                    )
+                elif event.kind == "error":
+                    logger.warning("Provider error: %s", event.data.get("message"))
+        return collected_text
+
+    # ---- Non-Claude / runner-managed tool loop -----------------------------
+    # OpenAI/LiteLLM message shape; Gemini provider also accepts these but
+    # without function-result re-injection (single-pass for Gemini in v1).
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+
+    async with asyncio.timeout(timeout_s):
+        for turn in range(settings.agent_max_turns):
+            pending_calls: list[dict] = []
+            assistant_text: list[str] = []
+
+            async for event in provider.run(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                model=model,
+                tools=skill_specs,
+                max_turns=1,
+                timeout_seconds=timeout_s,
+                messages=messages,
+            ):
+                if event.kind == "text":
+                    text = event.data.get("text", "")
+                    if text:
+                        assistant_text.append(text)
+                        await _persist_text(text)
+                elif event.kind == "tool_call":
+                    name = event.data.get("tool_name", "")
+                    call_id = event.data.get("tool_call_id") or f"call_{uuid.uuid4().hex[:8]}"
+                    args = event.data.get("arguments", {}) or {}
+                    pending_calls.append({"id": call_id, "name": name, "args": args})
+                    await _persist_tool_call(name, call_id, args)
+                elif event.kind == "usage":
+                    await _record_usage(
+                        event.data.get("model") or model,
+                        event.data.get("usage") or {},
+                        is_error=False,
+                        total_cost=event.data.get("total_cost_usd"),
+                    )
+                elif event.kind == "error":
+                    logger.warning("Provider error: %s", event.data.get("message"))
+
+            # Append assistant turn to message history.
+            assistant_msg: dict = {"role": "assistant", "content": "\n".join(assistant_text) or None}
+            if pending_calls:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {"name": c["name"], "arguments": json.dumps(c["args"])},
+                    }
+                    for c in pending_calls
+                ]
+            messages.append(assistant_msg)
+
+            if not pending_calls:
+                break  # provider produced text only; conversation done.
+
+            # Dispatch each tool call against the skill handler.
+            for call in pending_calls:
+                handler = skill_handlers.get(call["name"])
+                if handler is None:
+                    text = f"Unknown skill: {call['name']}"
+                    is_error = True
+                else:
+                    try:
+                        result = await handler(call["args"])
+                        text, is_error = _normalize_handler_text(result)
+                    except Exception as e:
+                        logger.exception("Skill handler %s failed", call["name"])
+                        text = f"Skill {call['name']} raised: {e}"
+                        is_error = True
+                if is_error:
+                    text = f"[ERROR] {text}"
+                await _persist_tool_result(call["id"], text, is_error)
+                messages.append(
+                    {"role": "tool", "tool_call_id": call["id"], "content": text}
+                )
+
+    return collected_text
+
+
 async def run_agent(
     session_id: str,
     experiment_id: str,
@@ -447,60 +767,29 @@ async def run_agent(
                         f"\n\n## Prior conversation\n{conversation_context}"
                     )
 
-        # Create MCP server with tools determined by the agent's YAML
-        mcp_server = create_mcp_server(
-            session_id,
-            experiment_id,
-            stage,
-            sandbox_config=sandbox_config or {},
-            agent_type=agent_type,
-            depth=depth,
-            instructions=instructions,
-            model=model,
-            agent_models=agent_models or {},
-            agent_id=agent_id,
-            parent_agent_id=parent_agent_id,
-        )
-
-        # Build skill list from agent config
+        # Resolve provider from agent YAML and build skill specs.
+        provider_id = get_agent_provider(agent_type)
         agent_skills = get_agent_skills(agent_type)
-        tool_names = [f"mcp__trainable__{t}" for t in agent_skills]
-        # Only include delegate-task if depth allows it
         from .agents import can_delegate
 
         if "delegate-task" in agent_skills and not can_delegate(agent_type, depth):
-            tool_names = [t for t in tool_names if "delegate-task" not in t]
-
-        options = ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            model=model,
-            permission_mode="bypassPermissions",
-            max_turns=settings.agent_max_turns,
-            stderr=lambda line: (
-                logger.debug("CLI: %s", line.strip()) if line.strip() else None
-            ),
-            tools=tool_names,
-            allowed_tools=tool_names,
-            mcp_servers={"trainable": mcp_server},
-            env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
-        )
+            agent_skills = [s for s in agent_skills if s != "delegate-task"]
 
         logger.info(
-            "Starting agent=%s id=%s parent=%s stage=%s session=%s model=%s depth=%d skills=%s",
+            "Starting agent=%s id=%s parent=%s stage=%s session=%s provider=%s model=%s depth=%d skills=%s",
             agent_type,
             agent_id,
             parent_agent_id,
             stage,
             session_id,
+            provider_id,
             model,
             depth,
             agent_skills,
         )
 
-        # Open the OTel span over the whole SDK loop. Using a manual
-        # __enter__/__exit__ keeps the existing async-for indentation
-        # untouched — important because nested-with would re-indent ~100
-        # lines of message-handling code.
+        # Open the OTel span manually so we can attach attributes around the
+        # provider call without re-indenting the loop body.
         _agent_span_cm = agent_span(
             agent_type=agent_type,
             session_id=session_id,
@@ -512,155 +801,30 @@ async def run_agent(
         try:
             _agent_span.set_attribute("agent.parent_id", parent_agent_id or "")
             _agent_span.set_attribute("agent.skills.count", len(agent_skills))
+            _agent_span.set_attribute("llm.provider", provider_id)
         except Exception:
             pass
 
-        async with asyncio.timeout(settings.agent_timeout_seconds):
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        # 1) Plain text — keep the existing agent_message stream
-                        #    that the frontend already renders, AND mirror it
-                        #    into the agent_thought stream so inspectors see it.
-                        if hasattr(block, "text") and getattr(block, "text", None):
-                            text = block.text
-                            collected_text += text
-                            await _publish(
-                                "agent_message",
-                                {"text": text},
-                                role="assistant",
-                            )
-                            truncated_text, was_trunc, orig_bytes = _truncate(text)
-                            await _publish(
-                                "agent_thought",
-                                {
-                                    "text": truncated_text,
-                                    "block_type": "text",
-                                    "truncated": was_trunc,
-                                    "original_bytes": orig_bytes,
-                                },
-                                role="assistant",
-                                publish=False,
-                            )
-                            logger.info("Agent text: %s", text[:120])
-                            continue
-
-                        # 2) Tool use — record the tool name and (truncated) input.
-                        tool_name = getattr(block, "name", None)
-                        tool_input = getattr(block, "input", None)
-                        tool_use_id = getattr(block, "id", None)
-                        if tool_name is not None and tool_input is not None:
-                            payload_text = _block_to_text(tool_input)
-                            truncated_text, was_trunc, orig_bytes = _truncate(
-                                payload_text
-                            )
-                            await _publish(
-                                "agent_thought",
-                                {
-                                    "text": truncated_text,
-                                    "block_type": "tool_use",
-                                    "tool_name": tool_name,
-                                    "tool_use_id": tool_use_id,
-                                    "truncated": was_trunc,
-                                    "original_bytes": orig_bytes,
-                                },
-                                role="assistant",
-                                publish=False,
-                            )
-                            logger.info("Agent tool_use: %s", tool_name)
-
-                elif isinstance(message, UserMessage):
-                    # Tool results come back framed as a UserMessage with
-                    # ToolResultBlock content. Persist a truncated copy.
-                    for block in getattr(message, "content", []) or []:
-                        tool_use_id = getattr(block, "tool_use_id", None)
-                        if tool_use_id is None:
-                            continue
-                        raw = getattr(block, "content", None)
-                        if isinstance(raw, list):
-                            parts = []
-                            for item in raw:
-                                # mcp TextContent objects expose .text; dicts use ['text']
-                                if hasattr(item, "text"):
-                                    parts.append(item.text or "")
-                                elif isinstance(item, dict):
-                                    parts.append(item.get("text", ""))
-                                else:
-                                    parts.append(str(item))
-                            payload_text = "\n".join(p for p in parts if p)
-                        else:
-                            payload_text = _block_to_text(raw)
-                        truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
-                        is_error = bool(getattr(block, "is_error", False))
-                        await _publish(
-                            "agent_thought",
-                            {
-                                "text": truncated_text,
-                                "block_type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "is_error": is_error,
-                                "truncated": was_trunc,
-                                "original_bytes": orig_bytes,
-                            },
-                            role="user",
-                            publish=False,
-                        )
-
-                elif isinstance(message, ResultMessage):
-                    logger.info("Agent %s done", agent_type)
-                    # Record token usage. ResultMessage.model_usage carries
-                    # per-model breakdown when sub-agents ran on different
-                    # models; fall back to .usage when only one model was
-                    # involved. Each call is recorded via record_llm_usage
-                    # which spawns its own span via observability.record_usage_attributes.
-                    try:
-                        # Surface aggregate counters on the agent span itself
-                        # so trace UIs can show cost without drilling into
-                        # the usage child.
-                        agg = message.usage or {}
-                        try:
-                            _agent_span.set_attribute(
-                                "llm.input_tokens",
-                                int(agg.get("input_tokens", 0) or 0),
-                            )
-                            _agent_span.set_attribute(
-                                "llm.output_tokens",
-                                int(agg.get("output_tokens", 0) or 0),
-                            )
-                            _agent_span.set_attribute(
-                                "llm.cache_read_input_tokens",
-                                int(agg.get("cache_read_input_tokens", 0) or 0),
-                            )
-                            if message.total_cost_usd is not None:
-                                _agent_span.set_attribute(
-                                    "llm.cost_usd", float(message.total_cost_usd)
-                                )
-                        except Exception:
-                            pass
-
-                        if message.model_usage:
-                            for m_name, m_usage in message.model_usage.items():
-                                await record_llm_usage(
-                                    session_id=session_id,
-                                    agent_type=agent_type,
-                                    agent_id=agent_id,
-                                    provider="claude",
-                                    model=m_name,
-                                    usage=m_usage,
-                                    is_error=bool(message.is_error),
-                                )
-                        elif message.usage:
-                            await record_llm_usage(
-                                session_id=session_id,
-                                agent_type=agent_type,
-                                agent_id=agent_id,
-                                provider="claude",
-                                model=model,
-                                usage=message.usage,
-                                is_error=bool(message.is_error),
-                            )
-                    except Exception as e:
-                        logger.warning("record_llm_usage failed: %s", e)
+        drive_text = await _drive_provider(
+            provider_id=provider_id,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=model,
+            agent_type=agent_type,
+            session_id=session_id,
+            experiment_id=experiment_id,
+            stage=stage,
+            depth=depth,
+            agent_id=agent_id,
+            parent_agent_id=parent_agent_id,
+            agent_skills=agent_skills,
+            sandbox_config=sandbox_config or {},
+            instructions=instructions,
+            agent_models=agent_models or {},
+            publish=_publish,
+            agent_span=_agent_span,
+        )
+        collected_text += drive_text
 
         # After agent finishes, read back the report and file list from volume
         await publish_artifacts(session_id, experiment_id, stage)
