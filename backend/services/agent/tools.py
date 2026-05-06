@@ -1,4 +1,6 @@
-"""Thin shim — delegates to the tools/ package for all MCP server building."""
+"""Thin shim — delegates to the skills package for MCP server building."""
+
+from services.skills import build_mcp_server
 
 from .events import save_and_publish
 
@@ -17,10 +19,7 @@ def create_mcp_server(
     agent_id: str = "root",
     parent_agent_id: str | None = None,
 ):
-    """Create a per-call MCP server with tools determined by the agent's YAML config."""
-    # Lazy import to avoid circular dependency
-    from tools import build_mcp_server
-
+    """Create a per-call MCP server with capability skills determined by the agent's YAML."""
     return build_mcp_server(
         agent_type=agent_type,
         session_id=session_id,

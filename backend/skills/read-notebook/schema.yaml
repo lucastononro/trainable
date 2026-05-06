@@ -1,0 +1,14 @@
+type: object
+properties:
+  notebook_name:
+    type: string
+    description: 'Target notebook. Omit to list available notebooks in this session.
+
+      '
+  include_outputs:
+    type: boolean
+    description: Include each code cell's outputs. Default true.
+  max_chars_per_cell:
+    type: integer
+    description: Per-cell truncation limit. Default 4000, max 20000.
+required: []

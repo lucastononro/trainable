@@ -37,6 +37,8 @@ def list_providers() -> list[str]:
 def _bootstrap():
     """Lazy-import providers and register them. Imports are inside this
     function so the module loads even when optional SDKs aren't installed.
+    Provider instantiation is lazy too — actual auth resolution and SDK
+    import happen on first `get_provider()` call.
     """
     try:
         from .claude_provider import ClaudeProvider
@@ -60,6 +62,13 @@ def _bootstrap():
         register_provider("google", lambda: GeminiProvider())
     except Exception as e:
         logger.debug("GeminiProvider not registered: %s", e)
+
+    try:
+        from .litellm_provider import LiteLLMProvider
+
+        register_provider("litellm", lambda: LiteLLMProvider())
+    except Exception as e:
+        logger.debug("LiteLLMProvider not registered: %s", e)
 
 
 _bootstrap()

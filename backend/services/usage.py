@@ -34,7 +34,10 @@ logger = logging.getLogger(__name__)
 #   - services/sandbox.yml      compute pricing per (provider, gpu)
 #
 # Each can be edited independently and the loader picks them up on next
-# call (after reload_pricing() in dev, on backend restart in prod).
+# call (after reload_pricing() in dev, on backend restart in prod). The
+# YAML doubles as the catalog the model-picker UI consumes via /api/models,
+# so any non-Claude entries (OpenAI, Gemini, LiteLLM-routed backends) live
+# in models.yml — no per-provider hardcoded dict here.
 
 _SERVICES_DIR = Path(__file__).parent
 _LLM_MODELS_FILE = _SERVICES_DIR / "llm" / "models.yml"
