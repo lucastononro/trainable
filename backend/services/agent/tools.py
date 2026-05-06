@@ -13,6 +13,7 @@ def create_mcp_server(
     instructions: str = "",
     model: str | None = None,
     agent_models: dict | None = None,
+    agent_thinking: dict | None = None,
     agent_id: str = "root",
     parent_agent_id: str | None = None,
 ):
@@ -31,6 +32,7 @@ def create_mcp_server(
         model=model,
         instructions=instructions,
         agent_models=agent_models or {},
+        agent_thinking=agent_thinking or {},
         agent_id=agent_id,
         parent_agent_id=parent_agent_id,
     )

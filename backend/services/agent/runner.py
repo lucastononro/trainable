@@ -328,6 +328,7 @@ async def run_agent(
     agent_type: str | None = None,
     depth: int = 0,
     agent_models: dict | None = None,
+    agent_thinking: dict | None = None,
     agent_id: str = "root",
     parent_agent_id: str | None = None,
     mentions: list[dict] | None = None,
@@ -335,6 +336,8 @@ async def run_agent(
     """Run an agent. agent_type maps to a YAML in agents/. Falls back to stage name.
 
     agent_models is a per-agent model override map: {"eda": "claude-haiku-4-5", ...}
+    agent_thinking is the parallel reasoning-level map: {"eda": "high", ...}.
+    Levels are abstract — services/llm/thinking.py translates them per provider.
 
     agent_id uniquely identifies this run inside the session. The top-level
     caller passes "root"; nested calls from delegate_task pass a fresh uuid
@@ -558,6 +561,28 @@ async def run_agent(
             or settings.claude_model
         )
 
+        # Resolve reasoning level. The model's catalog entry decides whether
+        # the model supports thinking at all and what its default level is;
+        # the per-agent override (UI picker) trumps when present and valid.
+        from services.llm.thinking import normalize_level
+        from services.usage import get_llm_catalog
+
+        _llm_entry = get_llm_catalog().get(model) or {}
+        _thinking_spec = (
+            _llm_entry.get("thinking") if isinstance(_llm_entry, dict) else None
+        )
+        thinking_level: str | None = None
+        if isinstance(_thinking_spec, dict):
+            allowed_levels = _thinking_spec.get("levels") or []
+            ui_level = (agent_thinking or {}).get(agent_type)
+            default_level = _thinking_spec.get("default")
+            chosen = (
+                ui_level
+                if (ui_level in allowed_levels)
+                else (default_level if default_level in allowed_levels else None)
+            )
+            thinking_level = normalize_level(chosen) if chosen else None
+
         # Load conversation history for follow-up messages
         if user_prompt:
             history = await _load_conversation_history(session_id)
@@ -583,6 +608,7 @@ async def run_agent(
             instructions=instructions,
             model=model,
             agent_models=agent_models or {},
+            agent_thinking=agent_thinking or {},
             agent_id=agent_id,
             parent_agent_id=parent_agent_id,
         )
@@ -596,6 +622,19 @@ async def run_agent(
         if "delegate_task" in agent_tools and not can_delegate(agent_type, depth):
             tool_names = [t for t in tool_names if "delegate_task" not in t]
 
+        # Translate the abstract reasoning level into Claude SDK's native
+        # ThinkingConfig. None => omit the kwarg (model picks its baseline).
+        from services.llm.thinking import anthropic_budget_tokens
+
+        _claude_thinking_kwargs: dict = {}
+        if thinking_level:
+            budget = anthropic_budget_tokens(thinking_level)
+            if budget is not None:
+                _claude_thinking_kwargs["thinking"] = {
+                    "type": "enabled",
+                    "budget_tokens": budget,
+                }
+
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
@@ -608,6 +647,7 @@ async def run_agent(
             allowed_tools=tool_names,
             mcp_servers={"trainable": mcp_server},
             env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
+            **_claude_thinking_kwargs,
         )
 
         logger.info(

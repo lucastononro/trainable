@@ -1,0 +1,337 @@
+# Trainable LLM model catalog — single source of truth.
+#
+# Drives BOTH cost calculation in services/usage.py AND the model-picker
+# UI (/api/models endpoint in routers/models.py). Edit when a provider
+# changes rates, ships a new model, or you want to flip a model's
+# `experimental` tag — no code change required.
+#
+# In dev the loader uses lru_cache; reload_pricing() clears it so a save
+# round-trips without a backend restart. Prod restarts re-read.
+#
+# Last reviewed: 2026-05
+#
+# Each entry combines pricing (input/output/cache_*, USD per million
+# tokens), display metadata (name/provider/tier/context/description/
+# experimental), AND optional reasoning ("thinking") configuration.
+#
+# `thinking:` block (optional — omit for models that don't reason):
+#   default: <level>          which level to use when caller doesn't pick
+#   levels: ["off", low, medium, high]   shown in the picker
+# The backend translates the abstract level into the provider-native
+# config in services/llm/thinking.py. UI stays uniform across providers.
+#
+# IMPORTANT — provider-specific quirks the levels list MUST respect:
+#   - Anthropic 4.x: full extended thinking; "off" omits the param.
+#   - OpenAI GPT-5: reasoning_effort ∈ {minimal,low,medium,high},
+#     default medium. Our "off" → "minimal".
+#   - OpenAI GPT-5.5+: reasoning_effort ∈ {low,medium,high,xhigh}.
+#     There is NO minimal/off. Levels list must omit "off".
+#   - Gemini 2.5 Pro: thinking_budget range 128–32,768 — CANNOT be
+#     disabled. Levels list must omit "off".
+#   - Gemini 2.5 Flash: thinking_budget=0 disables.
+#   - Gemini 3.x: uses `thinking_level` ∈ {minimal,low,medium,high}
+#     (a different parameter from 2.5's thinking_budget). Our "off"
+#     → "minimal".
+#
+# Pricing lookup is flexible:
+#   - exact match wins                    ("claude-opus-4-7")
+#   - vendor prefix is stripped           ("anthropic:claude-opus-4-7" → ...)
+#   - longest-prefix fallback             ("claude-haiku-4-5-20251001" → "claude-haiku-4-5")
+
+models:
+  # ---- Anthropic — Claude ------------------------------------------------
+  # Cache read: 0.10× input · cache write 5min: 1.25× input · 1h: 2.0× input.
+  # Extended thinking: see https://docs.claude.com/en/docs/build-with-claude/extended-thinking
+  claude-opus-4-7:
+    name: Claude Opus 4.7
+    provider: claude
+    tier: premium
+    context: 1M
+    description: Latest flagship model. Strongest reasoning and long-horizon planning.
+    input: 15.00
+    output: 75.00
+    cache_read: 1.50
+    cache_creation: 18.75
+    thinking:
+      default: medium
+      levels: ["off", low, medium, high]
+
+  claude-opus-4-6:
+    name: Claude Opus 4.6
+    provider: claude
+    tier: premium
+    context: 1M
+    description: Previous-generation flagship. Great for complex analysis and multi-step reasoning.
+    input: 15.00
+    output: 75.00
+    cache_read: 1.50
+    cache_creation: 18.75
+    thinking:
+      default: medium
+      levels: ["off", low, medium, high]
+
+  claude-sonnet-4-6:
+    name: Claude Sonnet 4.6
+    provider: claude
+    tier: standard
+    context: 1M
+    description: Balanced speed and intelligence. Great for everyday tasks and agentic workflows.
+    input: 3.00
+    output: 15.00
+    cache_read: 0.30
+    cache_creation: 3.75
+    thinking:
+      default: low
+      levels: ["off", low, medium, high]
+
+  claude-haiku-4-5:
+    name: Claude Haiku 4.5
+    provider: claude
+    tier: fast
+    context: 200K
+    description: Fastest model. Ideal for quick iterations, code review, and high-volume tasks.
+    input: 0.80
+    output: 4.00
+    cache_read: 0.08
+    cache_creation: 1.00
+    thinking:
+      default: "off"
+      levels: ["off", low, medium]
+
+  # ---- OpenAI — GPT ------------------------------------------------------
+  # Model IDs MUST be the dated snapshots OpenAI accepts on the API
+  # (e.g. `gpt-5.5-2026-04-23`) — not generic aliases. The picker uses the
+  # `name` field for display, so the user sees "GPT-5.5" while the runner
+  # sends the dated id to the API. Update the date suffix when OpenAI
+  # releases a new snapshot.
+  #
+  # Reasoning effort by family:
+  #   - GPT-5 (base):  minimal | low | medium | high   (default medium)
+  #   - GPT-5.4:       minimal | low | medium | high   (treated like 5)
+  #   - GPT-5.5+:      low | medium | high | xhigh     (NO minimal/off)
+  #
+  # Prompt caching ≈ 0.50× input; no separate cache-write charge.
+  # Verify pricing against https://openai.com/api/pricing/ on each rev.
+  gpt-5.5-pro-2026-04-23:
+    name: GPT-5.5 Pro
+    provider: openai
+    tier: premium
+    context: 400K
+    description: OpenAI's strongest reasoning model. High-effort thinking by default.
+    experimental: true
+    input: 10.00          # placeholder — verify
+    output: 30.00
+    cache_read: 5.00      # 0.50× input
+    cache_creation: 0.0
+    thinking:
+      default: high
+      levels: [low, medium, high]   # pro variants don't ship a non-thinking mode
+
+  gpt-5.5-2026-04-23:
+    name: GPT-5.5
+    provider: openai
+    tier: premium
+    context: 400K
+    description: Latest GPT generation, balanced reasoning + tool use.
+    experimental: true
+    input: 6.00
+    output: 18.00
+    cache_read: 3.00
+    cache_creation: 0.0
+    thinking:
+      # 5.5 family: reasoning_effort ∈ {low,medium,high,xhigh}; no
+      # minimal/off. We don't surface xhigh in the abstract picker.
+      default: medium
+      levels: [low, medium, high]
+
+  gpt-5.4-pro-2026-03-05:
+    name: GPT-5.4 Pro
+    provider: openai
+    tier: premium
+    context: 400K
+    description: Previous-gen pro reasoning model. Strong on math + code.
+    experimental: true
+    input: 8.00
+    output: 24.00
+    cache_read: 4.00
+    cache_creation: 0.0
+    thinking:
+      default: high
+      levels: [low, medium, high]
+
+  gpt-5.4-2026-03-05:
+    name: GPT-5.4
+    provider: openai
+    tier: standard
+    context: 400K
+    description: Previous-gen flagship. Strong reasoning + tool use.
+    experimental: true
+    input: 5.00
+    output: 15.00
+    cache_read: 2.50
+    cache_creation: 0.0
+    thinking:
+      default: medium
+      levels: ["off", low, medium, high]
+
+  gpt-5.4-mini-2026-03-17:
+    name: GPT-5.4 Mini
+    provider: openai
+    tier: fast
+    context: 200K
+    description: Cost-efficient reasoning model. Best for high-volume tool calls.
+    experimental: true
+    input: 0.50
+    output: 2.00
+    cache_read: 0.25
+    cache_creation: 0.0
+    thinking:
+      default: low
+      levels: ["off", low, medium]
+
+  gpt-5.4-nano-2026-03-17:
+    name: GPT-5.4 Nano
+    provider: openai
+    tier: fast
+    context: 128K
+    description: Cheapest GPT-5 tier. Quick utility calls + classification.
+    experimental: true
+    input: 0.20
+    output: 0.80
+    cache_read: 0.10
+    cache_creation: 0.0
+    # No thinking — nano tier is non-reasoning by design.
+
+  gpt-5:
+    name: GPT-5
+    provider: openai
+    tier: standard
+    context: 400K
+    description: GPT-5 baseline. Strong reasoning + tool use.
+    input: 5.00
+    output: 15.00
+    cache_read: 2.50
+    cache_creation: 0.0
+    thinking:
+      default: medium
+      levels: ["off", low, medium, high]
+
+  gpt-5-mini:
+    name: GPT-5 Mini
+    provider: openai
+    tier: fast
+    context: 400K
+    description: GPT-5 cost-efficient tier. High-volume tool calls.
+    input: 0.50
+    output: 2.00
+    cache_read: 0.25
+    cache_creation: 0.0
+    thinking:
+      default: low
+      levels: ["off", low, medium]
+
+  # ---- Google — Gemini ---------------------------------------------------
+  # Context caching: cached input ≈ 0.25× standard. Storage fee per hour
+  # not modeled.
+  # Thinking: Gemini 2.5+ accepts `thinking_config.thinking_budget` (int
+  # tokens) — we map level → token budget in services/llm/thinking.py.
+  #
+  # Gemini 3.x pricing — placeholder until Google publishes. Verify at
+  # https://ai.google.dev/pricing when promoting out of `experimental`.
+  gemini-3-1-pro:
+    name: Gemini 3.1 Pro
+    provider: gemini
+    tier: premium
+    context: 2M
+    description: Google's latest flagship, very long context windows.
+    experimental: true
+    input: 2.00          # placeholder — verify
+    output: 10.00
+    cache_read: 0.50     # ~0.25× input
+    cache_creation: 0.0
+    thinking:
+      default: medium
+      levels: ["off", low, medium, high]
+
+  gemini-3-1-flash:
+    name: Gemini 3.1 Flash
+    provider: gemini
+    tier: fast
+    context: 1M
+    description: Latest fast Gemini. Cheap streaming for high-volume tasks.
+    experimental: true
+    input: 0.20
+    output: 0.80
+    cache_read: 0.05
+    cache_creation: 0.0
+    thinking:
+      default: low
+      levels: ["off", low, medium]
+
+  gemini-3-0-pro:
+    name: Gemini 3.0 Pro
+    provider: gemini
+    tier: premium
+    context: 2M
+    description: Gemini 3 generation flagship.
+    experimental: true
+    input: 1.75          # placeholder
+    output: 8.00
+    cache_read: 0.44
+    cache_creation: 0.0
+    thinking:
+      default: medium
+      levels: ["off", low, medium, high]
+
+  gemini-3-0-flash:
+    name: Gemini 3.0 Flash
+    provider: gemini
+    tier: fast
+    context: 1M
+    description: Gemini 3 fast tier.
+    experimental: true
+    input: 0.15
+    output: 0.60
+    cache_read: 0.04
+    cache_creation: 0.0
+    thinking:
+      default: low
+      levels: ["off", low, medium]
+
+  gemini-2.5-pro:
+    name: Gemini 2.5 Pro
+    provider: gemini
+    tier: standard
+    context: 2M
+    description: Gemini 2.5 flagship. Reliable choice for long context.
+    input: 1.25
+    output: 5.00
+    cache_read: 0.31
+    cache_creation: 0.0
+    thinking:
+      # 2.5 Pro thinking_budget range is 128–32,768; cannot disable.
+      default: medium
+      levels: [low, medium, high]
+
+  gemini-2.5-flash:
+    name: Gemini 2.5 Flash
+    provider: gemini
+    tier: fast
+    context: 1M
+    description: Cheapest streaming model. Good for EDA on cost-sensitive runs.
+    input: 0.10
+    output: 0.40
+    cache_read: 0.025
+    cache_creation: 0.0
+    thinking:
+      default: "off"
+      levels: ["off", low, medium]
+
+# Fallback cache pricing — applied to a model's `input` rate when the
+# model entry above doesn't set explicit cache_read / cache_creation.
+# These match Anthropic's ephemeral 5min cache; non-Anthropic providers
+# always set their own per-model values, so this only matters when a new
+# Claude model lands without us having updated this file yet.
+cache:
+  read_multiplier: 0.10
+  creation_multiplier: 1.25

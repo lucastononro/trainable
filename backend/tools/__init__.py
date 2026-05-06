@@ -114,7 +114,7 @@ def _build_tool_entry(
     }
 
 
-def build_mcp_server(
+def build_tool_entries(
     *,
     agent_type: str,
     session_id: str,
@@ -126,16 +126,21 @@ def build_mcp_server(
     model: str | None = None,
     instructions: str = "",
     agent_models: dict | None = None,
+    agent_thinking: dict | None = None,
     agent_id: str = "root",
     parent_agent_id: str | None = None,
-):
-    """Build an MCP server with all tools defined in the agent's YAML config.
+) -> dict[str, dict]:
+    """Resolve {tool_name: {description, input_schema, handler}} for an agent.
 
-    Reads the agent's `tools` list, loads each tool's YAML + Python handler,
-    and assembles them into an MCP server ready for Claude Agent SDK.
+    Backbone for both:
+      - the Claude OAuth path (wraps these in an MCP server below), and
+      - the native-SDK path (exposes the handlers directly to a runner-
+        side tool-dispatch loop, since OpenAI/Gemini don't speak MCP).
+
+    Same context kwargs as ``build_mcp_server`` for symmetry.
     """
     agent_tools = _agents().get_agent_tools(agent_type)
-    tool_entries = {}
+    tool_entries: dict[str, dict] = {}
 
     for tool_name in agent_tools:
         entry = _build_tool_entry(
@@ -152,14 +157,41 @@ def build_mcp_server(
             parent_model=model,
             instructions=instructions,
             agent_models=agent_models or {},
+            agent_thinking=agent_thinking or {},
         )
         if entry:
             tool_entries[tool_name] = entry
 
     logger.debug(
-        "Built MCP server for agent=%s with tools=%s",
+        "Built tool entries for agent=%s tools=%s",
         agent_type,
         list(tool_entries.keys()),
     )
+    return tool_entries
 
+
+def build_mcp_server(**kwargs):
+    """Build an MCP server for the Claude OAuth (claude-agent-sdk) path.
+
+    Thin wrapper over ``build_tool_entries`` — the entries dict is the
+    portable surface; MCP is just one transport for it.
+    """
+    tool_entries = build_tool_entries(**kwargs)
     return _mcp()(tool_entries)
+
+
+def to_provider_specs(tool_entries: dict[str, dict]) -> list[dict]:
+    """Project ``build_tool_entries`` output to provider-neutral tool specs.
+
+    Returns ``[{name, description, input_schema}]`` — the shape the
+    OpenAI / Gemini providers' ``tools=`` parameter expects. Drops the
+    handler (callers dispatch through ``tool_entries[name]['handler']``).
+    """
+    return [
+        {
+            "name": name,
+            "description": entry.get("description", ""),
+            "input_schema": entry.get("input_schema") or {"type": "object", "properties": {}},
+        }
+        for name, entry in tool_entries.items()
+    ]

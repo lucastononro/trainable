@@ -19,6 +19,7 @@ def create_handler(
     sandbox_config: dict | None = None,
     parent_model: str | None = None,
     agent_models: dict | None = None,
+    agent_thinking: dict | None = None,
     parent_agent_id: str = "root",
     parent_parent_agent_id: str | None = None,
     **kwargs,
@@ -34,6 +35,7 @@ def create_handler(
     """
 
     agent_models = agent_models or {}
+    agent_thinking = agent_thinking or {}
 
     from services.agent.agents import (
         can_delegate,
@@ -160,6 +162,7 @@ def create_handler(
                 agent_type=agent_type,
                 depth=next_depth,
                 agent_models=agent_models,
+                agent_thinking=agent_thinking,
                 agent_id=child_agent_id,
                 parent_agent_id=parent_agent_id,
             )

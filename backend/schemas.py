@@ -50,6 +50,10 @@ class MessageCreate(BaseModel):
     model: Optional[str] = Field(default=None, max_length=_MODEL_ID_MAX)
     # Per-agent model overrides: {"eda": "claude-haiku-4-5", "trainer": "claude-opus-4-6"}
     agent_models: Optional[dict[str, str]] = Field(default=None)
+    # Per-agent reasoning level overrides: {"eda": "high", "trainer": "off"}.
+    # Levels: "off" | "low" | "medium" | "high". Translated per-provider in
+    # services/llm/thinking.py. Ignored for models that don't support it.
+    agent_thinking: Optional[dict[str, str]] = Field(default=None)
     mentions: Optional[list[Mention]] = Field(default=None, max_length=64)
 
 

@@ -169,12 +169,17 @@ export default function HomePage() {
     refreshExperiments,
     refreshProjects,
     agentModels,
+    agentThinking,
   } = useApp();
   // Keep a ref for stable access inside async handlers/closures
   const agentModelsRef = useRef<Record<string, string>>({});
   useEffect(() => {
     agentModelsRef.current = agentModels;
   }, [agentModels]);
+  const agentThinkingRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    agentThinkingRef.current = agentThinking;
+  }, [agentThinking]);
 
   // Chat / session state
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
@@ -1163,6 +1168,7 @@ export default function HomePage() {
           true,
           agentModelsRef.current,
           pending.mentions,
+          agentThinkingRef.current,
         )
         .catch((e: any) => {
           addItem({ type: 'error', content: e.message });
@@ -1196,7 +1202,14 @@ export default function HomePage() {
           ? pending.text
           : `I've attached ${pending.fileNames.length} file${pending.fileNames.length > 1 ? 's' : ''}: ${pending.fileNames.join(', ')}. What can you tell me about this data?`;
         setIsRunning(true);
-        await api.sendMessage(sesId, agentPrompt, true, agentModelsRef.current);
+        await api.sendMessage(
+          sesId,
+          agentPrompt,
+          true,
+          agentModelsRef.current,
+          undefined,
+          agentThinkingRef.current,
+        );
       } catch (e: any) {
         addItem({ type: 'error', content: e.message });
         setIsRunning(false);
@@ -1270,7 +1283,14 @@ export default function HomePage() {
     setIsRunning(true);
 
     try {
-      await api.sendMessage(activeSessionId, content, true, agentModelsRef.current, mentions);
+      await api.sendMessage(
+        activeSessionId,
+        content,
+        true,
+        agentModelsRef.current,
+        mentions,
+        agentThinkingRef.current,
+      );
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
       setIsRunning(false);
@@ -1354,7 +1374,14 @@ export default function HomePage() {
         ? textToSend
         : `I've attached ${fileNames.length} file${fileNames.length > 1 ? 's' : ''}: ${fileNames.join(', ')}. What can you tell me about this data?`;
       setIsRunning(true);
-      await api.sendMessage(sesId, agentPrompt, true, agentModelsRef.current, draftMentions);
+      await api.sendMessage(
+        sesId,
+        agentPrompt,
+        true,
+        agentModelsRef.current,
+        draftMentions,
+        agentThinkingRef.current,
+      );
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
     } finally {
@@ -1414,6 +1441,8 @@ export default function HomePage() {
               `I've attached data from S3: ${s3Path}. What can you tell me about this data?`,
               true,
               agentModelsRef.current,
+              undefined,
+              agentThinkingRef.current,
             );
           }
         }

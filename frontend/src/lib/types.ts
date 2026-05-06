@@ -52,14 +52,33 @@ export interface Session {
   updated_at: string;
 }
 
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+
+export interface ThinkingSpec {
+  default: ThinkingLevel;
+  levels: ThinkingLevel[];
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
+  provider: string;
   tier: 'premium' | 'standard' | 'fast';
   context: string;
   input_cost: number;
   output_cost: number;
   description: string;
+  experimental?: boolean;
+  thinking?: ThinkingSpec;
+}
+
+export interface ProviderInfo {
+  id: string;
+  available: boolean;
+  /** Env var names that would enable this provider when set. */
+  missing_env: string[];
+  /** Whether the agent runner can actually dispatch to this provider today. */
+  runner_supported: boolean;
 }
 
 export interface Message {

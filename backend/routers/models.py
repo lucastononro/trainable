@@ -1,9 +1,12 @@
 """Model and agent catalog endpoints.
 
-Model metadata + pricing live in `backend/pricing.yaml` (single source of
-truth). This router projects the catalog into the JSON shape the frontend's
-model-picker expects.
+Model metadata + pricing live in `backend/services/llm/models.yml`
+(single source of truth, colocated with the provider code that
+consumes it). This router projects the catalog into the JSON shape
+the frontend's model-picker expects.
 """
+
+import os
 
 from fastapi import APIRouter
 
@@ -14,13 +17,79 @@ from services.usage import get_llm_catalog
 router = APIRouter()
 
 
+# Per-provider env-var rules. Resolution mirrors the providers themselves
+# (claude_provider / openai_provider / gemini_provider): any one of the
+# listed env vars is enough to mark the provider available. Update here
+# when a new auth path lands (e.g., file-based OAuth mounts).
+_PROVIDER_AUTH_ENV: dict[str, list[str]] = {
+    "claude": ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    "anthropic": ["CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
+    "openai": ["OPENAI_API_KEY"],
+    "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+}
+
+# Which providers the agent runner can actually dispatch to today.
+# `services/agent/runner.py` calls `claude_agent_sdk.query()` directly,
+# which spawns the Claude Code CLI subprocess — so only Claude works
+# end-to-end. The OpenAI/Gemini providers exist but are not wired into
+# the runner yet (multi-provider runner refactor is the unblocker).
+# Flip these to True as the corresponding runner path lands.
+_PROVIDER_RUNNER_SUPPORTED: dict[str, bool] = {
+    "claude": True,
+    "anthropic": True,
+    "openai": False,
+    "gemini": False,
+    "google": False,
+}
+
+
+def _provider_availability(provider_id: str) -> dict:
+    """Return availability info for one provider.
+
+    Shape:
+        {
+          "available":        bool,    # API key/OAuth present
+          "missing_env":      [str],   # env names that would enable it
+          "runner_supported": bool,    # agent runner can actually dispatch
+        }
+
+    The frontend disables a model when EITHER `available` OR
+    `runner_supported` is false, with a hover hint explaining which.
+    """
+    required = _PROVIDER_AUTH_ENV.get(provider_id, [])
+    runner_supported = _PROVIDER_RUNNER_SUPPORTED.get(provider_id, False)
+    if not required:
+        # Unknown providers default to "available" auth-wise (nothing to
+        # gate on), but the runner gate still applies.
+        return {
+            "available": True,
+            "missing_env": [],
+            "runner_supported": runner_supported,
+        }
+    if any(os.getenv(name) for name in required):
+        return {
+            "available": True,
+            "missing_env": [],
+            "runner_supported": runner_supported,
+        }
+    return {
+        "available": False,
+        "missing_env": required,
+        "runner_supported": runner_supported,
+    }
+
+
 def _to_api_model(model_id: str, entry: dict) -> dict:
-    """Project one pricing.yaml LLM entry into the /api/models response shape.
+    """Project one services/llm/models.yml entry into the /api/models response shape.
 
     The frontend expects `input_cost` / `output_cost` (USD/M tokens) on top
     of the existing display fields. We don't expose `cache_read` /
     `cache_creation` here yet — the picker doesn't render them. Add to the
     response when there's a UI for it.
+
+    `thinking` is included only when the model declares one — the frontend
+    treats its absence as "this model doesn't reason" and hides the picker.
     """
     out: dict = {
         "id": model_id,
@@ -34,19 +103,37 @@ def _to_api_model(model_id: str, entry: dict) -> dict:
     }
     if entry.get("experimental"):
         out["experimental"] = True
+
+    thinking = entry.get("thinking")
+    if isinstance(thinking, dict):
+        levels = thinking.get("levels") or []
+        default = thinking.get("default")
+        if isinstance(levels, list) and levels:
+            out["thinking"] = {
+                "default": default if default in levels else levels[0],
+                "levels": [str(lvl) for lvl in levels],
+            }
     return out
 
 
 @router.get("/models")
 async def get_models():
-    """Catalog of LLM models the picker can offer. Sourced from pricing.yaml."""
+    """Catalog of LLM models the picker can offer. Sourced from services/llm/models.yml."""
     return [_to_api_model(mid, entry) for mid, entry in get_llm_catalog().items()]
 
 
 @router.get("/providers")
 async def get_providers():
-    """List active LLM providers — frontend uses this to gate non-default models."""
-    return [{"id": p} for p in list_providers()]
+    """List active LLM providers and whether each has credentials configured.
+
+    The frontend disables models from `available: false` providers in the
+    picker and surfaces `missing_env` as a hover hint so the user knows
+    which env var to set in `.env`.
+    """
+    out: list[dict] = []
+    for p in list_providers():
+        out.append({"id": p, **_provider_availability(p)})
+    return out
 
 
 @router.get("/agents")
