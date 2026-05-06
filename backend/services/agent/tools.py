@@ -19,7 +19,14 @@ def create_mcp_server(
     agent_id: str = "root",
     parent_agent_id: str | None = None,
 ):
-    """Create a per-call MCP server with capability skills determined by the agent's YAML."""
+    """Create a per-call MCP server with capability skills determined by the agent's YAML.
+
+    `agent_thinking` is accepted for caller-API symmetry but isn't forwarded to
+    the MCP layer — reasoning level is resolved in `runner._drive_provider`
+    against the model catalog before the provider call, not at skill-handler
+    construction time.
+    """
+    del agent_thinking  # not used by the MCP server; symmetry only
     return build_mcp_server(
         agent_type=agent_type,
         session_id=session_id,
@@ -31,7 +38,6 @@ def create_mcp_server(
         model=model,
         instructions=instructions,
         agent_models=agent_models or {},
-        agent_thinking=agent_thinking or {},
         agent_id=agent_id,
         parent_agent_id=parent_agent_id,
     )
