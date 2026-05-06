@@ -441,7 +441,9 @@ function ConfigView({ onBack }: { onBack: () => void }) {
                     }}
                     className="text-[11px] bg-white/[0.04] border border-white/[0.08] rounded-md px-2 py-1 text-gray-300 focus:outline-none focus:border-white/[0.15] cursor-pointer"
                   >
-                    <option value="">Default model</option>
+                    <option value="">
+                      Default {agentType === 'reviewer' ? '· Claude Haiku 4.5' : '· Claude Sonnet 4.6'}
+                    </option>
                     {filteredModels.map((m) => {
                       const reason = unusableReason(m.provider);
                       const ok = !reason;
