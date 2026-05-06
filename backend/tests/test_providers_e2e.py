@@ -39,7 +39,10 @@ def _has_openai() -> bool:
         return True
     # Codex CLI OAuth (~/.codex/auth.json + `codex` on PATH)
     import shutil
-    if shutil.which("codex") and os.path.exists(os.path.expanduser("~/.codex/auth.json")):
+
+    if shutil.which("codex") and os.path.exists(
+        os.path.expanduser("~/.codex/auth.json")
+    ):
         return True
     return False
 
@@ -48,7 +51,10 @@ def _has_gemini() -> bool:
     if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
         return True
     import shutil
-    if shutil.which("gemini") and os.path.exists(os.path.expanduser("~/.gemini/oauth_creds.json")):
+
+    if shutil.which("gemini") and os.path.exists(
+        os.path.expanduser("~/.gemini/oauth_creds.json")
+    ):
         return True
     return False
 
@@ -166,7 +172,9 @@ async def test_litellm_oneshot():
         elif os.getenv("MISTRAL_API_KEY"):
             model = "mistral/mistral-large-latest"
         else:
-            pytest.skip("set E2E_LITELLM_MODEL or one of GROQ_/DEEPSEEK_/MISTRAL_API_KEY")
+            pytest.skip(
+                "set E2E_LITELLM_MODEL or one of GROQ_/DEEPSEEK_/MISTRAL_API_KEY"
+            )
 
     text = await _collect_text(
         p,
@@ -205,15 +213,23 @@ async def test_openai_tool_call_loop():
     ]
 
     messages = [
-        {"role": "system", "content": "Use the `add` tool to compute. Then reply with the integer answer alone."},
+        {
+            "role": "system",
+            "content": "Use the `add` tool to compute. Then reply with the integer answer alone.",
+        },
         {"role": "user", "content": "What is 14 + 28?"},
     ]
 
     # Round 1: expect tool_call.
     pending = []
     async for event in p.run(
-        prompt="", system_prompt="", model=os.getenv("E2E_OPENAI_MODEL", "gpt-4o-mini"),
-        tools=tools, max_turns=1, timeout_seconds=60, messages=messages,
+        prompt="",
+        system_prompt="",
+        model=os.getenv("E2E_OPENAI_MODEL", "gpt-4o-mini"),
+        tools=tools,
+        max_turns=1,
+        timeout_seconds=60,
+        messages=messages,
     ):
         if event.kind == "tool_call":
             pending.append(event.data)
@@ -228,19 +244,36 @@ async def test_openai_tool_call_loop():
 
     # Round 2: append assistant + tool_result, ask for the final reply.
     import json
-    messages.append({
-        "role": "assistant", "content": None,
-        "tool_calls": [{
-            "id": call["tool_call_id"], "type": "function",
-            "function": {"name": "add", "arguments": json.dumps(call["arguments"])},
-        }],
-    })
-    messages.append({"role": "tool", "tool_call_id": call["tool_call_id"], "content": str(result)})
+
+    messages.append(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call["tool_call_id"],
+                    "type": "function",
+                    "function": {
+                        "name": "add",
+                        "arguments": json.dumps(call["arguments"]),
+                    },
+                }
+            ],
+        }
+    )
+    messages.append(
+        {"role": "tool", "tool_call_id": call["tool_call_id"], "content": str(result)}
+    )
 
     final = ""
     async for event in p.run(
-        prompt="", system_prompt="", model=os.getenv("E2E_OPENAI_MODEL", "gpt-4o-mini"),
-        tools=tools, max_turns=1, timeout_seconds=60, messages=messages,
+        prompt="",
+        system_prompt="",
+        model=os.getenv("E2E_OPENAI_MODEL", "gpt-4o-mini"),
+        tools=tools,
+        max_turns=1,
+        timeout_seconds=60,
+        messages=messages,
     ):
         if event.kind == "text":
             final += event.data.get("text", "")

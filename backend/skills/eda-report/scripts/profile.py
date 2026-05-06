@@ -52,8 +52,10 @@ def run(path: str, target: str | None = None, out_dir: str = "./figures") -> dic
         "memory_mb": round(df.memory_usage(deep=True).sum() / 1e6, 3),
         "dtypes": {c: str(df[c].dtype) for c in df.columns},
         "missing": {
-            c: {"count": int(df[c].isna().sum()),
-                "pct": round(float(df[c].isna().mean()) * 100, 2)}
+            c: {
+                "count": int(df[c].isna().sum()),
+                "pct": round(float(df[c].isna().mean()) * 100, 2),
+            }
             for c in df.columns
         },
         "duplicate_rows": int(df.duplicated().sum()),
@@ -92,14 +94,25 @@ def run(path: str, target: str | None = None, out_dir: str = "./figures") -> dic
         profile["categorical"][c] = {
             "cardinality": int(s.nunique(dropna=True)),
             "top": {str(k): int(v) for k, v in vc.items()},
-            "rare_pct": round(float((s.value_counts(normalize=True) < 0.01).sum() / max(s.nunique(), 1)) * 100, 2),
+            "rare_pct": round(
+                float(
+                    (s.value_counts(normalize=True) < 0.01).sum() / max(s.nunique(), 1)
+                )
+                * 100,
+                2,
+            ),
         }
 
     # Correlation heatmap (numeric only)
     if len(num_cols) >= 2:
         try:
             corr = df[num_cols].corr()
-            fig, ax = plt.subplots(figsize=(min(0.4 * len(num_cols) + 2, 12), min(0.4 * len(num_cols) + 2, 12)))
+            fig, ax = plt.subplots(
+                figsize=(
+                    min(0.4 * len(num_cols) + 2, 12),
+                    min(0.4 * len(num_cols) + 2, 12),
+                )
+            )
             im = ax.imshow(corr.values, vmin=-1, vmax=1, cmap="coolwarm")
             ax.set_xticks(range(len(num_cols)))
             ax.set_yticks(range(len(num_cols)))
@@ -112,7 +125,8 @@ def run(path: str, target: str | None = None, out_dir: str = "./figures") -> dic
             plt.close(fig)
             profile["high_correlation_pairs"] = [
                 {"a": a, "b": b, "r": round(float(corr.loc[a, b]), 3)}
-                for a in num_cols for b in num_cols
+                for a in num_cols
+                for b in num_cols
                 if a < b and abs(corr.loc[a, b]) > 0.9
             ]
         except Exception:

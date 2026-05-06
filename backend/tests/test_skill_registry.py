@@ -56,10 +56,16 @@ HANDLER_SRC = (
 class TestDiscover:
     def test_empty(self, tmp_skills):
         from services.skills.registry import discover_skills
+
         assert discover_skills() == {}
 
     def test_skill_without_handler_is_knowledge(self, tmp_skills):
-        from services.skills.registry import discover_skills, get_capability_skills, get_knowledge_skills
+        from services.skills.registry import (
+            discover_skills,
+            get_capability_skills,
+            get_knowledge_skills,
+        )
+
         _write_skill(tmp_skills, "doc-only", body="# Just docs\n")
         skills = discover_skills()
         assert "doc-only" in skills
@@ -71,8 +77,10 @@ class TestDiscover:
 
     def test_skill_with_handler_is_capability(self, tmp_skills):
         from services.skills.registry import discover_skills, get_capability_skills
+
         _write_skill(
-            tmp_skills, "do-thing",
+            tmp_skills,
+            "do-thing",
             handler=HANDLER_SRC,
             schema={"type": "object", "properties": {"x": {"type": "string"}}},
         )
@@ -84,8 +92,11 @@ class TestDiscover:
 
     def test_hybrid_skill(self, tmp_skills):
         from services.skills.registry import discover_skills
+
         _write_skill(
-            tmp_skills, "hybrid", handler=HANDLER_SRC,
+            tmp_skills,
+            "hybrid",
+            handler=HANDLER_SRC,
             schema={"type": "object"},
             body="# methodology\n\nDo this then that.\n",
         )
@@ -93,11 +104,13 @@ class TestDiscover:
 
     def test_directory_without_skill_md_skipped(self, tmp_skills):
         from services.skills.registry import discover_skills
+
         (tmp_skills / "junk").mkdir()
         assert discover_skills() == {}
 
     def test_unknown_slug_raises(self, tmp_skills):
         from services.skills.registry import get_skill
+
         with pytest.raises(KeyError):
             get_skill("nope")
 
@@ -105,8 +118,10 @@ class TestDiscover:
 class TestNormalizedSpecs:
     def test_returns_capability_specs(self, tmp_skills):
         from services.skills.registry import get_normalized_specs
+
         _write_skill(
-            tmp_skills, "exec",
+            tmp_skills,
+            "exec",
             handler=HANDLER_SRC,
             schema={"type": "object", "properties": {"code": {"type": "string"}}},
             description="Run code",
@@ -120,15 +135,18 @@ class TestNormalizedSpecs:
 
     def test_skips_knowledge_skills(self, tmp_skills):
         from services.skills.registry import get_normalized_specs
+
         _write_skill(tmp_skills, "doc-only", body="# docs")
         assert get_normalized_specs(["doc-only"]) == []
 
     def test_skips_unknown_slugs(self, tmp_skills):
         from services.skills.registry import get_normalized_specs
+
         assert get_normalized_specs(["does-not-exist"]) == []
 
     def test_default_schema_when_missing(self, tmp_skills):
         from services.skills.registry import get_normalized_specs
+
         # capability skill without schema.yaml -> spec gets a permissive empty schema
         _write_skill(tmp_skills, "no-schema", handler=HANDLER_SRC)
         specs = get_normalized_specs(["no-schema"])
@@ -139,6 +157,7 @@ class TestLoadHandler:
     @pytest.mark.asyncio
     async def test_loads_and_invokes(self, tmp_skills):
         from services.skills.registry import load_handler
+
         _write_skill(tmp_skills, "echo", handler=HANDLER_SRC, schema={"type": "object"})
         factory = load_handler("echo")
         handler = factory(session_id="s")
@@ -147,6 +166,7 @@ class TestLoadHandler:
 
     def test_raises_on_knowledge_skill(self, tmp_skills):
         from services.skills.registry import load_handler
+
         _write_skill(tmp_skills, "doc-only", body="# docs")
         with pytest.raises(ValueError, match="knowledge-only"):
             load_handler("doc-only")
@@ -155,6 +175,7 @@ class TestLoadHandler:
 class TestLoadSkill:
     def test_returns_body_and_files(self, tmp_skills):
         from services.skills.registry import load_skill
+
         _write_skill(tmp_skills, "method", body="# Methodology\n\nstep 1\n")
         # Add a supporting file
         (tmp_skills / "method" / "scripts").mkdir()

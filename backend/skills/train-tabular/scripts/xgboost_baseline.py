@@ -10,7 +10,9 @@ import pandas as pd
 
 
 def _is_classification(y: pd.Series) -> bool:
-    return y.dtype == "object" or y.dtype.name.startswith("category") or y.nunique() <= 20
+    return (
+        y.dtype == "object" or y.dtype.name.startswith("category") or y.nunique() <= 20
+    )
 
 
 def run(
@@ -24,6 +26,7 @@ def run(
 ) -> dict[str, Any]:
     """Train an XGBoost model and save to disk. Returns metrics."""
     import xgboost as xgb
+
     try:
         import trainable  # streaming logger injected by sandbox preamble
     except ImportError:
@@ -62,7 +65,8 @@ def run(
         )
 
     model.fit(
-        X_train, y_train,
+        X_train,
+        y_train,
         eval_set=[(X_val, y_val)],
         verbose=False,
     )
@@ -70,7 +74,9 @@ def run(
     # Stream a final epoch metric so the dashboard sees something
     if trainable:
         results = model.evals_result()
-        for step, val in enumerate(list(results.get("validation_0", {}).values())[0] if results else []):
+        for step, val in enumerate(
+            list(results.get("validation_0", {}).values())[0] if results else []
+        ):
             if step % 50 == 0:
                 trainable.log(step, {"val_metric": float(val)})
 
@@ -78,10 +84,12 @@ def run(
     metrics: dict[str, Any] = {"val_n": len(y_val)}
     if is_clf:
         from sklearn.metrics import accuracy_score, f1_score
+
         metrics["val_accuracy"] = float(accuracy_score(y_val, preds))
         metrics["val_f1"] = float(f1_score(y_val, preds, average="weighted"))
         if n_classes == 2:
             from sklearn.metrics import roc_auc_score
+
             try:
                 proba = model.predict_proba(X_val)[:, 1]
                 metrics["val_auc"] = float(roc_auc_score(y_val, proba))
@@ -89,6 +97,7 @@ def run(
                 pass
     else:
         from sklearn.metrics import mean_absolute_error, r2_score
+
         metrics["val_mae"] = float(mean_absolute_error(y_val, preds))
         metrics["val_r2"] = float(r2_score(y_val, preds))
 
@@ -98,9 +107,11 @@ def run(
         test_preds = model.predict(X_test)
         if is_clf:
             from sklearn.metrics import accuracy_score
+
             metrics["test_accuracy"] = float(accuracy_score(y_test, test_preds))
         else:
             from sklearn.metrics import mean_absolute_error, r2_score
+
             metrics["test_mae"] = float(mean_absolute_error(y_test, test_preds))
             metrics["test_r2"] = float(r2_score(y_test, test_preds))
 

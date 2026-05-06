@@ -18,13 +18,16 @@ import yaml
 def sandbox_skills(tmp_path: Path, monkeypatch):
     """Tmpdir that the registry treats as the skills root."""
     from services.skills import registry
+
     monkeypatch.setattr(registry, "_SKILLS_ROOT", tmp_path)
     registry.discover_skills.cache_clear()
     yield tmp_path
     registry.discover_skills.cache_clear()
 
 
-def _make_skill(root: Path, slug: str, *, schema: dict | None = None, has_handler: bool = True):
+def _make_skill(
+    root: Path, slug: str, *, schema: dict | None = None, has_handler: bool = True
+):
     d = root / slug
     d.mkdir(exist_ok=True)
     fm = {"name": slug, "description": f"{slug} desc", "version": "0.1"}
@@ -40,31 +43,40 @@ def _make_skill(root: Path, slug: str, *, schema: dict | None = None, has_handle
         (d / "schema.yaml").write_text(yaml.safe_dump(schema))
 
 
-def _patch_agent(monkeypatch, *, skills: list[str], subagents: list[str] = (), max_depth: int = 0):
+def _patch_agent(
+    monkeypatch, *, skills: list[str], subagents: list[str] = (), max_depth: int = 0
+):
     """Stub services.agent.agents so the bridge sees the skill list we want."""
     import services.agent.agents as agents_mod
 
     monkeypatch.setattr(agents_mod, "get_agent_skills", lambda _t: skills)
     monkeypatch.setattr(
-        agents_mod, "can_delegate",
+        agents_mod,
+        "can_delegate",
         lambda agent_type, depth: bool(subagents) and depth < max_depth,
     )
     monkeypatch.setattr(
-        agents_mod, "get_skill_for_agent",
+        agents_mod,
+        "get_skill_for_agent",
         lambda agent_type, slug: {
             "name": slug,
             "description": f"{slug} desc",
             "input_schema": {"type": "object", "properties": {}},
         },
     )
-    monkeypatch.setattr(agents_mod, "render_skill_description", lambda **kw: f"{kw['skill_slug']} desc")
     monkeypatch.setattr(
-        agents_mod, "get_skill_input_schema",
+        agents_mod, "render_skill_description", lambda **kw: f"{kw['skill_slug']} desc"
+    )
+    monkeypatch.setattr(
+        agents_mod,
+        "get_skill_input_schema",
         lambda slug, agent_type: {"type": "object", "properties": {}},
     )
-    monkeypatch.setattr(agents_mod, "list_delegatable_agents", lambda _t: [
-        {"type": s, "description": f"{s} agent"} for s in subagents
-    ])
+    monkeypatch.setattr(
+        agents_mod,
+        "list_delegatable_agents",
+        lambda _t: [{"type": s, "description": f"{s} agent"} for s in subagents],
+    )
 
 
 class TestBuildSkillEntries:
@@ -102,8 +114,12 @@ class TestBuildSkillEntries:
 
         with caplog.at_level("WARNING"):
             entries = build_skill_entries(
-                agent_type="eda", session_id="s", experiment_id="e",
-                stage="eda", depth=0, publish_fn=_publish,
+                agent_type="eda",
+                session_id="s",
+                experiment_id="e",
+                stage="eda",
+                depth=0,
+                publish_fn=_publish,
             )
         assert entries == {}
         assert any("does-not-exist" in r.message for r in caplog.records)
@@ -111,24 +127,37 @@ class TestBuildSkillEntries:
     def test_delegate_task_gated_by_depth(self, sandbox_skills, monkeypatch):
         from services.skills.mcp_bridge import build_skill_entries
 
-        _make_skill(sandbox_skills, "delegate-task",
-                    schema={"type": "object", "properties": {"agent_type": {}}})
-        _patch_agent(monkeypatch, skills=["delegate-task"], subagents=["worker"], max_depth=1)
+        _make_skill(
+            sandbox_skills,
+            "delegate-task",
+            schema={"type": "object", "properties": {"agent_type": {}}},
+        )
+        _patch_agent(
+            monkeypatch, skills=["delegate-task"], subagents=["worker"], max_depth=1
+        )
 
         async def _publish(*a, **k):
             pass
 
         # depth=0 with max_depth=1 -> can_delegate True
         entries = build_skill_entries(
-            agent_type="eda", session_id="s", experiment_id="e",
-            stage="eda", depth=0, publish_fn=_publish,
+            agent_type="eda",
+            session_id="s",
+            experiment_id="e",
+            stage="eda",
+            depth=0,
+            publish_fn=_publish,
         )
         assert "delegate-task" in entries
 
         # depth=1 == max_depth -> can_delegate False -> dropped
         entries = build_skill_entries(
-            agent_type="eda", session_id="s", experiment_id="e",
-            stage="eda", depth=1, publish_fn=_publish,
+            agent_type="eda",
+            session_id="s",
+            experiment_id="e",
+            stage="eda",
+            depth=1,
+            publish_fn=_publish,
         )
         assert "delegate-task" not in entries
 
@@ -138,10 +167,13 @@ class TestBuildSkillEntries:
 
         _make_skill(sandbox_skills, "delegate-task")
         # delegate-task needs an input_schema with an agent_type enum slot to populate.
-        monkeypatch.setattr(agents_mod, "get_agent_skills", lambda _t: ["delegate-task"])
+        monkeypatch.setattr(
+            agents_mod, "get_agent_skills", lambda _t: ["delegate-task"]
+        )
         monkeypatch.setattr(agents_mod, "can_delegate", lambda *_a, **_k: True)
         monkeypatch.setattr(
-            agents_mod, "get_skill_for_agent",
+            agents_mod,
+            "get_skill_for_agent",
             lambda agent_type, slug: {
                 "name": slug,
                 "description": "delegate-task desc",
@@ -151,16 +183,20 @@ class TestBuildSkillEntries:
                 },
             },
         )
-        monkeypatch.setattr(agents_mod, "render_skill_description", lambda **kw: "delegate-task desc")
         monkeypatch.setattr(
-            agents_mod, "get_skill_input_schema",
+            agents_mod, "render_skill_description", lambda **kw: "delegate-task desc"
+        )
+        monkeypatch.setattr(
+            agents_mod,
+            "get_skill_input_schema",
             lambda slug, agent_type: {
                 "type": "object",
                 "properties": {"agent_type": {"type": "string"}},
             },
         )
         monkeypatch.setattr(
-            agents_mod, "list_delegatable_agents",
+            agents_mod,
+            "list_delegatable_agents",
             lambda _t: [
                 {"type": "data_prep", "description": "prep agent"},
                 {"type": "trainer", "description": "training agent"},
@@ -171,8 +207,12 @@ class TestBuildSkillEntries:
             pass
 
         entries = build_skill_entries(
-            agent_type="eda", session_id="s", experiment_id="e",
-            stage="eda", depth=0, publish_fn=_publish,
+            agent_type="eda",
+            session_id="s",
+            experiment_id="e",
+            stage="eda",
+            depth=0,
+            publish_fn=_publish,
         )
         schema = entries["delegate-task"]["input_schema"]
         assert schema["properties"]["agent_type"]["enum"] == ["data_prep", "trainer"]
@@ -201,7 +241,10 @@ class TestBuildMcpServer:
             pass
 
         server = mcp_bridge.build_mcp_server(
-            agent_type="eda", session_id="s", experiment_id="e", stage="eda",
+            agent_type="eda",
+            session_id="s",
+            experiment_id="e",
+            stage="eda",
             publish_fn=_publish,
         )
         assert server["name"] == "trainable"

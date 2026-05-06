@@ -22,7 +22,9 @@ class _FakeEvent:
 
 
 class _FakeProvider:
-    def __init__(self, events_per_round: list[list[_FakeEvent]], supports_mcp: bool = False):
+    def __init__(
+        self, events_per_round: list[list[_FakeEvent]], supports_mcp: bool = False
+    ):
         self.events_per_round = list(events_per_round)
         self.calls: list[dict] = []
         self.capabilities = MagicMock(supports_mcp=supports_mcp)
@@ -45,10 +47,16 @@ def patched_runner(monkeypatch):
     monkeypatch.setattr(runner, "record_llm_usage", _record)
 
     # The non-Claude path doesn't need create_mcp_server, but the Claude path does.
-    monkeypatch.setattr(runner, "create_mcp_server", lambda *a, **k: {"type": "sdk", "instance": object()})
+    monkeypatch.setattr(
+        runner,
+        "create_mcp_server",
+        lambda *a, **k: {"type": "sdk", "instance": object()},
+    )
 
     # Make build_skill_entries return whatever the test injects via the registry mock.
-    monkeypatch.setattr(runner, "build_skill_entries", lambda **kw: kw.get("_entries", {}))
+    monkeypatch.setattr(
+        runner, "build_skill_entries", lambda **kw: kw.get("_entries", {})
+    )
     yield runner
 
 
@@ -56,7 +64,9 @@ def _make_publish():
     """Capture what the runner publishes so assertions can inspect it."""
     events: list[tuple] = []
 
-    async def publish(event_type: str, data: dict, role: str | None = None, publish: bool = True):
+    async def publish(
+        event_type: str, data: dict, role: str | None = None, publish: bool = True
+    ):
         events.append((event_type, data, role, publish))
 
     return publish, events
@@ -64,9 +74,11 @@ def _make_publish():
 
 def _stub_agent(monkeypatch, skills: list[str]):
     import services.agent.agents as agents
+
     monkeypatch.setattr(agents, "get_agent_skills", lambda _t: skills)
     monkeypatch.setattr(
-        agents, "get_skill_for_agent",
+        agents,
+        "get_skill_for_agent",
         lambda agent_type, slug: {
             "name": slug,
             "description": f"{slug} desc",
@@ -89,18 +101,36 @@ async def test_non_claude_loop_dispatches_skill_handler(patched_runner, monkeypa
 
     # Inject the entries into build_skill_entries via a sentinel key.
     monkeypatch.setattr(
-        runner, "build_skill_entries",
-        lambda **kw: {"echo": {"description": "echo desc", "input_schema": {}, "handler": fake_handler}},
+        runner,
+        "build_skill_entries",
+        lambda **kw: {
+            "echo": {
+                "description": "echo desc",
+                "input_schema": {},
+                "handler": fake_handler,
+            }
+        },
     )
 
     _stub_agent(monkeypatch, skills=["echo"])
 
     # Round 1: tool_call. Round 2: text + (no tool_call) -> loop ends.
-    provider = _FakeProvider([
-        [_FakeEvent("tool_call", {"tool_name": "echo", "tool_call_id": "c1", "arguments": {"x": 1}}),
-         _FakeEvent("usage", {"model": "m", "usage": {"input_tokens": 5, "output_tokens": 3}})],
-        [_FakeEvent("text", {"text": "all done"})],
-    ], supports_mcp=False)
+    provider = _FakeProvider(
+        [
+            [
+                _FakeEvent(
+                    "tool_call",
+                    {"tool_name": "echo", "tool_call_id": "c1", "arguments": {"x": 1}},
+                ),
+                _FakeEvent(
+                    "usage",
+                    {"model": "m", "usage": {"input_tokens": 5, "output_tokens": 3}},
+                ),
+            ],
+            [_FakeEvent("text", {"text": "all done"})],
+        ],
+        supports_mcp=False,
+    )
 
     monkeypatch.setattr(runner.llm_factory, "get_provider", lambda _id: provider)
 
@@ -135,36 +165,58 @@ async def test_non_claude_loop_dispatches_skill_handler(patched_runner, monkeypa
 
     # Second call's messages should contain the tool result we fed back in.
     second_messages = provider.calls[1]["messages"]
-    assert any(m["role"] == "tool" and "tool ran ok" in m["content"] for m in second_messages)
+    assert any(
+        m["role"] == "tool" and "tool ran ok" in m["content"] for m in second_messages
+    )
 
 
 @pytest.mark.asyncio
-async def test_non_claude_loop_terminates_when_no_tool_calls(patched_runner, monkeypatch):
+async def test_non_claude_loop_terminates_when_no_tool_calls(
+    patched_runner, monkeypatch
+):
     """Provider returns text only -> single round, no handler dispatch."""
     runner = patched_runner
 
     monkeypatch.setattr(runner, "build_skill_entries", lambda **kw: {})
     _stub_agent(monkeypatch, skills=[])
 
-    provider = _FakeProvider([
-        [_FakeEvent("text", {"text": "hello world"})],
-    ], supports_mcp=False)
+    provider = _FakeProvider(
+        [
+            [_FakeEvent("text", {"text": "hello world"})],
+        ],
+        supports_mcp=False,
+    )
     monkeypatch.setattr(runner.llm_factory, "get_provider", lambda _id: provider)
 
     publish, events = _make_publish()
 
     text = await runner._drive_provider(
-        provider_id="gemini", prompt="hi", system_prompt="sys", model="m",
-        agent_type="eda", session_id="s", experiment_id="e", stage="eda",
-        depth=0, agent_id="root", parent_agent_id=None,
-        agent_skills=[], sandbox_config={}, instructions="", agent_models={},
-        publish=publish, agent_span=MagicMock(),
+        provider_id="gemini",
+        prompt="hi",
+        system_prompt="sys",
+        model="m",
+        agent_type="eda",
+        session_id="s",
+        experiment_id="e",
+        stage="eda",
+        depth=0,
+        agent_id="root",
+        parent_agent_id=None,
+        agent_skills=[],
+        sandbox_config={},
+        instructions="",
+        agent_models={},
+        publish=publish,
+        agent_span=MagicMock(),
     )
 
     assert text == "hello world"
     assert len(provider.calls) == 1
     # Frontend-facing event was emitted.
-    assert any(et == "agent_message" and d.get("text") == "hello world" for et, d, _, _ in events)
+    assert any(
+        et == "agent_message" and d.get("text") == "hello world"
+        for et, d, _, _ in events
+    )
 
 
 @pytest.mark.asyncio
@@ -176,20 +228,40 @@ async def test_non_claude_unknown_skill_marks_error(patched_runner, monkeypatch)
     monkeypatch.setattr(runner, "build_skill_entries", lambda **kw: {})
     _stub_agent(monkeypatch, skills=[])
 
-    provider = _FakeProvider([
-        [_FakeEvent("tool_call", {"tool_name": "ghost", "tool_call_id": "c1", "arguments": {}})],
-        [_FakeEvent("text", {"text": "ok"})],
-    ], supports_mcp=False)
+    provider = _FakeProvider(
+        [
+            [
+                _FakeEvent(
+                    "tool_call",
+                    {"tool_name": "ghost", "tool_call_id": "c1", "arguments": {}},
+                )
+            ],
+            [_FakeEvent("text", {"text": "ok"})],
+        ],
+        supports_mcp=False,
+    )
     monkeypatch.setattr(runner.llm_factory, "get_provider", lambda _id: provider)
 
     publish, events = _make_publish()
 
     await runner._drive_provider(
-        provider_id="openai", prompt="x", system_prompt="sys", model="m",
-        agent_type="eda", session_id="s", experiment_id="e", stage="eda",
-        depth=0, agent_id="root", parent_agent_id=None,
-        agent_skills=[], sandbox_config={}, instructions="", agent_models={},
-        publish=publish, agent_span=MagicMock(),
+        provider_id="openai",
+        prompt="x",
+        system_prompt="sys",
+        model="m",
+        agent_type="eda",
+        session_id="s",
+        experiment_id="e",
+        stage="eda",
+        depth=0,
+        agent_id="root",
+        parent_agent_id=None,
+        agent_skills=[],
+        sandbox_config={},
+        instructions="",
+        agent_models={},
+        publish=publish,
+        agent_span=MagicMock(),
     )
 
     # Tool result event should carry is_error=True.
@@ -206,20 +278,43 @@ async def test_claude_path_passes_mcp_server(patched_runner, monkeypatch):
 
     _stub_agent(monkeypatch, skills=["execute-code"])
 
-    provider = _FakeProvider([
-        [_FakeEvent("text", {"text": "claude reply"}),
-         _FakeEvent("usage", {"model": "claude-x", "usage": {"input_tokens": 10, "output_tokens": 4}})],
-    ], supports_mcp=True)
+    provider = _FakeProvider(
+        [
+            [
+                _FakeEvent("text", {"text": "claude reply"}),
+                _FakeEvent(
+                    "usage",
+                    {
+                        "model": "claude-x",
+                        "usage": {"input_tokens": 10, "output_tokens": 4},
+                    },
+                ),
+            ],
+        ],
+        supports_mcp=True,
+    )
     monkeypatch.setattr(runner.llm_factory, "get_provider", lambda _id: provider)
 
     publish, events = _make_publish()
 
     text = await runner._drive_provider(
-        provider_id="claude", prompt="hi", system_prompt="sys", model="claude-x",
-        agent_type="eda", session_id="s", experiment_id="e", stage="eda",
-        depth=0, agent_id="root", parent_agent_id=None,
-        agent_skills=["execute-code"], sandbox_config={}, instructions="", agent_models={},
-        publish=publish, agent_span=MagicMock(),
+        provider_id="claude",
+        prompt="hi",
+        system_prompt="sys",
+        model="claude-x",
+        agent_type="eda",
+        session_id="s",
+        experiment_id="e",
+        stage="eda",
+        depth=0,
+        agent_id="root",
+        parent_agent_id=None,
+        agent_skills=["execute-code"],
+        sandbox_config={},
+        instructions="",
+        agent_models={},
+        publish=publish,
+        agent_span=MagicMock(),
     )
 
     assert text == "claude reply"

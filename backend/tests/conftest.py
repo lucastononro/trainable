@@ -21,6 +21,7 @@ def pytest_configure(config):
         "e2e: marks tests that hit live LLM APIs; gated on RUN_LLM_E2E=1.",
     )
 
+
 # Use in-memory SQLite for tests (no Postgres needed)
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 

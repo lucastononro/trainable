@@ -13,7 +13,6 @@ from unittest.mock import MagicMock
 import pytest
 
 
-
 class _FakeEvent:
     def __init__(self, kind: str, data: dict | None = None):
         self.kind = kind
@@ -35,9 +34,12 @@ class _RecordingProvider:
 
 def _patch_agents(monkeypatch, *, provider_id: str, default_model: str = "test-model"):
     import services.agent.agents as agents
+
     monkeypatch.setattr(agents, "get_agent_provider", lambda _t: provider_id)
     monkeypatch.setattr(agents, "get_agent_default_model", lambda _t: default_model)
-    monkeypatch.setattr(agents, "render_agent_system_prompt", lambda _t, **k: "[parent system]")
+    monkeypatch.setattr(
+        agents, "render_agent_system_prompt", lambda _t, **k: "[parent system]"
+    )
 
 
 @pytest.mark.asyncio
@@ -47,9 +49,11 @@ async def test_impersonator_routes_through_factory(monkeypatch):
     # The kebab-case directory means `from skills.request-clarification`
     # doesn't work — load the module via importlib instead.
     import services.skills.registry as reg
+
     skill = reg.get_skill("request-clarification")
     handler_path = reg._SKILLS_ROOT / skill.slug / "handler.py"
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("rc_handler", handler_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -81,9 +85,11 @@ async def test_impersonator_routes_through_factory(monkeypatch):
 @pytest.mark.asyncio
 async def test_impersonator_uses_claude_when_parent_is_claude(monkeypatch):
     import services.skills.registry as reg
+
     skill = reg.get_skill("request-clarification")
     handler_path = reg._SKILLS_ROOT / skill.slug / "handler.py"
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("rc_handler", handler_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -114,9 +120,11 @@ async def test_impersonator_uses_claude_when_parent_is_claude(monkeypatch):
 async def test_impersonator_escalates_when_provider_unavailable(monkeypatch):
     """If the configured provider can't be resolved, escalate to the user."""
     import services.skills.registry as reg
+
     skill = reg.get_skill("request-clarification")
     handler_path = reg._SKILLS_ROOT / skill.slug / "handler.py"
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("rc_handler", handler_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -145,9 +153,11 @@ async def test_impersonator_escalates_on_timeout(monkeypatch):
     """An exceeded timeout should yield an ESCALATE: response, not crash."""
     import asyncio
     import services.skills.registry as reg
+
     skill = reg.get_skill("request-clarification")
     handler_path = reg._SKILLS_ROOT / skill.slug / "handler.py"
     import importlib.util
+
     spec = importlib.util.spec_from_file_location("rc_handler", handler_path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)

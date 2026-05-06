@@ -12,9 +12,7 @@ def create_handler(**_):
         slug = (args or {}).get("slug", "").strip()
         if not slug:
             return {
-                "content": [
-                    {"type": "text", "text": "Missing required arg: slug"}
-                ],
+                "content": [{"type": "text", "text": "Missing required arg: slug"}],
                 "is_error": True,
             }
         try:

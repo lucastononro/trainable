@@ -17,6 +17,7 @@ class _FakeProvider:
 def empty_factory(monkeypatch):
     """Wipe the registry so each test starts clean."""
     from services.llm import factory
+
     monkeypatch.setattr(factory, "_REGISTRY", {})
     monkeypatch.setattr(factory, "_INSTANCES", {})
     yield factory
@@ -56,6 +57,7 @@ def test_bootstrap_registers_known_ids():
     no SDK gate at registration time (openai, litellm) must always appear.
     """
     from services.llm import factory
+
     factory._bootstrap()
     ids = set(factory.list_providers())
     assert "openai" in ids
@@ -71,11 +73,13 @@ def test_bootstrap_registers_known_ids():
 def test_factory_failure_does_not_break_bootstrap(monkeypatch):
     """If one provider's import raises, the others still register."""
     from services.llm import factory
+
     monkeypatch.setattr(factory, "_REGISTRY", {})
     monkeypatch.setattr(factory, "_INSTANCES", {})
 
     # Force ClaudeProvider import to explode by clobbering the module path.
     import sys
+
     saved = sys.modules.pop("services.llm.claude_provider", None)
     monkeypatch.setitem(sys.modules, "services.llm.claude_provider", None)
     try:
