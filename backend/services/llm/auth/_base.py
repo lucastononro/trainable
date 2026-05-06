@@ -15,14 +15,15 @@ class Credentials:
 
     `mode` is the authentication style:
       - "api_key": the SDK is initialized with `token`
-      - "oauth_cli": a local CLI subprocess (Claude CLI, Codex CLI, Gemini CLI)
-        is invoked which reads its own OAuth state from the user's home dir.
+      - "oauth_cli": a Claude Code OAuth token (used by claude-agent-sdk
+        when CLAUDE_CODE_OAUTH_TOKEN is present). Only Claude uses this
+        mode today; OpenAI and Gemini are api_key only.
 
-    `transport` names the concrete transport to spawn for `oauth_cli` mode
-    (e.g. "claude_sdk", "codex_cli", "gemini_cli"). Ignored for `api_key` mode.
+    `transport` names the concrete SDK / wrapper used at call time
+    (e.g. "claude_sdk", "openai_sdk", "gemini_sdk", "litellm_sdk").
 
-    `auth_file` is the OAuth state file path that signaled the choice (purely
-    informational — for telemetry / `trainable doctor`).
+    `auth_file` is left for backwards-compat / telemetry — empty in
+    practice now that no provider reads from a home-dir OAuth file.
 
     `extra` carries provider-specific bits (e.g. base_url for OpenAI-compatible
     deployments, organization id, etc.).

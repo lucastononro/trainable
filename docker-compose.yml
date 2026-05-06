@@ -68,11 +68,6 @@ services:
       - ./backend:/app
       - ~/.modal.toml:/home/trainable/.modal.toml:ro
       - ~/.claude:/home/trainable/.claude:ro
-      # OAuth state for OpenAI Codex CLI / Gemini CLI (local dev only — never
-      # in docker-compose.prod.yml). The presence of these directories triggers
-      # the OAuth-CLI auth path; missing on prod, providers fall back to API keys.
-      - ~/.codex:/home/trainable/.codex:ro
-      - ~/.gemini:/home/trainable/.gemini:ro
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
     depends_on:
       postgres:

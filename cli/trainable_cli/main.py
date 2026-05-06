@@ -230,50 +230,14 @@ def prompt_claude_auth() -> dict[str, str]:
 
 def prompt_openai_auth() -> dict[str, str]:
     print()
-    choice = prompt_choice(
-        "How would you like to authenticate with OpenAI?",
-        [
-            "OpenAI API key (works in dev and prod)",
-            "ChatGPT-Plus via Codex CLI OAuth (local dev only)",
-        ],
-    )
-    print()
-    if choice == 1:
-        key = prompt_secret("OpenAI API key", "https://platform.openai.com/api-keys")
-        return {"OPENAI_API_KEY": key}
-    print("  Codex OAuth is file-based — there's no token to paste. To set it up:\n")
-    print(f"    {BOLD}npm install -g @openai/codex{RESET}")
-    print(f"    {BOLD}codex login{RESET}\n")
-    print(f"  Credentials land at {BOLD}~/.codex/auth.json{RESET}, which the dev")
-    print("  docker-compose.yml mounts read-only into the backend container.")
-    print(f"  {DIM}Production needs OPENAI_API_KEY — OAuth tokens rotate.{RESET}\n")
-    input(f"  {DIM}Press Enter once codex login is complete (or skip){RESET}: ")
-    return {}
+    key = prompt_secret("OpenAI API key", "https://platform.openai.com/api-keys")
+    return {"OPENAI_API_KEY": key}
 
 
 def prompt_gemini_auth() -> dict[str, str]:
     print()
-    choice = prompt_choice(
-        "How would you like to authenticate with Gemini?",
-        [
-            "Gemini API key (works in dev and prod)",
-            "Gemini CLI OAuth (local dev only)",
-        ],
-    )
-    print()
-    if choice == 1:
-        key = prompt_secret("Gemini API key", "https://aistudio.google.com/apikey")
-        return {"GEMINI_API_KEY": key}
-    print(
-        "  Gemini CLI OAuth is file-based — there's no token to paste. To set it up:\n"
-    )
-    print(f"    {BOLD}npm install -g @google/gemini-cli{RESET}")
-    print(f"    {BOLD}gemini auth login{RESET}\n")
-    print(f"  Credentials land at {BOLD}~/.gemini/oauth_creds.json{RESET}, which the")
-    print("  dev docker-compose.yml mounts read-only into the backend container.")
-    print(f"  {DIM}Production needs GEMINI_API_KEY — OAuth tokens rotate.{RESET}\n")
-    input(f"  {DIM}Press Enter once gemini auth login is complete (or skip){RESET}: ")
-    return {}
+    key = prompt_secret("Gemini API key", "https://aistudio.google.com/apikey")
+    return {"GEMINI_API_KEY": key}
 
 
 def prompt_litellm_keys() -> dict[str, str]:
@@ -322,8 +286,8 @@ def prompt_extra_providers(*, include_claude: bool = False) -> dict[str, str]:
     if include_claude:
         options.append(("claude", "Claude (Anthropic API key or subscription OAuth)"))
     options += [
-        ("openai", "OpenAI (API key or Codex CLI OAuth)"),
-        ("gemini", "Gemini (API key or Gemini CLI OAuth)"),
+        ("openai", "OpenAI (API key)"),
+        ("gemini", "Gemini (API key)"),
         ("litellm", "LiteLLM (catch-all: Groq, Mistral, DeepSeek, etc.)"),
     ]
     for i, (_, label) in enumerate(options, 1):

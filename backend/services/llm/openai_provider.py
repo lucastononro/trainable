@@ -12,17 +12,10 @@ GPT-5+ and reasoning models; it has a slightly different shape:
   * usage fields are `input_tokens` / `output_tokens` (matching what the
     runner already records — no rename needed)
 
-Two transports:
-  - api_key: AsyncOpenAI SDK with OPENAI_API_KEY (or OPENAI_BASE_URL for
-    OpenAI-compatible deployments). Supports tool calling.
-  - oauth_cli: Codex CLI subprocess via OAuth (~/.codex/auth.json). Text-only
-    in this transport; the runner sees no tool_call events and the agent must
-    work via skill methodology.
-
-The transport is resolved once at construction from the auth/openai resolver.
-The runner passes Chat-Completions-shaped messages (`role`/`content`/
-`tool_calls`/`tool_call_id`); we translate them to Responses items at the
-boundary so the runner stays provider-neutral.
+Auth: AsyncOpenAI SDK with OPENAI_API_KEY (or OPENAI_BASE_URL for
+OpenAI-compatible deployments). The runner passes Chat-Completions-shaped
+messages (`role`/`content`/`tool_calls`/`tool_call_id`); we translate them
+to Responses items at the boundary so the runner stays provider-neutral.
 """
 
 from __future__ import annotations
@@ -34,7 +27,6 @@ from typing import Any, AsyncIterator
 from .auth import resolve_credentials
 from .auth._base import Credentials, ProviderUnavailable
 from .base import LLMEvent, LLMProvider, ProviderCapabilities
-from .transport import codex_cli
 
 logger = logging.getLogger(__name__)
 
@@ -152,24 +144,6 @@ class OpenAIProvider(LLMProvider):
             self._client = _make_sdk_client(self.creds)
         return self._client
 
-    async def _run_via_codex_cli(
-        self,
-        *,
-        prompt: str,
-        system_prompt: str,
-        model: str,
-        tools: list[dict] | None,
-        timeout_seconds: int,
-    ) -> AsyncIterator[LLMEvent]:
-        async for event in codex_cli.stream(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            model=model,
-            tools=tools,
-            timeout_seconds=timeout_seconds,
-        ):
-            yield event
-
     async def _run_via_sdk(
         self,
         *,
@@ -269,17 +243,6 @@ class OpenAIProvider(LLMProvider):
         timeout_seconds: int = 1800,
         **kwargs,
     ) -> AsyncIterator[LLMEvent]:
-        if self.creds.mode == "oauth_cli":
-            async for event in self._run_via_codex_cli(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                model=model,
-                tools=tools,
-                timeout_seconds=timeout_seconds,
-            ):
-                yield event
-            return
-
         async for event in self._run_via_sdk(
             prompt=prompt,
             system_prompt=system_prompt,
