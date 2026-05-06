@@ -19,11 +19,6 @@ import type {
   AbortResponse,
   UsageSummary,
   SkillCatalogEntry,
-  RegisteredModel,
-  DeploymentRow,
-  RunSnapshotRow,
-  DatasetVersionRow,
-  CompareResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -85,69 +80,17 @@ export const api = {
     }>(`/projects/${id}/files`),
 
   // Experiments
-  listExperiments: (params?: {
-    projectId?: string;
-    q?: string;
-    tag?: string;
-    pinned?: boolean;
-    archived?: boolean;
-  }) => {
-    const qs = new URLSearchParams();
-    if (params?.projectId) qs.set('project_id', params.projectId);
-    if (params?.q) qs.set('q', params.q);
-    if (params?.tag) qs.set('tag', params.tag);
-    if (params?.pinned !== undefined) qs.set('pinned', String(params.pinned));
-    if (params?.archived !== undefined) qs.set('archived', String(params.archived));
-    const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return fetchJSON<Experiment[]>(`/experiments${suffix}`);
-  },
+  listExperiments: (projectId?: string) =>
+    fetchJSON<Experiment[]>(projectId ? `/experiments?project_id=${projectId}` : '/experiments'),
 
   updateExperiment: (
     id: string,
-    patch: {
-      name?: string;
-      description?: string;
-      project_id?: string;
-      instructions?: string;
-      tags?: string[];
-      pinned?: boolean;
-      archived?: boolean;
-    },
+    patch: { name?: string; description?: string; project_id?: string; instructions?: string },
   ) =>
     fetchJSON<Experiment>(`/experiments/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
-
-  // Model registry
-  listProjectModels: (projectId: string) =>
-    fetchJSON<RegisteredModel[]>(`/projects/${projectId}/models`),
-  promoteSession: (sessionId: string, name?: string) =>
-    fetchJSON<RegisteredModel>(`/sessions/${sessionId}/promote`, {
-      method: 'POST',
-      body: JSON.stringify({ name }),
-    }),
-  canPromote: (sessionId: string) =>
-    fetchJSON<{ available: boolean; path?: string; size_bytes?: number }>(
-      `/sessions/${sessionId}/promote/check`,
-    ),
-  deployModel: (modelId: string) =>
-    fetchJSON<DeploymentRow>(`/models/${modelId}/deploy`, { method: 'POST' }),
-  modelDeployments: (modelId: string) =>
-    fetchJSON<DeploymentRow[]>(`/models/${modelId}/deployments`),
-
-  // Snapshots
-  takeSnapshot: (sessionId: string) =>
-    fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`, { method: 'POST' }),
-  getSnapshot: (sessionId: string) => fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`),
-
-  // Compare
-  compareSessions: (sessionIds: string[]) =>
-    fetchJSON<CompareResponse>(`/compare?sessions=${sessionIds.join(',')}`),
-
-  // Dataset versions
-  projectDatasetVersions: (projectId: string) =>
-    fetchJSON<DatasetVersionRow[]>(`/projects/${projectId}/dataset-versions`),
 
   createExperiment: async (data: FormData): Promise<CreateExperimentResponse> => {
     const res = await fetch(`${API_BASE}/experiments`, {

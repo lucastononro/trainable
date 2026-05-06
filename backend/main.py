@@ -11,18 +11,15 @@ from db import init_db
 from errors import generic_exception_handler
 from observability import init_telemetry
 from routers import (
-    compare,
     data_explorer,
     experiments,
     files,
     models,
     notebook,
     projects,
-    registry,
     s3_browser,
     sessions,
     skills as skills_router,
-    snapshots,
     stream,
     usage,
 )
@@ -89,9 +86,6 @@ app.include_router(models.router, prefix="/api")
 app.include_router(notebook.router, prefix="/api")
 app.include_router(usage.router, prefix="/api")
 app.include_router(skills_router.router, prefix="/api")
-app.include_router(registry.router, prefix="/api")
-app.include_router(compare.router, prefix="/api")
-app.include_router(snapshots.router, prefix="/api")
 
 
 @app.get("/api/health")

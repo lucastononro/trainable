@@ -14,8 +14,6 @@ import {
   Check,
   AlertCircle,
   Settings,
-  Search,
-  X,
 } from 'lucide-react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
@@ -360,8 +358,6 @@ export default function Sidebar() {
   const [pendingRenameProjectId, setPendingRenameProjectId] = useState<string | null>(null);
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set());
   const [dropTargetProjectId, setDropTargetProjectId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [activeTag, setActiveTag] = useState<string | null>(null);
   const [confirmTarget, setConfirmTarget] = useState<
     { kind: 'project'; id: string } | { kind: 'experiment'; id: string; name: string } | null
   >(null);
@@ -388,48 +384,13 @@ export default function Sidebar() {
     });
   }, []);
 
-  const filteredExperiments = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    return experiments.filter((exp) => {
-      if (exp.archived) return false;
-      if (q) {
-        const hay = `${exp.name} ${exp.description ?? ''}`.toLowerCase();
-        if (!hay.includes(q)) return false;
-      }
-      if (activeTag) {
-        const tags = (exp.tags as string[] | undefined) ?? [];
-        if (!tags.includes(activeTag)) return false;
-      }
-      return true;
-    });
-  }, [experiments, searchQuery, activeTag]);
-
   const experimentsByProject = useMemo(() => {
     const map = new Map<string, Experiment[]>();
-    for (const exp of filteredExperiments) {
+    for (const exp of experiments) {
       if (!map.has(exp.project_id)) map.set(exp.project_id, []);
       map.get(exp.project_id)!.push(exp);
     }
-    // Pinned first, then most-recent-first
-    map.forEach((arr: Experiment[]) => {
-      arr.sort((a: Experiment, b: Experiment) => {
-        const ap = a.pinned ? 1 : 0;
-        const bp = b.pinned ? 1 : 0;
-        if (ap !== bp) return bp - ap;
-        return (b.created_at ?? '').localeCompare(a.created_at ?? '');
-      });
-    });
     return map;
-  }, [filteredExperiments]);
-
-  const allTags = useMemo(() => {
-    const seen = new Map<string, number>();
-    for (const exp of experiments) {
-      for (const t of ((exp.tags as string[] | undefined) ?? [])) {
-        seen.set(t, (seen.get(t) ?? 0) + 1);
-      }
-    }
-    return Array.from(seen.entries()).sort((a, b) => b[1] - a[1]);
   }, [experiments]);
 
   const handleNewProject = useCallback(async () => {
@@ -652,47 +613,6 @@ export default function Sidebar() {
           </div>
         )}
       </div>
-
-      {sidebarOpen && (
-        <div className="px-2 pb-1.5 space-y-1.5">
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-600" />
-            <input
-              type="text"
-              placeholder="Search chats…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full text-xs bg-white/[0.04] border border-white/[0.06] rounded-md pl-7 pr-7 py-1.5 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-white/[0.15]"
-            />
-            {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-white/[0.08] text-gray-500"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-          {allTags.length > 0 && (
-            <div className="flex flex-wrap gap-1">
-              {allTags.slice(0, 8).map(([tag, count]) => (
-                <button
-                  key={tag}
-                  onClick={() => setActiveTag(activeTag === tag ? null : tag)}
-                  className={`text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
-                    activeTag === tag
-                      ? 'bg-violet-500/20 border-violet-500/30 text-violet-200'
-                      : 'bg-white/[0.03] border-white/[0.06] text-gray-500 hover:text-gray-300'
-                  }`}
-                >
-                  #{tag}
-                  <span className="ml-1 text-[9px] text-gray-600">{count}</span>
-                </button>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Project + experiment tree */}
       <div className="flex-1 overflow-y-auto overflow-x-hidden px-1.5 space-y-0.5">

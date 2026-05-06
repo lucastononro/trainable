@@ -268,23 +268,3 @@ async def post_stage_hook(session_id: str, experiment_id: str, stage: str):
             logger.info("Post-hook metadata extraction complete")
         except Exception as e:
             logger.error("Post-hook metadata extraction failed: %s", e)
-
-    # 4. Reproducibility snapshot (after training only)
-    if stage in ("train", "trainer"):
-        try:
-            from services.snapshot import take_snapshot
-
-            snap = await take_snapshot(session_id)
-            await save_and_publish(
-                session_id,
-                "snapshot_ready",
-                {
-                    "session_id": session_id,
-                    "dataset_hash": snap.get("dataset_hash"),
-                    "code_hash": snap.get("code_hash"),
-                    "manifest_uri": snap.get("manifest_uri"),
-                },
-            )
-            logger.info("Post-hook snapshot captured: %s", snap.get("manifest_uri"))
-        except Exception as e:
-            logger.error("Post-hook snapshot failed: %s", e)
