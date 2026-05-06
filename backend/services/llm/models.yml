@@ -327,6 +327,47 @@ models:
       default: "off"
       levels: ["off", low, medium]
 
+  # ---- LiteLLM-routed backends ------------------------------------------
+  # Model ids encode the backend (groq/<m>, mistral/<m>, etc.) so the
+  # litellm provider can route the same call shape to many vendors.
+  # Pricing here is illustrative; verify against the vendor's pricing page
+  # when running cost-sensitive workloads.
+  groq/llama-3.3-70b-versatile:
+    name: Llama 3.3 70B (Groq)
+    provider: litellm
+    tier: fast
+    context: 128K
+    description: Meta's Llama 3.3 70B served by Groq — very fast tool-call loops.
+    experimental: true
+    input: 0.59
+    output: 0.79
+    cache_read: 0.0
+    cache_creation: 0.0
+
+  mistral/mistral-large-latest:
+    name: Mistral Large
+    provider: litellm
+    tier: premium
+    context: 128K
+    description: Mistral flagship. Strong reasoning, multilingual.
+    experimental: true
+    input: 2.0
+    output: 6.0
+    cache_read: 0.0
+    cache_creation: 0.0
+
+  deepseek/deepseek-chat:
+    name: DeepSeek Chat
+    provider: litellm
+    tier: fast
+    context: 64K
+    description: DeepSeek V3 chat model — cheap reasoning baseline.
+    experimental: true
+    input: 0.14
+    output: 0.28
+    cache_read: 0.0
+    cache_creation: 0.0
+
 # Fallback cache pricing — applied to a model's `input` rate when the
 # model entry above doesn't set explicit cache_read / cache_creation.
 # These match Anthropic's ephemeral 5min cache; non-Anthropic providers

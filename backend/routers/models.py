@@ -27,20 +27,30 @@ _PROVIDER_AUTH_ENV: dict[str, list[str]] = {
     "openai": ["OPENAI_API_KEY"],
     "gemini": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
     "google": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
+    # LiteLLM routes to many backends — the relevant key depends on the
+    # model id ("groq/<...>" → GROQ_API_KEY, "mistral/<...>" → MISTRAL_API_KEY).
+    # We list common ones; resolution is "any one set is enough".
+    "litellm": [
+        "GROQ_API_KEY",
+        "MISTRAL_API_KEY",
+        "DEEPSEEK_API_KEY",
+        "TOGETHER_API_KEY",
+        "OPENROUTER_API_KEY",
+    ],
 }
 
 # Which providers the agent runner can actually dispatch to today.
-# `services/agent/runner.py` calls `claude_agent_sdk.query()` directly,
-# which spawns the Claude Code CLI subprocess — so only Claude works
-# end-to-end. The OpenAI/Gemini providers exist but are not wired into
-# the runner yet (multi-provider runner refactor is the unblocker).
-# Flip these to True as the corresponding runner path lands.
+# `services/agent/runner.py:_drive_provider` routes through the LLM
+# factory: Claude (with `supports_mcp=True`) keeps the rich MCP-based
+# loop; everyone else runs a runner-managed tool-execution loop using
+# native SDKs. All registered providers are dispatchable.
 _PROVIDER_RUNNER_SUPPORTED: dict[str, bool] = {
     "claude": True,
     "anthropic": True,
-    "openai": False,
-    "gemini": False,
-    "google": False,
+    "openai": True,
+    "gemini": True,
+    "google": True,
+    "litellm": True,
 }
 
 
