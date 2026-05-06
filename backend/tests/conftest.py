@@ -50,8 +50,8 @@ if "mcp" not in sys.modules:
     sys.modules["mcp.server.lowlevel"] = _mock_mcp_server_ll
     sys.modules["mcp.types"] = _mock_mcp_types
 
-from db import Base, engine
-from main import app
+from db import Base, engine  # noqa: E402  (must follow the mcp.* mocks above)
+from main import app  # noqa: E402
 
 
 @pytest.fixture(scope="session")
