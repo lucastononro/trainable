@@ -928,8 +928,17 @@ async def run_agent(
                         f"\n\n## Prior conversation\n{conversation_context}"
                     )
 
-        # Resolve provider from agent YAML and build skill specs.
-        provider_id = get_agent_provider(agent_type)
+        # Resolve provider id. The chosen model wins: if the catalog says
+        # `gpt-5.4-nano-...` is provider=openai, route through OpenAI even
+        # if the agent YAML still says provider=claude. Falls back to the
+        # YAML when the model isn't catalog-listed (custom/override).
+        from services.usage import get_llm_catalog
+
+        _model_entry = get_llm_catalog().get(model) or {}
+        _model_provider = (
+            _model_entry.get("provider") if isinstance(_model_entry, dict) else None
+        )
+        provider_id = _model_provider or get_agent_provider(agent_type)
         agent_skills = get_agent_skills(agent_type)
         from .agents import can_delegate
 
