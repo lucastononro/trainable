@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback, useEffect } from 'react';
 import {
   LineChart,
   Line,
@@ -20,10 +20,45 @@ import {
   Activity,
   Layers,
   Hash,
-  ChevronDown,
-  ChevronRight,
+  ArrowUpDown,
+  Eye,
+  EyeOff,
+  List,
 } from 'lucide-react';
 import { MetricPoint, ChartConfig } from '@/lib/types';
+
+// Persisted UI preferences for the metrics tab — chart-first order,
+// compact summary by default, but the user's choice sticks across reloads.
+const SUMMARY_VIEW_STORAGE_KEY = 'trainable:metrics-summary-view';
+const CHARTS_FIRST_STORAGE_KEY = 'trainable:metrics-charts-first';
+const COMPACT_SUMMARY_LIMIT = 3;
+
+type SummaryView = 'compact' | 'expanded' | 'hidden';
+
+function useLocalStorageState<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(initial);
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (raw !== null) setValue(JSON.parse(raw) as T);
+    } catch {
+      // ignore corrupt value
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const set = useCallback(
+    (v: T) => {
+      setValue(v);
+      try {
+        localStorage.setItem(key, JSON.stringify(v));
+      } catch {
+        // storage may be unavailable (private mode) — fall back to in-memory only
+      }
+    },
+    [key],
+  );
+  return [value, set];
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,7 +190,14 @@ function ChartTooltip({ active, payload, label }: any) {
 
 export default function MetricsTab({ metricPoints, chartConfig, state }: MetricsTabProps) {
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
-  const [summaryCollapsed, setSummaryCollapsed] = useState(false);
+  const [summaryView, setSummaryView] = useLocalStorageState<SummaryView>(
+    SUMMARY_VIEW_STORAGE_KEY,
+    'compact',
+  );
+  const [chartsFirst, setChartsFirst] = useLocalStorageState<boolean>(
+    CHARTS_FIRST_STORAGE_KEY,
+    true,
+  );
 
   const toggleSeries = useCallback((key: string) => {
     setHiddenSeries((prev) => {
@@ -165,6 +207,12 @@ export default function MetricsTab({ metricPoints, chartConfig, state }: Metrics
       return next;
     });
   }, []);
+
+  const cycleSummaryView = useCallback(() => {
+    setSummaryView(
+      summaryView === 'hidden' ? 'compact' : summaryView === 'compact' ? 'expanded' : 'hidden',
+    );
+  }, [summaryView, setSummaryView]);
 
   // ── Memo 1: parse series, summaries, colors, group defs (stable across legend toggles) ──
   const { seriesMap, summaries, colorMap, groupDefs, totalSteps, totalMetrics, uniqueRuns } =
@@ -340,192 +388,289 @@ export default function MetricsTab({ metricPoints, chartConfig, state }: Metrics
       </div>
 
       <div className="p-4 space-y-3">
-        {/* ── Summary table ── */}
-        <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg overflow-hidden">
+        {/* ── Section toolbar ── */}
+        <div className="flex items-center justify-end">
           <button
-            onClick={() => setSummaryCollapsed((prev) => !prev)}
-            className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/[0.02] transition-colors"
+            onClick={() => setChartsFirst(!chartsFirst)}
+            className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-white/[0.04] transition-colors"
+            title={chartsFirst ? 'Move charts below summary' : 'Move charts above summary'}
           >
-            <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
-              Summary
-            </span>
-            {summaryCollapsed ? (
-              <ChevronRight className="w-3.5 h-3.5 text-gray-600" />
-            ) : (
-              <ChevronDown className="w-3.5 h-3.5 text-gray-600" />
-            )}
+            <ArrowUpDown className="w-3 h-3" />
+            {chartsFirst ? 'Charts on top' : 'Summary on top'}
           </button>
-          {!summaryCollapsed && (
-            <div className="border-t border-white/[0.04]">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="text-gray-600 text-[10px] uppercase tracking-wider">
-                    <th className="text-left py-1.5 px-3 font-medium">Metric</th>
-                    {uniqueRuns > 1 && <th className="text-left py-1.5 px-3 font-medium">Run</th>}
-                    <th className="text-right py-1.5 px-3 font-medium">Latest</th>
-                    <th className="text-right py-1.5 px-3 font-medium">Best</th>
-                    <th className="text-right py-1.5 px-3 font-medium">Delta</th>
-                    <th className="text-right py-1.5 px-3 font-medium">Steps</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {summaries.map((s) => {
-                    const c = color(s.name);
-                    const isHidden = hiddenSeries.has(s.name);
-                    return (
-                      <tr
-                        key={s.name}
-                        onClick={() => toggleSeries(s.name)}
-                        className={`border-t border-white/[0.03] cursor-pointer transition-colors ${
-                          isHidden ? 'opacity-30' : 'hover:bg-white/[0.03]'
-                        }`}
-                      >
-                        <td className="py-1.5 px-3">
-                          <div className="flex items-center gap-2">
-                            <div
-                              className="w-2.5 h-[3px] rounded-full shrink-0"
-                              style={{ backgroundColor: c }}
-                            />
-                            <span className="text-gray-300 font-medium truncate">
-                              {s.displayName}
-                            </span>
-                          </div>
-                        </td>
-                        {uniqueRuns > 1 && (
-                          <td className="py-1.5 px-3">
-                            {s.runTag && (
-                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/[0.05] text-gray-400">
-                                {s.runTag}
-                              </span>
-                            )}
-                          </td>
-                        )}
-                        <td className="py-1.5 px-3 text-right font-mono text-gray-200 tabular-nums">
-                          {smartFormat(s.latest)}
-                        </td>
-                        <td className="py-1.5 px-3 text-right font-mono tabular-nums">
-                          <span
-                            className={s.latest === s.best ? 'text-emerald-400' : 'text-gray-500'}
-                          >
-                            {smartFormat(s.best)}
-                          </span>
-                        </td>
-                        <td className="py-1.5 px-3 text-right">
-                          {s.delta !== null ? (
-                            <span
-                              className={`inline-flex items-center gap-0.5 font-mono tabular-nums ${
-                                s.improving === true
-                                  ? 'text-emerald-400'
-                                  : s.improving === false
-                                    ? 'text-red-400'
-                                    : 'text-gray-600'
-                              }`}
-                            >
-                              {s.improving === true ? (
-                                <TrendingUp className="w-3 h-3" />
-                              ) : s.improving === false ? (
-                                <TrendingDown className="w-3 h-3" />
-                              ) : (
-                                <Minus className="w-3 h-3" />
-                              )}
-                              {s.delta > 0 ? '+' : ''}
-                              {smartFormat(s.delta)}
-                            </span>
-                          ) : (
-                            <span className="text-gray-700">&mdash;</span>
-                          )}
-                        </td>
-                        <td className="py-1.5 px-3 text-right text-gray-600 tabular-nums">
-                          {s.steps}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
 
-        {/* ── Charts ── */}
-        <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
-          {charts.map((chart) => {
-            const visibleKeys = chart.seriesKeys.filter((k) => !hiddenSeries.has(k));
-            return (
-              <div
-                key={chart.title}
-                className="bg-white/[0.02] border border-white/[0.06] rounded-lg overflow-hidden"
-              >
-                {/* Header */}
-                <div className="flex items-center justify-between px-3 py-2 border-b border-white/[0.04]">
-                  <span className="text-[11px] font-semibold text-gray-400">{chart.title}</span>
-                  <span className="text-[10px] text-gray-600 tabular-nums">
-                    {chart.data.length} pts
-                  </span>
-                </div>
-
-                {/* Chart */}
-                <div className="px-2 pt-2 pb-0">
-                  <div className="h-[200px]">
-                    <ResponsiveContainer width="100%" height="100%">
-                      {renderChart(chart, visibleKeys, color)}
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                {/* Legend — always visible */}
-                <div className="flex flex-wrap gap-x-4 gap-y-1.5 px-3 py-2.5 border-t border-white/[0.04]">
-                  {chart.seriesKeys.map((key) => {
-                    const hidden = hiddenSeries.has(key);
-                    const c = color(key);
-                    // Find latest value for this series
-                    const lastPt = chart.data[chart.data.length - 1];
-                    const val = lastPt?.[key];
-                    return (
-                      <button
-                        key={key}
-                        onClick={() => toggleSeries(key)}
-                        className={`flex items-center gap-1.5 transition-opacity group ${
-                          hidden ? 'opacity-25 hover:opacity-50' : 'opacity-100'
-                        }`}
-                      >
-                        <svg width="14" height="8" viewBox="0 0 14 8" className="shrink-0">
-                          <line
-                            x1="0"
-                            y1="4"
-                            x2="14"
-                            y2="4"
-                            stroke={c}
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeDasharray={hidden ? '2 2' : 'none'}
-                          />
-                          <circle
-                            cx="7"
-                            cy="4"
-                            r="2.5"
-                            fill={hidden ? 'transparent' : c}
-                            stroke={c}
-                            strokeWidth="1"
-                          />
-                        </svg>
-                        <span className="text-[11px] text-gray-400 group-hover:text-gray-300 transition-colors">
-                          {key}
-                        </span>
-                        {val !== undefined && !hidden && (
-                          <span className="text-[10px] font-mono text-gray-600 tabular-nums">
-                            {compactFormat(val)}
-                          </span>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        {(chartsFirst ? ['charts', 'summary'] : ['summary', 'charts']).map((section) =>
+          section === 'summary' ? (
+            <SummaryBlock
+              key="summary"
+              summaries={summaries}
+              uniqueRuns={uniqueRuns}
+              hiddenSeries={hiddenSeries}
+              color={color}
+              toggleSeries={toggleSeries}
+              summaryView={summaryView}
+              cycleSummaryView={cycleSummaryView}
+              onShowAll={() => setSummaryView('expanded')}
+            />
+          ) : (
+            <ChartsGrid
+              key="charts"
+              charts={charts}
+              hiddenSeries={hiddenSeries}
+              color={color}
+              toggleSeries={toggleSeries}
+            />
+          ),
+        )}
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SummaryBlock — collapsible/truncatable metric summary table
+// ---------------------------------------------------------------------------
+
+function SummaryBlock({
+  summaries,
+  uniqueRuns,
+  hiddenSeries,
+  color,
+  toggleSeries,
+  summaryView,
+  cycleSummaryView,
+  onShowAll,
+}: {
+  summaries: MetricSummary[];
+  uniqueRuns: number;
+  hiddenSeries: Set<string>;
+  color: (key: string) => string;
+  toggleSeries: (key: string) => void;
+  summaryView: SummaryView;
+  cycleSummaryView: () => void;
+  onShowAll: () => void;
+}) {
+  const visibleSummaries =
+    summaryView === 'compact' ? summaries.slice(0, COMPACT_SUMMARY_LIMIT) : summaries;
+  const hiddenCount =
+    summaryView === 'compact' ? Math.max(0, summaries.length - COMPACT_SUMMARY_LIMIT) : 0;
+
+  const ToggleIcon =
+    summaryView === 'hidden' ? EyeOff : summaryView === 'compact' ? List : Eye;
+  const toggleLabel =
+    summaryView === 'hidden'
+      ? 'Hidden — click to show top metrics'
+      : summaryView === 'compact'
+        ? `Compact — top ${COMPACT_SUMMARY_LIMIT}, click to expand`
+        : 'Expanded — click to hide';
+
+  return (
+    <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg overflow-hidden">
+      <button
+        onClick={cycleSummaryView}
+        className="w-full flex items-center justify-between px-3 py-2 hover:bg-white/[0.02] transition-colors"
+        title={toggleLabel}
+      >
+        <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+          Summary
+        </span>
+        <ToggleIcon className="w-3.5 h-3.5 text-gray-600" />
+      </button>
+      {summaryView !== 'hidden' && (
+        <div className="border-t border-white/[0.04]">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="text-gray-600 text-[10px] uppercase tracking-wider">
+                <th className="text-left py-1.5 px-3 font-medium">Metric</th>
+                {uniqueRuns > 1 && <th className="text-left py-1.5 px-3 font-medium">Run</th>}
+                <th className="text-right py-1.5 px-3 font-medium">Latest</th>
+                <th className="text-right py-1.5 px-3 font-medium">Best</th>
+                <th className="text-right py-1.5 px-3 font-medium">Delta</th>
+                <th className="text-right py-1.5 px-3 font-medium">Steps</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleSummaries.map((s) => {
+                const c = color(s.name);
+                const isHidden = hiddenSeries.has(s.name);
+                return (
+                  <tr
+                    key={s.name}
+                    onClick={() => toggleSeries(s.name)}
+                    className={`border-t border-white/[0.03] cursor-pointer transition-colors ${
+                      isHidden ? 'opacity-30' : 'hover:bg-white/[0.03]'
+                    }`}
+                  >
+                    <td className="py-1.5 px-3">
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="w-2.5 h-[3px] rounded-full shrink-0"
+                          style={{ backgroundColor: c }}
+                        />
+                        <span className="text-gray-300 font-medium truncate">
+                          {s.displayName}
+                        </span>
+                      </div>
+                    </td>
+                    {uniqueRuns > 1 && (
+                      <td className="py-1.5 px-3">
+                        {s.runTag && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-white/[0.05] text-gray-400">
+                            {s.runTag}
+                          </span>
+                        )}
+                      </td>
+                    )}
+                    <td className="py-1.5 px-3 text-right font-mono text-gray-200 tabular-nums">
+                      {smartFormat(s.latest)}
+                    </td>
+                    <td className="py-1.5 px-3 text-right font-mono tabular-nums">
+                      <span
+                        className={s.latest === s.best ? 'text-emerald-400' : 'text-gray-500'}
+                      >
+                        {smartFormat(s.best)}
+                      </span>
+                    </td>
+                    <td className="py-1.5 px-3 text-right">
+                      {s.delta !== null ? (
+                        <span
+                          className={`inline-flex items-center gap-0.5 font-mono tabular-nums ${
+                            s.improving === true
+                              ? 'text-emerald-400'
+                              : s.improving === false
+                                ? 'text-red-400'
+                                : 'text-gray-600'
+                          }`}
+                        >
+                          {s.improving === true ? (
+                            <TrendingUp className="w-3 h-3" />
+                          ) : s.improving === false ? (
+                            <TrendingDown className="w-3 h-3" />
+                          ) : (
+                            <Minus className="w-3 h-3" />
+                          )}
+                          {s.delta > 0 ? '+' : ''}
+                          {smartFormat(s.delta)}
+                        </span>
+                      ) : (
+                        <span className="text-gray-700">&mdash;</span>
+                      )}
+                    </td>
+                    <td className="py-1.5 px-3 text-right text-gray-600 tabular-nums">
+                      {s.steps}
+                    </td>
+                  </tr>
+                );
+              })}
+              {hiddenCount > 0 && (
+                <tr className="border-t border-white/[0.03]">
+                  <td colSpan={uniqueRuns > 1 ? 6 : 5} className="py-1.5 px-3">
+                    <button
+                      onClick={onShowAll}
+                      className="text-[11px] text-gray-500 hover:text-gray-300 transition-colors"
+                    >
+                      + {hiddenCount} more — show all
+                    </button>
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ChartsGrid — the chart panels (extracted so the section order is swappable)
+// ---------------------------------------------------------------------------
+
+function ChartsGrid({
+  charts,
+  hiddenSeries,
+  color,
+  toggleSeries,
+}: {
+  charts: ChartGroup[];
+  hiddenSeries: Set<string>;
+  color: (key: string) => string;
+  toggleSeries: (key: string) => void;
+}) {
+  return (
+    <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
+      {charts.map((chart) => {
+        const visibleKeys = chart.seriesKeys.filter((k) => !hiddenSeries.has(k));
+        return (
+          <div
+            key={chart.title}
+            className="bg-white/[0.02] border border-white/[0.06] rounded-lg overflow-hidden"
+          >
+            <div className="flex items-center justify-between px-3 py-2 border-b border-white/[0.04]">
+              <span className="text-[11px] font-semibold text-gray-400">{chart.title}</span>
+              <span className="text-[10px] text-gray-600 tabular-nums">
+                {chart.data.length} pts
+              </span>
+            </div>
+
+            <div className="px-2 pt-2 pb-0">
+              <div className="h-[200px]">
+                <ResponsiveContainer width="100%" height="100%">
+                  {renderChart(chart, visibleKeys, color)}
+                </ResponsiveContainer>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap gap-x-4 gap-y-1.5 px-3 py-2.5 border-t border-white/[0.04]">
+              {chart.seriesKeys.map((key) => {
+                const hidden = hiddenSeries.has(key);
+                const c = color(key);
+                const lastPt = chart.data[chart.data.length - 1];
+                const val = lastPt?.[key];
+                return (
+                  <button
+                    key={key}
+                    onClick={() => toggleSeries(key)}
+                    className={`flex items-center gap-1.5 transition-opacity group ${
+                      hidden ? 'opacity-25 hover:opacity-50' : 'opacity-100'
+                    }`}
+                  >
+                    <svg width="14" height="8" viewBox="0 0 14 8" className="shrink-0">
+                      <line
+                        x1="0"
+                        y1="4"
+                        x2="14"
+                        y2="4"
+                        stroke={c}
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeDasharray={hidden ? '2 2' : 'none'}
+                      />
+                      <circle
+                        cx="7"
+                        cy="4"
+                        r="2.5"
+                        fill={hidden ? 'transparent' : c}
+                        stroke={c}
+                        strokeWidth="1"
+                      />
+                    </svg>
+                    <span className="text-[11px] text-gray-400 group-hover:text-gray-300 transition-colors">
+                      {key}
+                    </span>
+                    {val !== undefined && !hidden && (
+                      <span className="text-[10px] font-mono text-gray-600 tabular-nums">
+                        {compactFormat(val)}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
