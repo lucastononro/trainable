@@ -21,7 +21,7 @@ export default function ModelNode({ data }: NodeProps) {
   const topMetric = Object.entries(node.metrics_summary || {})[0];
 
   return (
-    <div className="group w-[220px] h-[86px] rounded-2xl border border-violet-300 bg-violet-50 text-violet-900 px-4 py-2.5 shadow-sm transition-all hover:shadow-md hover:border-violet-400 cursor-pointer flex flex-col justify-center">
+    <div className="group w-[220px] h-[86px] rounded-2xl border border-violet-500/40 bg-violet-500/10 text-violet-200 px-4 py-2.5 shadow-sm shadow-black/20 transition-all hover:shadow-md hover:border-violet-400/70 cursor-pointer flex flex-col justify-center">
       <Handle type="target" position={Position.Left} style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Right} style={HANDLE_STYLE} />
       <div className="flex items-center gap-1.5 text-[10px] font-medium opacity-70 uppercase tracking-wide">

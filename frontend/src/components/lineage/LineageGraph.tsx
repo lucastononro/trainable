@@ -98,9 +98,11 @@ function layout(payload: LineageGraphPayload): {
       type: MarkerType.ArrowClosed,
       width: 16,
       height: 16,
-      color: '#60a5fa',
+      // Soft sky on the dark surface; bright enough to read against
+      // bg-surface but not glaring. Matches the lineage palette.
+      color: '#7dd3fc',
     },
-    style: { stroke: '#60a5fa', strokeWidth: 1.6 },
+    style: { stroke: '#7dd3fc', strokeWidth: 1.6 },
   }));
 
   return { nodes: positioned, edges };
@@ -133,7 +135,7 @@ export default function LineageGraph({ data, loading = false, onNodeClick, heigh
   }
 
   return (
-    <div style={{ height, width: '100%' }} className="bg-white">
+    <div style={{ height, width: '100%' }} className="bg-surface">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -149,11 +151,13 @@ export default function LineageGraph({ data, loading = false, onNodeClick, heigh
         edgesFocusable={false}
         proOptions={{ hideAttribution: true }}
       >
-        <Background gap={22} size={1.3} color="#dbeafe" variant={BackgroundVariant.Dots} />
+        {/* Dim slate dots so the grid reads as ambient texture against
+            the dark surface, not a competing pattern. */}
+        <Background gap={22} size={1.2} color="#1f2937" variant={BackgroundVariant.Dots} />
         <Controls
           position="bottom-right"
           showInteractive={false}
-          className="!bg-white !border !border-gray-200 !rounded-md !shadow-sm"
+          className="!bg-surface !border !border-surface-border !rounded-md !shadow-sm [&_button]:!bg-surface [&_button]:!border-surface-border [&_button]:!text-gray-300 [&_button:hover]:!bg-white/[0.06]"
         />
       </ReactFlow>
     </div>

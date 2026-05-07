@@ -1,18 +1,20 @@
 'use client';
 
 /**
- * Standalone lineage page: Project → all sessions × all experiments as
- * one graph. Reachable directly so the user can audit the full project
- * without entering a specific session. Reuses LineageGraph + NodeMetadataPanel.
+ * Project-level lineage page.
+ *
+ * Lives inside the main app shell (Sidebar + dark surface) so the
+ * navigation chrome stays consistent with /experiments and the chat.
+ * Reuses LineageGraph + NodeMetadataPanel.
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { ArrowLeft, RefreshCw } from 'lucide-react';
+import { GitBranch, RefreshCw } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import type { LineageGraph as LineageGraphPayload, LineageNode } from '@/lib/types';
+import Sidebar from '@/components/Sidebar';
 import LineageGraph from '@/components/lineage/LineageGraph';
 import NodeMetadataPanel from '@/components/lineage/NodeMetadataPanel';
 
@@ -43,71 +45,65 @@ export default function ProjectLineagePage() {
   }, [refresh]);
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col">
-      <header className="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Link
-            href="/"
-            className="text-gray-500 hover:text-gray-900 inline-flex items-center gap-1 text-sm"
-          >
-            <ArrowLeft className="w-4 h-4" />
-            Back
-          </Link>
-          <span className="text-gray-300">/</span>
-          <h1 className="text-base font-semibold text-gray-900">Project lineage</h1>
-        </div>
-        <div className="flex items-center gap-3 text-xs text-gray-500">
+    <div className="h-screen flex bg-black" id="main-content">
+      <Sidebar />
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="flex items-center gap-3 px-4 py-2.5 border-b border-surface-border shrink-0 bg-surface">
+          <GitBranch className="w-4 h-4 text-violet-400" />
+          <h1 className="text-sm font-semibold text-white">Project lineage</h1>
+          <div className="flex-1" />
           <Legend />
           <button
             onClick={refresh}
             disabled={loading}
-            className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+            className="inline-flex items-center gap-1 rounded-md text-xs text-gray-400 hover:text-gray-100 hover:bg-white/[0.06] px-2 py-1 transition-colors disabled:opacity-50"
+            title="Refresh"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-        </div>
-      </header>
+        </header>
 
-      {error ? (
-        <div className="m-6 rounded-md border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
-          {error}
-        </div>
-      ) : null}
+        {error ? (
+          <div className="m-4 rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+            {error}
+          </div>
+        ) : null}
 
-      <main className="flex-1 p-6">
-        <div className="rounded-lg border border-gray-200 bg-white shadow-sm overflow-hidden">
-          <LineageGraph
-            data={data}
-            loading={loading}
-            height="calc(100vh - 140px)"
-            onNodeClick={(n) => setSelected(n)}
-          />
-        </div>
-      </main>
+        <main className="flex-1 p-4 overflow-hidden">
+          <div className="h-full rounded-lg border border-surface-border bg-surface shadow-sm overflow-hidden">
+            <LineageGraph
+              data={data}
+              loading={loading}
+              height="100%"
+              onNodeClick={(n) => setSelected(n)}
+            />
+          </div>
+        </main>
 
-      {selected ? <NodeMetadataPanel node={selected} onClose={() => setSelected(null)} /> : null}
+        {selected ? <NodeMetadataPanel node={selected} onClose={() => setSelected(null)} /> : null}
+      </div>
     </div>
   );
 }
 
 function Legend() {
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 text-[11px] text-gray-500">
       <span className="inline-flex items-center gap-1.5">
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-slate-300" />
+        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-slate-500/40 border border-slate-500/60" />
         Raw
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-blue-300" />
+        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-sky-500/40 border border-sky-500/60" />
         Processed
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-300" />
+        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-500/40 border border-amber-500/60" />
         Experiment
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-violet-300" />
+        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-violet-500/40 border border-violet-500/60" />
         Model
       </span>
     </div>

@@ -9,13 +9,16 @@ interface Data {
   node: LineageExperimentNode;
 }
 
+// Tinted dark surface — same approach as DatasetNode/ModelNode. State
+// drives both the tint hue and the border accent so the user can read
+// the lifecycle at a glance even without parsing the label text.
 const STATE_TONE: Record<string, string> = {
-  created: 'bg-amber-50 border-amber-300 text-amber-900 hover:border-amber-400',
-  prepping: 'bg-amber-50 border-amber-300 text-amber-900 hover:border-amber-400',
-  training: 'bg-amber-100 border-amber-400 text-amber-900 hover:border-amber-500',
-  trained: 'bg-emerald-50 border-emerald-300 text-emerald-900 hover:border-emerald-400',
-  abandoned: 'bg-rose-50 border-rose-300 text-rose-900 hover:border-rose-400',
-  failed: 'bg-rose-50 border-rose-300 text-rose-900 hover:border-rose-400',
+  created: 'bg-amber-500/10 border-amber-500/40 text-amber-200 hover:border-amber-400/70',
+  prepping: 'bg-amber-500/10 border-amber-500/40 text-amber-200 hover:border-amber-400/70',
+  training: 'bg-amber-500/20 border-amber-400/60 text-amber-100 hover:border-amber-400/80',
+  trained: 'bg-emerald-500/10 border-emerald-500/40 text-emerald-200 hover:border-emerald-400/70',
+  abandoned: 'bg-rose-500/10 border-rose-500/40 text-rose-200 hover:border-rose-400/70',
+  failed: 'bg-rose-500/10 border-rose-500/40 text-rose-200 hover:border-rose-400/70',
 };
 
 const HANDLE_STYLE: React.CSSProperties = {
@@ -28,11 +31,12 @@ const HANDLE_STYLE: React.CSSProperties = {
 export default function ExperimentNode({ data }: NodeProps) {
   const node = (data as unknown as Data).node;
   const tone =
-    STATE_TONE[node.state] ?? 'bg-gray-50 border-gray-300 text-gray-800 hover:border-gray-400';
+    STATE_TONE[node.state] ??
+    'bg-white/[0.04] border-white/[0.12] text-gray-200 hover:border-white/[0.22]';
 
   return (
     <div
-      className={`group w-[220px] h-[86px] rounded-2xl border px-4 py-2.5 shadow-sm transition-all hover:shadow-md cursor-pointer flex flex-col justify-center ${tone}`}
+      className={`group w-[220px] h-[86px] rounded-2xl border px-4 py-2.5 shadow-sm shadow-black/20 transition-all hover:shadow-md cursor-pointer flex flex-col justify-center ${tone}`}
     >
       <Handle type="target" position={Position.Left} style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Right} style={HANDLE_STYLE} />

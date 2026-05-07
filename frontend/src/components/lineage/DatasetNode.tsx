@@ -19,13 +19,16 @@ const HANDLE_STYLE: React.CSSProperties = {
 export default function DatasetNode({ data }: NodeProps) {
   const node = (data as unknown as Data).node;
   const isRaw = node.kind === 'raw';
+  // Tinted dark surface — readable on bg-surface without the white-on-white
+  // glare of the original light-theme nodes. Borders pop just enough to
+  // separate adjacent nodes; opacity-driven accents keep the eye calm.
   const tone = isRaw
-    ? 'bg-slate-50 border-slate-300 text-slate-800 hover:border-slate-400'
-    : 'bg-blue-50 border-blue-300 text-blue-900 hover:border-blue-400';
+    ? 'bg-slate-500/10 border-slate-500/40 text-slate-200 hover:border-slate-400/70'
+    : 'bg-sky-500/10 border-sky-500/40 text-sky-200 hover:border-sky-400/70';
 
   return (
     <div
-      className={`group w-[220px] h-[86px] rounded-2xl border px-4 py-2.5 shadow-sm transition-all hover:shadow-md cursor-pointer flex flex-col justify-center ${tone}`}
+      className={`group w-[220px] h-[86px] rounded-2xl border px-4 py-2.5 shadow-sm shadow-black/20 transition-all hover:shadow-md cursor-pointer flex flex-col justify-center ${tone}`}
     >
       <Handle type="target" position={Position.Left} style={HANDLE_STYLE} />
       <Handle type="source" position={Position.Right} style={HANDLE_STYLE} />

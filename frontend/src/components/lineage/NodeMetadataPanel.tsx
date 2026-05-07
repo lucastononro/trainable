@@ -1,10 +1,9 @@
 'use client';
 
 /**
- * Slide-in detail panel for a clicked lineage node. Shows AI-generated
- * description, audit timestamps, lineage source links, and type-specific
- * details (columns/quality_stats for datasets, metrics/hyperparams for
- * models, hypothesis/state for experiments).
+ * Slide-in detail panel for a clicked lineage node. Dark-themed to
+ * match the rest of the app shell — was previously a white panel that
+ * jarred against bg-black on the in-session canvas tab.
  */
 
 import { X } from 'lucide-react';
@@ -32,7 +31,7 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[120px_1fr] gap-3 py-1.5 text-sm">
       <div className="text-gray-500">{label}</div>
-      <div className="text-gray-900 break-words">{value}</div>
+      <div className="text-gray-200 break-words">{value}</div>
     </div>
   );
 }
@@ -42,23 +41,23 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
 
   const headerColor =
     node.type === 'dataset'
-      ? 'text-blue-700'
+      ? 'text-sky-300'
       : node.type === 'experiment'
-        ? 'text-amber-700'
-        : 'text-violet-700';
+        ? 'text-amber-300'
+        : 'text-violet-300';
 
   return (
-    <aside className="fixed right-0 top-0 z-40 h-full w-[380px] bg-white shadow-2xl border-l border-gray-200 flex flex-col">
-      <header className="flex items-start justify-between p-4 border-b border-gray-200">
+    <aside className="fixed right-0 top-0 z-40 h-full w-[380px] bg-surface shadow-2xl border-l border-surface-border flex flex-col">
+      <header className="flex items-start justify-between p-4 border-b border-surface-border">
         <div>
           <div className={`text-xs uppercase tracking-wide font-medium ${headerColor}`}>
             {node.type}
           </div>
-          <h2 className="mt-1 text-base font-semibold text-gray-900">{node.name}</h2>
+          <h2 className="mt-1 text-base font-semibold text-gray-100">{node.name}</h2>
         </div>
         <button
           onClick={onClose}
-          className="rounded-md p-1 text-gray-500 hover:bg-gray-100"
+          className="rounded-md p-1 text-gray-500 hover:bg-white/[0.06] hover:text-gray-200"
           aria-label="Close"
         >
           <X className="w-4 h-4" />
@@ -71,10 +70,10 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
             <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500 mb-1">
               Description
             </h3>
-            <p className="text-sm text-gray-800 leading-relaxed">{node.description}</p>
+            <p className="text-sm text-gray-300 leading-relaxed">{node.description}</p>
           </section>
         ) : (
-          <section className="text-sm text-gray-400 italic">
+          <section className="text-sm text-gray-500 italic">
             No AI-generated description yet — the agent didn&apos;t supply one at registration time.
           </section>
         )}
@@ -85,12 +84,15 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
               Dataset
             </h3>
             <Row label="Kind" value={node.kind} />
-            <Row label="Path" value={<span className="font-mono text-xs">{node.path}</span>} />
+            <Row
+              label="Path"
+              value={<span className="font-mono text-xs text-gray-400">{node.path}</span>}
+            />
             <Row label="Size" value={fmtBytes(node.size_bytes)} />
             <Row
               label="Hash"
               value={
-                <span className="font-mono text-xs">
+                <span className="font-mono text-xs text-gray-400">
                   {node.hash ? `${node.hash.slice(0, 12)}…` : '—'}
                 </span>
               }
@@ -99,7 +101,7 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
               <Row
                 label="Metadata"
                 value={
-                  <pre className="font-mono text-xs whitespace-pre-wrap bg-gray-50 rounded p-2">
+                  <pre className="font-mono text-xs whitespace-pre-wrap bg-black/40 border border-surface-border rounded p-2 text-gray-300">
                     {JSON.stringify(node.metadata, null, 2)}
                   </pre>
                 }
@@ -122,7 +124,7 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
               value={
                 node.session_id ? (
                   <a
-                    className="text-blue-600 hover:underline font-mono text-xs"
+                    className="text-sky-400 hover:text-sky-300 hover:underline font-mono text-xs"
                     href={`/?session=${node.session_id}`}
                   >
                     {node.session_id.slice(0, 8)}…
@@ -146,7 +148,7 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
               <Row
                 label="Metrics"
                 value={
-                  <pre className="font-mono text-xs whitespace-pre-wrap bg-gray-50 rounded p-2">
+                  <pre className="font-mono text-xs whitespace-pre-wrap bg-black/40 border border-surface-border rounded p-2 text-gray-300">
                     {JSON.stringify(node.metrics_summary, null, 2)}
                   </pre>
                 }
@@ -156,7 +158,7 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
               <Row
                 label="Hyperparams"
                 value={
-                  <pre className="font-mono text-xs whitespace-pre-wrap bg-gray-50 rounded p-2">
+                  <pre className="font-mono text-xs whitespace-pre-wrap bg-black/40 border border-surface-border rounded p-2 text-gray-300">
                     {JSON.stringify(node.hyperparams, null, 2)}
                   </pre>
                 }
