@@ -2419,6 +2419,24 @@ function WorkspaceSidebar({
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  // MRU list of tab ids that are currently mounted in the DOM. Capped to
+  // MAX_MOUNTED_TABS so opening a long parade of files doesn't pin every
+  // FileViewer in memory. The active tab is always at the head and
+  // therefore never evicted.
+  const [mountedTabIds, setMountedTabIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const MAX_MOUNTED_TABS = 8;
+    setMountedTabIds((prev) => {
+      const stillOpen = new Set(openTabs.map((t) => t.id));
+      const carried = prev.filter((id) => stillOpen.has(id));
+      const next =
+        activeTabId && stillOpen.has(activeTabId)
+          ? [activeTabId, ...carried.filter((id) => id !== activeTabId)]
+          : carried;
+      return next.slice(0, MAX_MOUNTED_TABS);
+    });
+  }, [activeTabId, openTabs]);
 
   // Lineage tab state — fetched lazily once the user opens the tab (or
   // an SSE event auto-opens it). Re-fetched on lineage-changed events.
@@ -2740,64 +2758,81 @@ function WorkspaceSidebar({
           </div>
         )}
 
-        {/* Content area */}
-        <div className="flex-1 overflow-hidden">
-          {activeTab?.type === 'file' ? (
-            <FileViewer filePath={activeTab.id} sessionId={sessionId} />
-          ) : activeTab?.type === 'report' && canvasContent ? (
-            <div className="h-full overflow-y-auto p-6 bg-black">
-              <div className="markdown-content">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    img: ({ src, alt }) => {
-                      let imgSrc = src || '';
-                      if (imgSrc.startsWith('/data/')) {
-                        imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
-                      } else if (imgSrc && !imgSrc.startsWith('http')) {
-                        const workspace = `/sessions/${sessionId}/eda`;
-                        imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
-                      }
-                      return (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          src={imgSrc}
-                          alt={alt || ''}
-                          className="max-w-full rounded-lg shadow-md my-4"
-                        />
-                      );
-                    },
-                  }}
-                >
-                  {canvasContent}
-                </ReactMarkdown>
+        {/* Content area — every opened tab stays mounted so scroll position,
+            fetched file content, legend toggles, lineage pan/zoom, and chart
+            animations all persist when switching tabs. The MRU mountedTabIds
+            list bounds memory by evicting the oldest non-active tab past the
+            cap. */}
+        <div className="flex-1 overflow-hidden relative">
+          {openTabs.map((tab) => {
+            if (!mountedTabIds.includes(tab.id)) return null;
+            // Report tab can be open but content-less while waiting for an
+            // agent to render it — skip the wrapper so the shared empty
+            // state below renders instead.
+            if (tab.type === 'report' && !canvasContent) return null;
+            const isActive = tab.id === activeTabId;
+            return (
+              <div key={tab.id} className={`h-full ${isActive ? 'block' : 'hidden'}`}>
+                {tab.type === 'file' ? (
+                  <FileViewer filePath={tab.id} sessionId={sessionId} />
+                ) : tab.type === 'report' ? (
+                  <div className="h-full overflow-y-auto p-6 bg-black">
+                    <div className="markdown-content">
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          img: ({ src, alt }) => {
+                            let imgSrc = src || '';
+                            if (imgSrc.startsWith('/data/')) {
+                              imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+                            } else if (imgSrc && !imgSrc.startsWith('http')) {
+                              const workspace = `/sessions/${sessionId}/eda`;
+                              imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
+                            }
+                            return (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                src={imgSrc}
+                                alt={alt || ''}
+                                className="max-w-full rounded-lg shadow-md my-4"
+                              />
+                            );
+                          },
+                        }}
+                      >
+                        {canvasContent}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                ) : tab.type === 'metrics' ? (
+                  <div className="h-full overflow-hidden bg-black">
+                    <MetricsTab
+                      metricPoints={metricPoints}
+                      chartConfig={chartConfig}
+                      state={sessionState}
+                    />
+                  </div>
+                ) : tab.type === 'lineage' ? (
+                  <div className="h-full overflow-hidden relative bg-white">
+                    <LineageGraph
+                      data={lineageData}
+                      loading={lineageLoading}
+                      height="100%"
+                      onNodeClick={(n) => setLineageNode(n)}
+                    />
+                    {lineageNode ? (
+                      <NodeMetadataPanel
+                        node={lineageNode}
+                        data={lineageData}
+                        onClose={() => setLineageNode(null)}
+                      />
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
-            </div>
-          ) : activeTab?.type === 'metrics' ? (
-            <div className="h-full overflow-hidden bg-black">
-              <MetricsTab
-                metricPoints={metricPoints}
-                chartConfig={chartConfig}
-                state={sessionState}
-              />
-            </div>
-          ) : activeTab?.type === 'lineage' ? (
-            <div className="h-full overflow-hidden relative bg-white">
-              <LineageGraph
-                data={lineageData}
-                loading={lineageLoading}
-                height="100%"
-                onNodeClick={(n) => setLineageNode(n)}
-              />
-              {lineageNode ? (
-                <NodeMetadataPanel
-                  node={lineageNode}
-                  data={lineageData}
-                  onClose={() => setLineageNode(null)}
-                />
-              ) : null}
-            </div>
-          ) : (
+            );
+          })}
+          {(!activeTab || (activeTab.type === 'report' && !canvasContent)) && (
             <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-black">
               <Code2 className="w-8 h-8 mb-2 text-gray-700" />
               <p className="text-xs">Select a file to view</p>
