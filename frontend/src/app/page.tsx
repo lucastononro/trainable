@@ -838,7 +838,7 @@ export default function HomePage() {
       source.onerror = () => setSseConnected(false);
       sseRef.current = source;
     },
-    [addItem, openCanvas],
+    [addItem, openCanvas, refreshExperiments, setIsRunning],
   );
 
   // ---------------------------------------------------------------------------
@@ -875,7 +875,7 @@ export default function HomePage() {
     setUsageTotals(ZERO_USAGE);
     setRecentUsage([]);
     setTasks([]);
-  }, []);
+  }, [setIsRunning]);
 
   // ---------------------------------------------------------------------------
   // Load experiment + session when activeExperimentId/activeSessionId change
@@ -1276,7 +1276,15 @@ export default function HomePage() {
       cancelled = true;
       sseRef.current?.close();
     };
-  }, [activeExperimentId, activeSessionId, connectSSE, addItem, resetSessionState, openCanvas]);
+  }, [
+    activeExperimentId,
+    activeSessionId,
+    connectSSE,
+    addItem,
+    resetSessionState,
+    openCanvas,
+    setIsRunning,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Send pending message once SSE is connected (after auto-create)
@@ -1306,7 +1314,7 @@ export default function HomePage() {
           setIsRunning(false);
         });
     }
-  }, [activeSessionId, sseConnected, addItem]);
+  }, [activeSessionId, sseConnected, addItem, setIsRunning]);
 
   // Drain a pending file attachment once the auto-created session's SSE is live
   useEffect(() => {
@@ -1348,7 +1356,14 @@ export default function HomePage() {
         setAttachingFiles(false);
       }
     })();
-  }, [activeExperimentId, activeSessionId, sseConnected, addItem, refreshExperiments]);
+  }, [
+    activeExperimentId,
+    activeSessionId,
+    sseConnected,
+    addItem,
+    refreshExperiments,
+    setIsRunning,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -1568,6 +1583,7 @@ export default function HomePage() {
     setActiveExperiment,
     setActiveProject,
     addItem,
+    setIsRunning,
   ]);
 
   const handleS3Select = useCallback(
@@ -1631,6 +1647,7 @@ export default function HomePage() {
       setActiveExperiment,
       setActiveProject,
       addItem,
+      setIsRunning,
     ],
   );
 
