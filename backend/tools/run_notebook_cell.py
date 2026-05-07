@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 
 from services import notebook_store
 from services.broadcaster import broadcaster
@@ -28,6 +29,8 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             timeout = _DEFAULT_TIMEOUT
         timeout = max(10, min(timeout, _MAX_TIMEOUT))
 
+        start = time.time()
+
         # Publish a tool_start so the chat UI shows a collapsible card
         # (`meta.code` drives the code preview — same treatment as execute_code).
         preview = code if isinstance(code, str) else ""
@@ -49,7 +52,11 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             await publish_fn(
                 session_id,
                 "tool_end",
-                {"tool": "run_notebook_cell", "output": msg},
+                {
+                    "tool": "run_notebook_cell",
+                    "output": msg,
+                    "duration": round(time.time() - start, 1),
+                },
                 role="tool",
             )
             return {
@@ -67,7 +74,11 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             await publish_fn(
                 session_id,
                 "tool_end",
-                {"tool": "run_notebook_cell", "output": err},
+                {
+                    "tool": "run_notebook_cell",
+                    "output": err,
+                    "duration": round(time.time() - start, 1),
+                },
                 role="tool",
             )
             return {
@@ -127,7 +138,11 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             await publish_fn(
                 session_id,
                 "tool_end",
-                {"tool": "run_notebook_cell", "output": err},
+                {
+                    "tool": "run_notebook_cell",
+                    "output": err,
+                    "duration": round(time.time() - start, 1),
+                },
                 role="tool",
             )
             return {
@@ -152,7 +167,11 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             await publish_fn(
                 session_id,
                 "tool_end",
-                {"tool": "run_notebook_cell", "output": err},
+                {
+                    "tool": "run_notebook_cell",
+                    "output": err,
+                    "duration": round(time.time() - start, 1),
+                },
                 role="tool",
             )
             return {
@@ -195,7 +214,11 @@ def create_handler(session_id: str, publish_fn, **kwargs):
         await publish_fn(
             session_id,
             "tool_end",
-            {"tool": "run_notebook_cell", "output": chat_out},
+            {
+                "tool": "run_notebook_cell",
+                "output": chat_out,
+                "duration": round(time.time() - start, 1),
+            },
             role="tool",
         )
 

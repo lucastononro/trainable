@@ -2623,7 +2623,9 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
         <span className={`${inline ? 'text-xs' : 'text-sm'} text-gray-300 flex-1`}>
           {isStart
             ? `${funVerb}...${elapsed > 0 ? ` ${elapsed}s` : ''}`
-            : `${doneLabel} for ${item.meta?.duration || 1}s`}
+            : item.meta?.duration
+              ? `${doneLabel} for ${item.meta.duration}s`
+              : doneLabel}
         </span>
         <ChevronRight
           className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-150 ${
