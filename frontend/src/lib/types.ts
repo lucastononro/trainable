@@ -33,8 +33,18 @@ export interface CreateProjectResponse {
 export interface Experiment {
   id: string;
   project_id: string;
+  /** Agent-declared lifecycle parent (post schema-flip). Nullable for
+   *  legacy 1:1 rows where the session pointed at the experiment. */
+  session_id?: string | null;
   name: string;
   description: string;
+  /** 1-3 sentence statement of what this experiment tests. AI-written. */
+  hypothesis?: string;
+  /** Lifecycle state — created | prepping | training | trained |
+   *  failed | abandoned. Defaults to created on new agent-declared rows. */
+  state?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
   dataset_ref: string;
   instructions: string;
   tags?: string[];
