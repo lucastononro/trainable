@@ -243,7 +243,12 @@ export default function HomePage() {
     if (!p) return;
     p.expand();
     // Run on the next frame so the expand takes effect before we resize.
-    requestAnimationFrame(() => p.resize(CANVAS_DEFAULT_SIZE));
+    requestAnimationFrame(() => {
+      p.resize(CANVAS_DEFAULT_SIZE);
+      // Notify the workspace tab manager so it can pick a sensible default
+      // tab if the user opens the canvas with nothing currently active.
+      window.dispatchEvent(new CustomEvent('trainable:canvas-opened'));
+    });
   }, []);
 
   // Live usage totals for the active session (cost badge in header)
@@ -2663,6 +2668,86 @@ function WorkspaceSidebar({
     return () => window.removeEventListener('trainable:open-file', handler as EventListener);
   }, [openFile]);
 
+  // Pick a sensible default tab when the canvas opens with no active tab.
+  // Priority: existing report → live metrics → notebook → README/report.md →
+  // first browseable data file → first file at all. Skips when the user
+  // already has a tab active so reopening the canvas never overrides them.
+  const openMetricsTab = useCallback(() => {
+    setOpenTabs((prev) => {
+      if (prev.find((t) => t.id === METRICS_TAB_ID)) return prev;
+      return [
+        ...prev,
+        {
+          id: METRICS_TAB_ID,
+          label: 'Metrics',
+          icon: BarChart3,
+          iconColor: 'text-emerald-400',
+          type: 'metrics',
+        },
+      ];
+    });
+    setActiveTabId(METRICS_TAB_ID);
+  }, []);
+
+  const openReportTab = useCallback(() => {
+    setOpenTabs((prev) => {
+      if (prev.find((t) => t.id === REPORT_TAB_ID)) return prev;
+      return [
+        ...prev,
+        {
+          id: REPORT_TAB_ID,
+          label: canvasTitle || 'Report',
+          icon: FileText,
+          iconColor: 'text-blue-400',
+          type: 'report',
+        },
+      ];
+    });
+    setActiveTabId(REPORT_TAB_ID);
+  }, [canvasTitle]);
+
+  const flattenFilePaths = useCallback((root: FileTreeNode): string[] => {
+    const out: string[] = [];
+    const walk = (n: FileTreeNode) => {
+      if (n.type === 'file' && n.path) out.push(n.path);
+      for (const c of n.children || []) walk(c);
+    };
+    walk(root);
+    return out;
+  }, []);
+
+  const pickDefaultTab = useCallback((): (() => void) | null => {
+    if (canvasContent) return openReportTab;
+    if (metricPoints.length > 0) return openMetricsTab;
+    const all = flattenFilePaths(fileTree);
+    const notebook = all.find((p) => p.endsWith('.ipynb'));
+    if (notebook) return () => openFile(notebook);
+    const readme = all.find((p) => /\/(readme|report)\.md$/i.test(p));
+    if (readme) return () => openFile(readme);
+    const data = all.find((p) => /\.(csv|parquet|json|png|jpg|jpeg|svg)$/i.test(p));
+    if (data) return () => openFile(data);
+    if (all[0]) return () => openFile(all[0]);
+    return null;
+  }, [
+    canvasContent,
+    metricPoints.length,
+    fileTree,
+    flattenFilePaths,
+    openFile,
+    openMetricsTab,
+    openReportTab,
+  ]);
+
+  useEffect(() => {
+    const handler = () => {
+      if (activeTabId) return;
+      const action = pickDefaultTab();
+      action?.();
+    };
+    window.addEventListener('trainable:canvas-opened', handler);
+    return () => window.removeEventListener('trainable:canvas-opened', handler);
+  }, [activeTabId, pickDefaultTab]);
+
   const closeTab = useCallback((tabId: string) => {
     setOpenTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === tabId);
@@ -2863,7 +2948,7 @@ function WorkspaceSidebar({
           {(!activeTab || (activeTab.type === 'report' && !canvasContent)) && (
             <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-black">
               <Code2 className="w-8 h-8 mb-2 text-gray-700" />
-              <p className="text-xs">Select a file to view</p>
+              <p className="text-xs">Workspace is empty — files will appear here as the agent works.</p>
             </div>
           )}
         </div>
