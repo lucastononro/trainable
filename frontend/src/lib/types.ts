@@ -388,3 +388,116 @@ export interface CompareResponse {
     }
   >;
 }
+
+// ---------------------------------------------------------------------------
+// Lineage graph + agent-declared experiment surfaces
+// ---------------------------------------------------------------------------
+
+export type LineageNodeType = 'dataset' | 'experiment' | 'model';
+
+export interface LineageNodeBase {
+  id: string;
+  type: LineageNodeType;
+  name: string;
+  description?: string;
+  created_at?: string;
+}
+
+export interface LineageDatasetNode extends LineageNodeBase {
+  type: 'dataset';
+  kind: 'raw' | 'processed';
+  path: string;
+  size_bytes: number;
+  hash: string;
+  source_session_id: string | null;
+  source_experiment_id: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface LineageExperimentNode extends LineageNodeBase {
+  type: 'experiment';
+  experiment_id: string;
+  session_id: string | null;
+  hypothesis: string;
+  state: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface LineageModelNode extends LineageNodeBase {
+  type: 'model';
+  model_id: string;
+  experiment_id: string | null;
+  framework: string;
+  metrics_summary: Record<string, number>;
+  hyperparams: Record<string, unknown>;
+  version: number;
+}
+
+export type LineageNode = LineageDatasetNode | LineageExperimentNode | LineageModelNode;
+
+export interface LineageEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: 'derives_from' | 'feeds' | 'produces';
+}
+
+export interface LineageGraph {
+  nodes: LineageNode[];
+  edges: LineageEdge[];
+}
+
+// Project-level dataset detail (with kind/description/parent_id from the
+// agent-declared schema flip).
+export interface DatasetVersionDetail {
+  id: number;
+  project_id: string;
+  kind: 'raw' | 'processed';
+  name: string;
+  description: string;
+  hash: string;
+  path: string;
+  size_bytes: number;
+  parent_id: number | null;
+  parent_hash: string | null;
+  source_session_id: string | null;
+  source_experiment_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+// Sidebar tree row for the new Project → Session → Experiment hierarchy.
+export interface SessionRow {
+  id: string;
+  project_id: string | null;
+  experiment_id: string | null;
+  state: string;
+  model: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Standalone experiment detail page payload — the experiment row plus its
+// linked datasets (with role), the registered model, and the snapshot.
+export interface ExperimentFullDetail {
+  id: string;
+  project_id: string;
+  session_id: string | null;
+  name: string;
+  description: string;
+  hypothesis: string;
+  state: string;
+  started_at: string | null;
+  completed_at: string | null;
+  dataset_ref: string;
+  instructions: string;
+  tags: string[];
+  pinned: boolean;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  datasets: Array<DatasetVersionDetail & { role: string }>;
+  model: RegisteredModel | null;
+  snapshot: RunSnapshotRow | null;
+}

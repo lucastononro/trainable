@@ -24,6 +24,10 @@ import type {
   RunSnapshotRow,
   DatasetVersionRow,
   CompareResponse,
+  LineageGraph,
+  DatasetVersionDetail,
+  SessionRow,
+  ExperimentFullDetail,
 } from './types';
 
 const API_BASE = '/api';
@@ -148,6 +152,27 @@ export const api = {
   // Dataset versions
   projectDatasetVersions: (projectId: string) =>
     fetchJSON<DatasetVersionRow[]>(`/projects/${projectId}/dataset-versions`),
+
+  // Lineage graph (project / session / experiment scopes)
+  projectLineage: (projectId: string) => fetchJSON<LineageGraph>(`/projects/${projectId}/lineage`),
+  sessionLineage: (sessionId: string) => fetchJSON<LineageGraph>(`/sessions/${sessionId}/lineage`),
+  experimentLineage: (experimentId: string) =>
+    fetchJSON<LineageGraph>(`/experiments/${experimentId}/lineage`),
+
+  // Project-level dataset browser + metadata side panel
+  listProjectDatasets: (projectId: string) =>
+    fetchJSON<DatasetVersionDetail[]>(`/projects/${projectId}/datasets`),
+  getDataset: (datasetId: number) => fetchJSON<DatasetVersionDetail>(`/datasets/${datasetId}`),
+
+  // Sidebar tree (Project → Session → Experiment)
+  listProjectSessions: (projectId: string) =>
+    fetchJSON<SessionRow[]>(`/projects/${projectId}/sessions`),
+  listSessionExperiments: (sessionId: string) =>
+    fetchJSON<ExperimentDetail[]>(`/sessions/${sessionId}/experiments`),
+
+  // Standalone experiment detail (datasets + model + snapshot rolled up)
+  getExperimentDetail: (experimentId: string) =>
+    fetchJSON<ExperimentFullDetail>(`/experiments/${experimentId}/detail`),
 
   createExperiment: async (data: FormData): Promise<CreateExperimentResponse> => {
     const res = await fetch(`${API_BASE}/experiments`, {
