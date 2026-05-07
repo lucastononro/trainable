@@ -82,14 +82,23 @@ def build_skill_entries(
     agent_models: dict | None = None,
     agent_id: str = "root",
     parent_agent_id: str | None = None,
+    agent_skills_override: list[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Build {slug: {description, input_schema, handler}} for an agent's skills.
 
     Used by both the MCP bridge (Claude) and the runner's non-MCP tool loop
     (OpenAI/Gemini/LiteLLM).
+
+    `agent_skills_override` lets the caller pass an explicit skill list
+    (e.g. base skills + use-skill activations) instead of the agent's YAML
+    default — used for dynamic-toolset rebuilds in the runner loop.
     """
     agents_mod = _agents()
-    skill_slugs = agents_mod.get_agent_skills(agent_type)
+    skill_slugs = (
+        list(agent_skills_override)
+        if agent_skills_override is not None
+        else agents_mod.get_agent_skills(agent_type)
+    )
     entries: dict[str, dict[str, Any]] = {}
 
     for slug in skill_slugs:
@@ -175,6 +184,7 @@ def build_mcp_server(
     agent_models: dict | None = None,
     agent_id: str = "root",
     parent_agent_id: str | None = None,
+    agent_skills_override: list[str] | None = None,
 ):
     """Build an MCP server with all capability skills assigned to this agent.
 
@@ -194,6 +204,7 @@ def build_mcp_server(
         agent_models=agent_models,
         agent_id=agent_id,
         parent_agent_id=parent_agent_id,
+        agent_skills_override=agent_skills_override,
     )
     logger.debug(
         "Built MCP server for agent=%s with skills=%s",

@@ -36,6 +36,11 @@ class Skill:
     has_handler: bool
     schema: dict
     files: list[dict] = field(default_factory=list)
+    # Capability-skill slugs that should be activated for the calling agent
+    # when this skill is loaded via `use-skill`. Lets a knowledge skill bring
+    # its own tools into the agent's toolset on demand instead of forcing the
+    # agent's YAML to declare every potentially-needed tool upfront.
+    enables: list[str] = field(default_factory=list)
 
     @property
     def kind(self) -> str:
@@ -54,6 +59,7 @@ class Skill:
             "version": self.version,
             "kind": self.kind,
             "files": len(self.files),
+            "enables": list(self.enables),
         }
 
 
@@ -118,6 +124,11 @@ def _load_skill_dir(skill_dir: Path) -> Skill | None:
         except Exception as e:
             logger.warning("Skill %s schema.yaml unreadable: %s", skill_dir.name, e)
 
+    raw_enables = meta.get("enables") or []
+    if isinstance(raw_enables, str):
+        raw_enables = [raw_enables]
+    enables: list[str] = [str(s).strip() for s in raw_enables if str(s).strip()]
+
     return Skill(
         slug=skill_dir.name,
         name=str(meta.get("name") or skill_dir.name),
@@ -128,6 +139,7 @@ def _load_skill_dir(skill_dir: Path) -> Skill | None:
         has_handler=has_handler,
         schema=schema,
         files=_file_manifest(skill_dir),
+        enables=enables,
     )
 
 
@@ -189,6 +201,7 @@ def load_skill(slug: str) -> dict:
         "body": body,
         "files": skill.files,
         "sandbox_root": f"/skills/{skill.slug}",
+        "enables": list(skill.enables),
     }
 
 

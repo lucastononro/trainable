@@ -33,12 +33,15 @@ from .registry import (
     load_handler,
     load_skill,
 )
+from .state import activate_tools, get_active_tools
 
 __all__ = [
     "Skill",
+    "activate_tools",
     "build_mcp_server",
     "build_skill_entries",
     "discover_skills",
+    "get_active_tools",
     "get_capability_skills",
     "get_knowledge_skills",
     "get_skill",

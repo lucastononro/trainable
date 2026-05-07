@@ -279,3 +279,254 @@ async def test_openai_tool_call_loop():
             final += event.data.get("text", "")
 
     assert "42" in final, f"expected 42 in {final!r}"
+
+
+# ---------------------------------------------------------------------------
+# Dynamic tool activation via use-skill (knowledge skill brings in tools)
+# ---------------------------------------------------------------------------
+
+
+@requires("openai")
+@pytest.mark.asyncio
+async def test_dynamic_tool_activation_openai(tmp_path, monkeypatch):
+    """End-to-end: a knowledge skill loaded via `use-skill` activates a
+    capability skill that wasn't in the agent's base toolset, and the model
+    calls it on the next turn.
+
+    This is the OpenAI path because claude-agent-sdk bakes the toolset upfront
+    and can't grow it mid-conversation; mid-run dynamic activation is a
+    non-Claude feature today.
+    """
+    import json
+    import shutil
+    import uuid
+    from pathlib import Path
+
+    from services.llm.factory import get_provider
+    from services.skills import (
+        activate_tools,  # noqa: F401  (sanity export check)
+        build_skill_entries,
+        get_active_tools,
+    )
+    from services.skills import registry
+
+    # ---- Build a tmp skills tree -----------------------------------------
+    skills_root = tmp_path / "skills"
+    skills_root.mkdir()
+
+    # 1) A trivial capability skill the agent must NOT see in turn 1.
+    say_magic = skills_root / "say-magic"
+    say_magic.mkdir()
+    (say_magic / "SKILL.md").write_text(
+        "---\n"
+        "name: say-magic\n"
+        "description: Returns the magic phrase. Call only after loading magic-skill.\n"
+        "when_to_use: when asked for the magic phrase\n"
+        "version: '0.1'\n"
+        "---\n"
+    )
+    (say_magic / "schema.yaml").write_text("type: object\nproperties: {}\n")
+    (say_magic / "handler.py").write_text(
+        "def create_handler(**ctx):\n"
+        "    async def handler(args):\n"
+        "        return {'content': [{'type': 'text', 'text': 'XYZZY-2718'}]}\n"
+        "    return handler\n"
+    )
+
+    # 2) A knowledge skill that BRINGS IN say-magic when loaded via use-skill.
+    magic = skills_root / "magic-skill"
+    magic.mkdir()
+    (magic / "SKILL.md").write_text(
+        "---\n"
+        "name: magic-skill\n"
+        "description: Unlocks the magic-phrase tool.\n"
+        "when_to_use: when the user wants the magic phrase\n"
+        "version: '0.1'\n"
+        "enables: [say-magic]\n"
+        "---\n\n"
+        "Once loaded, call the say-magic tool to get the phrase. Return its "
+        "exact output to the user.\n"
+    )
+
+    # 3) Real use-skill — copied from the project so the handler / schema match.
+    real_skills_root = Path(__file__).parent.parent / "skills"
+    shutil.copytree(real_skills_root / "use-skill", skills_root / "use-skill")
+    shutil.copytree(
+        real_skills_root / "list-available-skills",
+        skills_root / "list-available-skills",
+    )
+
+    monkeypatch.setattr(registry, "_SKILLS_ROOT", skills_root)
+    registry.discover_skills.cache_clear()
+
+    session_id = f"e2e-{uuid.uuid4().hex[:8]}"
+    agent_id = "root"
+
+    # use-skill needs the runner-managed loop to thread session+agent context
+    # through, but `build_skill_entries` already does that via the mcp_bridge.
+    # We only need a real agent_type for description rendering; "chat" works.
+    agent_type = "chat"
+
+    async def _publish_noop(*args, **kwargs):
+        return None
+
+    def _build_for(skills: list[str]) -> dict:
+        return build_skill_entries(
+            agent_type=agent_type,
+            session_id=session_id,
+            experiment_id="e2e-experiment",
+            stage="chat",
+            depth=0,
+            publish_fn=_publish_noop,
+            sandbox_config={},
+            model="gpt-4o-mini",
+            instructions="",
+            agent_models={},
+            agent_id=agent_id,
+            parent_agent_id=None,
+            agent_skills_override=skills,
+        )
+
+    def _entries_to_specs(entries: dict) -> list[dict]:
+        return [
+            {
+                "name": slug,
+                "description": entry["description"],
+                "input_schema": entry["input_schema"]
+                or {"type": "object", "properties": {}},
+            }
+            for slug, entry in entries.items()
+        ]
+
+    # ---- Drive a runner-style turn loop ----------------------------------
+    p = get_provider("openai")
+    model_id = os.getenv("E2E_OPENAI_MODEL", "gpt-4o-mini")
+
+    base_skills = ["list-available-skills", "use-skill"]
+    messages: list[dict] = [
+        {
+            "role": "system",
+            "content": (
+                "You can load specialized skills with the `use-skill` tool. "
+                "Loading a skill may grant you new tools on the next turn — "
+                "watch the response for a 'Tools enabled by this skill' "
+                "section. To answer the user's request, first load the skill "
+                "named 'magic-skill', then call the tool it enables. "
+                "Reply with only the phrase that tool returns, nothing else."
+            ),
+        },
+        {"role": "user", "content": "What is the magic phrase?"},
+    ]
+
+    cached_skills: list[str] | None = None
+    specs: list[dict] = []
+    handlers: dict = {}
+
+    saw_use_skill = False
+    saw_say_magic = False
+    final_text = ""
+
+    try:
+        for turn in range(5):  # generous cap; expect 3 turns
+            # Mirror runner._resolve_effective_skills: base ∪ activations,
+            # capability-only, deterministic order.
+            extras = sorted(
+                s
+                for s in get_active_tools(session_id, agent_id)
+                if s not in base_skills
+            )
+            effective = list(base_skills) + extras
+            if effective != cached_skills:
+                entries = _build_for(effective)
+                specs = _entries_to_specs(entries)
+                handlers = {slug: e["handler"] for slug, e in entries.items()}
+                cached_skills = effective
+
+            pending: list[dict] = []
+            assistant_text_parts: list[str] = []
+
+            async for event in p.run(
+                prompt="",
+                system_prompt="",
+                model=model_id,
+                tools=specs,
+                max_turns=1,
+                timeout_seconds=60,
+                messages=messages,
+            ):
+                if event.kind == "text":
+                    assistant_text_parts.append(event.data.get("text", "") or "")
+                elif event.kind == "tool_call":
+                    pending.append(
+                        {
+                            "id": event.data.get("tool_call_id") or f"call_{turn}",
+                            "name": event.data.get("tool_name", ""),
+                            "args": event.data.get("arguments", {}) or {},
+                        }
+                    )
+                elif event.kind == "error":
+                    pytest.fail(f"provider error: {event.data.get('message')}")
+
+            assistant_msg: dict = {
+                "role": "assistant",
+                "content": "".join(assistant_text_parts) or None,
+            }
+            if pending:
+                assistant_msg["tool_calls"] = [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {
+                            "name": c["name"],
+                            "arguments": json.dumps(c["args"]),
+                        },
+                    }
+                    for c in pending
+                ]
+            messages.append(assistant_msg)
+
+            if not pending:
+                final_text = "".join(assistant_text_parts)
+                break
+
+            for call in pending:
+                if call["name"] == "use-skill":
+                    saw_use_skill = True
+                if call["name"] == "say-magic":
+                    saw_say_magic = True
+                handler = handlers.get(call["name"])
+                if handler is None:
+                    result_text = f"Unknown tool: {call['name']}"
+                else:
+                    result = await handler(call["args"])
+                    parts = []
+                    for item in (result or {}).get("content", []) or []:
+                        if isinstance(item, dict) and item.get("type") == "text":
+                            parts.append(item.get("text", ""))
+                    result_text = "\n".join(p for p in parts if p) or "(no output)"
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call["id"],
+                        "content": result_text,
+                    }
+                )
+    finally:
+        registry.discover_skills.cache_clear()
+
+    # ---- Assertions ------------------------------------------------------
+    assert saw_use_skill, (
+        "Model never called `use-skill`; it should have loaded magic-skill first."
+    )
+    # The activation should have happened — say-magic must be in the active set.
+    assert "say-magic" in get_active_tools(session_id, agent_id), (
+        "use-skill load did not activate `say-magic` for this (session, agent)."
+    )
+    assert saw_say_magic, (
+        "Model never called `say-magic` after activation — the dynamic tool "
+        "did not propagate into the next turn's tool list."
+    )
+    assert "XYZZY-2718" in final_text, (
+        f"Model didn't return the magic phrase from the activated tool. "
+        f"Final reply: {final_text!r}"
+    )

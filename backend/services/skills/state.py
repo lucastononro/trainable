@@ -17,6 +17,13 @@ _code_counter: dict[str, int] = {}
 # events on every step.
 _known_files: dict[str, set[str]] = {}
 
+# use-skill: per-(session_id, agent_id) set of capability-skill slugs that
+# were activated by loading a knowledge skill via `use-skill`. The runner
+# unions these with the agent's base skill list each turn so the LLM sees
+# tools brought in by skills it has explicitly loaded. Cleared at the end
+# of an agent run.
+_active_tools: dict[tuple[str, str], set[str]] = {}
+
 
 def _extract_slug(code: str) -> str:
     """Extract a short descriptive slug from code for naming the script file."""
@@ -46,7 +53,32 @@ def _script_filename(code: str, session_id: str) -> str:
     return f"step_{counter:02d}_{slug}.py"
 
 
+def activate_tools(session_id: str, agent_id: str, slugs: list[str]) -> list[str]:
+    """Mark capability skills as active for this (session, agent).
+
+    Returns the slugs that were newly added (caller can use this to surface
+    a "tools enabled" notice to the model).
+    """
+    if not slugs:
+        return []
+    key = (session_id, agent_id)
+    current = _active_tools.setdefault(key, set())
+    added = [s for s in slugs if s and s not in current]
+    current.update(added)
+    return added
+
+
+def get_active_tools(session_id: str, agent_id: str) -> set[str]:
+    """Return the set of skill slugs activated for this (session, agent)."""
+    return set(_active_tools.get((session_id, agent_id), set()))
+
+
 def cleanup_session(session_id: str) -> None:
     """Drop per-session state when an agent run completes."""
     _known_files.pop(session_id, None)
     _code_counter.pop(session_id, None)
+    # Active-tool entries are keyed by (session_id, agent_id); drop every
+    # entry whose session matches.
+    for key in list(_active_tools.keys()):
+        if key[0] == session_id:
+            _active_tools.pop(key, None)

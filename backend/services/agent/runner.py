@@ -20,7 +20,7 @@ from config import settings
 from db import async_session
 from models import Artifact, Experiment, Message, ProcessedDatasetMeta, Project
 from services.llm import factory as llm_factory
-from services.skills import build_skill_entries
+from services.skills import build_skill_entries, get_active_tools, get_skill
 from services.volume import (
     listdir_async,
     read_volume_file_async,
@@ -357,6 +357,33 @@ def _record_skill_specs(agent_type: str, agent_skills: list[str]) -> list[dict]:
     return specs
 
 
+def _resolve_effective_skills(
+    *, base_skills: list[str], session_id: str, agent_id: str
+) -> list[str]:
+    """Union the agent's base skills with capability skills activated via use-skill.
+
+    Capability skills are activated by knowledge skills declaring
+    `enables: [<slug>...]` in their frontmatter and being loaded through the
+    `use-skill` tool. Activations are scoped to (session_id, agent_id) and
+    cleared on session cleanup.
+
+    Returns base skill order first, then activations appended in registry
+    order (deterministic for prompt-cache stability).
+    """
+    base_set = set(base_skills)
+    extras: list[str] = []
+    for slug in sorted(get_active_tools(session_id, agent_id)):
+        if slug in base_set:
+            continue
+        try:
+            skill = get_skill(slug)
+        except KeyError:
+            continue
+        if skill.has_handler:
+            extras.append(slug)
+    return list(base_skills) + extras
+
+
 async def _drive_provider(
     *,
     provider_id: str,
@@ -388,24 +415,26 @@ async def _drive_provider(
     caps = provider.capabilities
     collected_text = ""
 
-    # Build skill specs + handlers once. The MCP server is only built for
-    # Claude; OpenAI/Gemini/LiteLLM dispatch handlers in this function.
-    skill_specs = _record_skill_specs(agent_type, agent_skills)
-    skill_entries = build_skill_entries(
-        agent_type=agent_type,
-        session_id=session_id,
-        experiment_id=experiment_id,
-        stage=stage,
-        depth=depth,
-        publish_fn=save_and_publish,
-        sandbox_config=sandbox_config,
-        model=model,
-        instructions=instructions,
-        agent_models=agent_models,
-        agent_id=agent_id,
-        parent_agent_id=parent_agent_id,
-    )
-    skill_handlers = {slug: entry["handler"] for slug, entry in skill_entries.items()}
+    base_agent_skills = list(agent_skills)
+
+    def _build_skill_entries_for(skills: list[str]) -> dict:
+        """Closure to rebuild handlers for a given skill list — used per-turn
+        in the non-Claude path so newly-activated tools become callable."""
+        return build_skill_entries(
+            agent_type=agent_type,
+            session_id=session_id,
+            experiment_id=experiment_id,
+            stage=stage,
+            depth=depth,
+            publish_fn=save_and_publish,
+            sandbox_config=sandbox_config,
+            model=model,
+            instructions=instructions,
+            agent_models=agent_models,
+            agent_id=agent_id,
+            parent_agent_id=parent_agent_id,
+            agent_skills_override=skills,
+        )
 
     async def _persist_text(text: str) -> None:
         nonlocal collected_text
@@ -504,7 +533,16 @@ async def _drive_provider(
 
     # ---- Claude / MCP path -------------------------------------------------
     if caps.supports_mcp:
-        # Build the MCP server with all skill handlers attached.
+        # claude-agent-sdk's query() bakes the toolset/MCP server in upfront
+        # and runs the multi-turn loop internally — we can't add tools mid-
+        # conversation. Snapshot the active set at run start so sub-agents
+        # (each their own provider.run() call) inherit any tools their parent
+        # activated; within a single Claude run the toolset stays fixed.
+        claude_skills = _resolve_effective_skills(
+            base_skills=base_agent_skills,
+            session_id=session_id,
+            agent_id=agent_id,
+        )
         mcp_server = create_mcp_server(
             session_id,
             experiment_id,
@@ -517,8 +555,9 @@ async def _drive_provider(
             agent_models=agent_models,
             agent_id=agent_id,
             parent_agent_id=parent_agent_id,
+            agent_skills_override=claude_skills,
         )
-        prefixed_tool_names = [f"mcp__trainable__{s}" for s in agent_skills]
+        prefixed_tool_names = [f"mcp__trainable__{s}" for s in claude_skills]
 
         async with asyncio.timeout(timeout_s):
             async for event in provider.run(
@@ -564,8 +603,26 @@ async def _drive_provider(
         {"role": "user", "content": prompt},
     ]
 
+    # Cache last-resolved skill set so we only rebuild specs/handlers when
+    # use-skill expanded the active set. Stable across turns when nothing
+    # changed — keeps tool_use_id continuity in the provider.
+    _cached_skills: list[str] | None = None
+    skill_specs: list[dict] = []
+    skill_handlers: dict = {}
+
     async with asyncio.timeout(timeout_s):
         for turn in range(settings.agent_max_turns):
+            effective_skills = _resolve_effective_skills(
+                base_skills=base_agent_skills,
+                session_id=session_id,
+                agent_id=agent_id,
+            )
+            if effective_skills != _cached_skills:
+                skill_specs = _record_skill_specs(agent_type, effective_skills)
+                entries = _build_skill_entries_for(effective_skills)
+                skill_handlers = {slug: e["handler"] for slug, e in entries.items()}
+                _cached_skills = effective_skills
+
             pending_calls: list[dict] = []
             assistant_text: list[str] = []
 
