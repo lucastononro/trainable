@@ -157,8 +157,24 @@ class Experiment(Base):
         back_populates="experiment",
         cascade="all, delete-orphan",
     )
+    # Registered models cascade-delete with the experiment so a single
+    # `db.delete(experiment)` succeeds. Without the cascade, the FK from
+    # registered_models.experiment_id blocks the delete and the user has
+    # to retry — exactly the "needs to be deleted twice" symptom.
     registered_models = relationship(
-        "RegisteredModel", back_populates="experiment", lazy="raise"
+        "RegisteredModel",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+        lazy="raise",
+    )
+    # Run snapshots are 1:1 with the experiment (one snapshot per
+    # training run). Cascade for the same reason as registered_models.
+    run_snapshots = relationship(
+        "RunSnapshot",
+        primaryjoin="Experiment.id == RunSnapshot.experiment_id",
+        foreign_keys="RunSnapshot.experiment_id",
+        cascade="all, delete-orphan",
+        lazy="raise",
     )
 
     def to_dict(self, sessions=None, datasets=None, model=None):

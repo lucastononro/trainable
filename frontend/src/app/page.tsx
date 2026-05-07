@@ -317,11 +317,17 @@ export default function HomePage() {
         // Successful open clears the backoff so the next failure starts
         // from 1s, not from wherever we left off.
         sseReconnectRef.current.attempts = 0;
+        console.debug(`[sse:${sid.slice(0, 8)}] open`);
       };
       source.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data) as SSEEvent;
           const data = event.data as any;
+          // Lightweight per-event counter so the user can verify event
+          // flow in DevTools when "streaming isn't working" without
+          // pasting raw payloads. Lives behind console.debug so the
+          // production log pane stays clean unless they enable verbose.
+          console.debug(`[sse:${sid.slice(0, 8)}] ${event.type}`);
 
           switch (event.type) {
             case 'state_change':

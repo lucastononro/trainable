@@ -768,10 +768,17 @@ export default function Sidebar() {
                     // `+N more` suffix tells the user there are siblings;
                     // the canvas / /experiments page is where you drill
                     // into the individual experiments.
+                    // Each bucket is anchored on the FIRST experiment
+                    // (the one that "owns" the chat's name). Adding new
+                    // sibling experiments doesn't rename the row — the
+                    // user's mental model is "this chat" not "this
+                    // experiment", so the label has to be stable. The
+                    // count badge surfaces the sibling count.
                     type Bucket = {
                       key: string;
-                      primary: Experiment;
+                      anchor: Experiment;
                       siblings: Experiment[];
+                      latest: Experiment;
                     };
                     const order: string[] = [];
                     const buckets = new Map<string, Bucket>();
@@ -780,14 +787,23 @@ export default function Sidebar() {
                       const existing = buckets.get(key);
                       if (!existing) {
                         order.push(key);
-                        buckets.set(key, { key, primary: exp, siblings: [] });
+                        buckets.set(key, {
+                          key,
+                          anchor: exp,
+                          siblings: [],
+                          latest: exp,
+                        });
                       } else {
                         existing.siblings.push(exp);
-                        // Keep the most recently created experiment as
-                        // the bucket's display row.
-                        if ((exp.created_at ?? '') > (existing.primary.created_at ?? '')) {
-                          existing.siblings.push(existing.primary);
-                          existing.primary = exp;
+                        // Anchor stays as whichever experiment was
+                        // created earliest — the chat's "original" name.
+                        if ((exp.created_at ?? '') < (existing.anchor.created_at ?? '')) {
+                          existing.siblings.push(existing.anchor);
+                          existing.anchor = exp;
+                        }
+                        // Track latest separately so click → most recent.
+                        if ((exp.created_at ?? '') > (existing.latest.created_at ?? '')) {
+                          existing.latest = exp;
                         }
                       }
                     }
@@ -797,32 +813,32 @@ export default function Sidebar() {
                       const displayExp =
                         total > 1
                           ? {
-                              ...b.primary,
-                              name: `${b.primary.name} (+${total - 1} more)`,
+                              ...b.anchor,
+                              name: `${b.anchor.name} · ${total}`,
                             }
-                          : b.primary;
-                      // The active state follows whichever experiment in
-                      // this bucket is active — clicking the bucket lands
-                      // on the latest experiment, but the row stays
-                      // highlighted if any sibling is active.
+                          : b.anchor;
                       const isActive =
-                        b.primary.id === activeExperimentId ||
+                        b.anchor.id === activeExperimentId ||
+                        b.latest.id === activeExperimentId ||
                         b.siblings.some((s) => s.id === activeExperimentId);
                       return (
                         <ExperimentRow
                           key={key}
                           exp={displayExp}
                           isActive={isActive}
+                          // Click → drop into the chat at the latest
+                          // experiment so a fresh sibling is selected on
+                          // entry. The row's NAME stays anchored.
                           onClick={() => {
                             setActiveExperiment(
-                              b.primary.id,
-                              b.primary.session_id ?? b.primary.latest_session_id,
+                              b.latest.id,
+                              b.latest.session_id ?? b.latest.latest_session_id,
                             );
                             if (pathname !== '/') router.push('/');
                           }}
-                          onRename={(name) => handleRenameExperiment(b.primary.id, name)}
-                          onDelete={(e) => handleDeleteExperiment(b.primary.id, e)}
-                          onDragStart={(e) => handleDragStart(e, b.primary.id)}
+                          onRename={(name) => handleRenameExperiment(b.anchor.id, name)}
+                          onDelete={(e) => handleDeleteExperiment(b.anchor.id, e)}
+                          onDragStart={(e) => handleDragStart(e, b.anchor.id)}
                           onDragEnd={handleDragLeave}
                         />
                       );
