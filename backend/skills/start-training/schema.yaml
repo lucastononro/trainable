@@ -1,0 +1,14 @@
+type: object
+properties:
+  experiment_id:
+    type: string
+    description: ID returned by create-experiment.
+  framework:
+    type: string
+    description: ML framework (xgboost, lightgbm, sklearn, pytorch, tensorflow, huggingface, other).
+  hyperparams:
+    type: object
+    description: Hyperparam dict you'll pass to .fit() — frozen for reproducibility.
+required:
+  - experiment_id
+  - framework

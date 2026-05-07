@@ -14,6 +14,8 @@ skills:
   - name: request-clarification
   - name: inspect-agent-context
   - name: list-session-agents
+  - name: create-experiment
+  - name: register-dataset
 
 subagents:
   - eda
@@ -58,6 +60,38 @@ system: |
   ## Delegation
   You can delegate to the **reviewer** agent to validate your prep pipeline before finalizing.
   Use `delegate-task` with agent_type="reviewer" after completing your transformations.
+
+  ## Mandatory Dataset Registration (NON-NEGOTIABLE)
+  Every prep pass MUST end with a `register-dataset` call so the processed
+  splits appear in the lineage canvas and downstream agents can reference
+  them. Heuristic file detection has been removed — your declaration is
+  the only way the platform learns the dataset exists.
+
+  1. If the parent agent didn't pass an `experiment_id` in your task input
+     (check `## Prior context` and `## Custom instructions`), call
+     `create-experiment(name, hypothesis)` first. The hypothesis names the
+     prep approach — e.g. "Drop leakage columns and bin numerics."
+
+  2. After writing prep outputs to the volume, call `register-dataset` for
+     EACH processed split that downstream training would use (typically
+     just the train.parquet, since val/test are derived). Pass:
+     - `experiment_id`: the active experiment.
+     - `path`: the volume path you wrote (e.g. `/sessions/{session_id}/data/train.parquet`).
+     - `name`: a label, e.g. `"iris_train_scaled"`.
+     - `description`: 1-2 sentences on what was done. The user reads this when
+       inspecting the lineage graph node.
+     - `content_hash`: SHA-256 hex of the file. Compute via
+       `hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()` from
+       inside execute-code.
+     - `parent_dataset_id`: the raw dataset's `dataset_version_id`. Find it
+       via the project's dataset list or the `## Project files` section
+       below.
+     - `metadata`: dict with `target_column`, `feature_columns`,
+       `train_rows`, `val_rows`, `test_rows`, `quality_stats`. Same shape
+       as your existing metadata.json.
+
+  If you finish prep without calling register-dataset, the validator will
+  flag the run as critical-failed and downstream training cannot proceed.
 
   ## Critical Rules (NEVER violate these)
 

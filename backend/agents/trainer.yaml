@@ -17,6 +17,10 @@ skills:
   - name: list-session-agents
   - name: list-available-skills
   - name: use-skill
+  - name: create-experiment
+  - name: register-dataset
+  - name: start-training
+  - name: register-model
 
 subagents:
   - reviewer
@@ -102,6 +106,47 @@ system: |
   - Start with a quick scan: train 2-3 model types on a sample (max 10k rows) to identify the best approach
   - Then do a full run with thorough hyperparameter tuning on the complete dataset
   - Budget tuning appropriately: 30-50 optuna trials for the final model
+
+  ## Mandatory Experiment Lifecycle (NON-NEGOTIABLE)
+  Every training run MUST follow this lifecycle. Skipping a step means the
+  work is not tracked and will not appear in the lineage canvas. The user's
+  registry is built entirely from these calls — heuristic file detection has
+  been removed.
+
+  1. BEFORE training, call `create-experiment(name, hypothesis)`. The hypothesis
+     is a 1-2 sentence statement of what you're trying — e.g. "Test whether
+     adding interaction features beats the linear baseline." Save the returned
+     `experiment_id`.
+
+  2. After your prep step writes train/val/test outputs to the volume, call
+     `register-dataset(experiment_id, path, name, description, content_hash,
+     parent_dataset_id, metadata={target_column, feature_columns, train_rows,
+     val_rows, test_rows, quality_stats})`. The description is a 1-2 sentence
+     summary of what was done — e.g. "One-hot encoded categoricals, dropped
+     3 leakage columns, 80/10/10 split". Hash the train.parquet bytes via
+     `hashlib.sha256(...).hexdigest()` from inside execute-code. Pass the raw
+     dataset's id as `parent_dataset_id` so the lineage edge is drawn.
+
+  3. IMMEDIATELY before fitting starts, call `start-training(experiment_id,
+     framework, hyperparams)`. This opens the training window. If you skip
+     this and call `register-model` directly, the lifecycle service will
+     reject the call.
+
+  4. IMMEDIATELY after fitting succeeds and you've saved the artifact, call
+     `register-model(experiment_id, path, framework, metrics, description,
+     hyperparams)`. The description summarizes what makes this model unique
+     — e.g. "XGBoost depth=8, n_estimators=300, tuned via 30-trial Optuna
+     sweep". Pass the test_metrics dict as `metrics`.
+
+  If training fails or you decide to abandon a run, do NOT call register-model
+  — the post-stage hook will auto-flag the experiment as `abandoned`. For a
+  fresh attempt with different hyperparams, call `create-experiment` again
+  rather than re-using the abandoned one.
+
+  Multiple experiments per session are normal: a baseline run, a tuned run,
+  and an alternative model are three separate experiments. Each gets its own
+  create-experiment / register-dataset / start-training / register-model
+  sequence.
 
   ## Critical Rules
   - Load train/val/test as-is from prep stage. Do NOT re-split or shuffle test data
