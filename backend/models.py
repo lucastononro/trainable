@@ -28,6 +28,26 @@ class SessionState(str, enum.Enum):
     CANCELLED = "cancelled"
 
 
+class ExperimentState(str, enum.Enum):
+    """Lifecycle state for an agent-declared experiment.
+
+    The agent transitions states by calling skill tools:
+      create-experiment → CREATED
+      register-dataset (role='input') → PREPPING (or stays CREATED if no prep)
+      start-training → TRAINING
+      register-model → TRAINED
+    Validators flip TRAINING → ABANDONED if the agent's turn ends without a
+    register-model call. FAILED is set explicitly when training raises.
+    """
+
+    CREATED = "created"
+    PREPPING = "prepping"
+    TRAINING = "training"
+    TRAINED = "trained"
+    FAILED = "failed"
+    ABANDONED = "abandoned"
+
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -61,15 +81,47 @@ class Project(Base):
 
 
 class Experiment(Base):
+    """An agent-declared attempt at a problem inside a session.
+
+    Cardinality flipped in the agent-declared-experiments redesign: a session
+    is the workbench (chat + workspace), and it holds N experiments — one per
+    declared (processed_dataset, model, metrics) bundle the agent built. The
+    legacy 1:1 mapping (one experiment with N child sessions) is preserved
+    for back-compat by keeping `Session.experiment_id` nullable; new code
+    always reads via `Experiment.session_id`.
+    """
+
     __tablename__ = "experiments"
 
     id = Column(String(36), primary_key=True)
     project_id = Column(
         String(36), ForeignKey("projects.id"), nullable=False, index=True
     )
+    # New canonical link in the flipped schema. Nullable while we backfill
+    # legacy rows; new code never writes NULL here.
+    #
+    # Deliberately NOT a SQL-level ForeignKey: there's a circular relationship
+    # with the legacy `Session.experiment_id` FK that SQLite can't resolve
+    # (no ALTER TABLE ADD CONSTRAINT). The ORM still treats this as a
+    # relationship via the explicit `foreign_keys=[session_id]` on the
+    # `session` relationship below; referential integrity is enforced at
+    # the application layer (transition_state etc.) and a CASCADE on the
+    # legacy direction handles cleanup. Tradeoff documented here so we
+    # don't accidentally re-add the FK and break tests.
+    session_id = Column(String(36), nullable=True, index=True)
     name = Column(String(255), nullable=False)
     description = Column(Text, default="")
-    dataset_ref = Column(String(512), nullable=False)
+    # 1-3 sentence statement of what the agent is trying. AI-written.
+    hypothesis = Column(Text, default="")
+    # Lifecycle state — see ExperimentState enum. Drives validator gates and
+    # the lineage/sidebar chips. Defaults to "trained" for legacy backfilled
+    # rows so they don't show up as in-progress.
+    state = Column(String(20), default=ExperimentState.CREATED.value, index=True)
+    started_at = Column(String, nullable=True)
+    completed_at = Column(String, nullable=True)
+    # Deprecated: in the new model, the dataset attaches via experiment_datasets.
+    # Kept for legacy rows; new code reads via the M2M relation.
+    dataset_ref = Column(String(512), nullable=True)
     instructions = Column(Text, default="")
     tags = Column(JSON, default=list)
     pinned = Column(Boolean, default=False)
@@ -78,41 +130,94 @@ class Experiment(Base):
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
     project = relationship("Project", back_populates="experiments")
+    # Legacy back-relation for the 1:N (Experiment→Sessions) shape. Empty for
+    # new agent-declared experiments since the new direction is Session→N
+    # Experiments via Experiment.session_id.
     sessions = relationship(
         "Session",
         back_populates="experiment",
         cascade="all, delete-orphan",
         lazy="raise",
+        foreign_keys="Session.experiment_id",
+    )
+    # New canonical relation: this experiment lives inside one session.
+    # Both this and `Session.experiments` are `viewonly=True` so they
+    # stay off SQLAlchemy's unit-of-work dependency graph; otherwise the
+    # legacy `Session.experiment_id` FK conflicts with this back-pointer
+    # and SQLAlchemy can't resolve INSERT ordering. Code that needs to
+    # set the link writes directly to `Experiment.session_id`.
+    session = relationship(
+        "Session",
+        primaryjoin="Experiment.session_id == Session.id",
+        foreign_keys=[session_id],
+        viewonly=True,
+    )
+    dataset_links = relationship(
+        "ExperimentDataset",
+        back_populates="experiment",
+        cascade="all, delete-orphan",
+    )
+    registered_models = relationship(
+        "RegisteredModel", back_populates="experiment", lazy="raise"
     )
 
-    def to_dict(self, sessions=None):
-        """Convert to dict. Pass sessions list explicitly to avoid lazy loading."""
+    def to_dict(self, sessions=None, datasets=None, model=None):
+        """Convert to dict. Pass sessions/datasets/model explicitly to avoid lazy loading."""
         s_list = sessions if sessions is not None else []
         latest = sorted(s_list, key=lambda s: s.created_at or "") if s_list else []
         latest_session = latest[-1] if latest else None
         return {
             "id": self.id,
             "project_id": self.project_id,
+            "session_id": self.session_id,
             "name": self.name,
             "description": self.description or "",
-            "dataset_ref": self.dataset_ref,
+            "hypothesis": self.hypothesis or "",
+            "state": self.state or ExperimentState.CREATED.value,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "dataset_ref": self.dataset_ref or "",
             "instructions": self.instructions or "",
             "tags": self.tags or [],
             "pinned": bool(self.pinned),
             "archived": bool(self.archived),
+            "datasets": datasets or [],
+            "model": model,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
-            "latest_session_id": latest_session.id if latest_session else None,
+            # Legacy fields — kept for the existing sidebar that reads them.
+            "latest_session_id": (
+                self.session_id or (latest_session.id if latest_session else None)
+            ),
             "latest_state": latest_session.state if latest_session else None,
         }
 
 
 class Session(Base):
+    """The user's chat workbench.
+
+    In the agent-declared-experiments redesign, a session is the unit of
+    conversation, workspace files, and cost tracking — and it holds N
+    declared experiments. `experiment_id` is kept nullable for back-compat
+    with legacy 1:1 rows; new code attaches via Experiment.session_id and
+    reads `session.experiments` instead.
+    """
+
     __tablename__ = "sessions"
 
     id = Column(String(36), primary_key=True)
+    # New canonical project link (used by the new sidebar tree). Nullable
+    # while migration backfills it from experiments.project_id; new code
+    # writes it directly on session creation.
+    project_id = Column(
+        String(36), ForeignKey("projects.id"), nullable=True, index=True
+    )
+    name = Column(String(255), nullable=True)
+    # Legacy: in the old schema a session was always nested under one
+    # experiment. Kept nullable so flipped-schema sessions (which attach
+    # experiments themselves) don't have to lie about a parent.
     experiment_id = Column(
-        String(36), ForeignKey("experiments.id"), nullable=False, index=True
+        String(36), ForeignKey("experiments.id"), nullable=True, index=True
     )
     state = Column(String(50), default=SessionState.CREATED.value)
     model = Column(String(100), default=None)
@@ -120,7 +225,24 @@ class Session(Base):
     created_at = Column(String, default=lambda: utcnow().isoformat())
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
-    experiment = relationship("Experiment", back_populates="sessions")
+    project = relationship("Project", foreign_keys=[project_id])
+    # Legacy back-pop (one experiment, this session is a child of it).
+    experiment = relationship(
+        "Experiment", back_populates="sessions", foreign_keys=[experiment_id]
+    )
+    # New canonical relation: a session has N declared experiments.
+    # Explicit primaryjoin because Experiment.session_id is a plain column
+    # (no SQL FK — see the column comment on Experiment.session_id).
+    # `viewonly=True` keeps this off the unit-of-work dependency graph so
+    # the legacy `Session.experiment_id` FK can drive insert ordering
+    # without conflict; deletes cascade via the legacy relation.
+    experiments = relationship(
+        "Experiment",
+        primaryjoin="Session.id == Experiment.session_id",
+        foreign_keys="Experiment.session_id",
+        viewonly=True,
+        lazy="raise",
+    )
     messages = relationship(
         "Message", back_populates="session", cascade="all, delete-orphan"
     )
@@ -291,11 +413,15 @@ class Metric(Base):
 
 
 class RegisteredModel(Base):
-    """A model promoted out of a session into the project-level registry.
+    """A model declared by the agent via register-model.
 
-    The pickle/artifact stays on the volume — we copy it to a stable path
-    and pin (project_id, name, version) so the artifact survives session
-    cleanup and is addressable from the deployment layer.
+    The pickle/artifact stays on the volume — we copy it to a stable
+    `/projects/{pid}/models/{name}/v{N}/...` path and pin (project_id, name,
+    version) so the artifact survives session cleanup and is addressable
+    from the deployment layer. Each row corresponds to exactly one
+    Experiment (which represents the (data, model, metrics) bundle the
+    agent declared); `experiment_id` is the canonical link in the new
+    schema.
     """
 
     __tablename__ = "registered_models"
@@ -304,26 +430,45 @@ class RegisteredModel(Base):
     project_id = Column(
         String(36), ForeignKey("projects.id"), nullable=False, index=True
     )
+    # New canonical link — one model per experiment. Nullable while we
+    # backfill legacy rows from session ↔ experiment join.
+    experiment_id = Column(
+        String(36), ForeignKey("experiments.id"), nullable=True, index=True
+    )
     name = Column(String(255), nullable=False)
     version = Column(Integer, nullable=False, default=1)
-    source_session_id = Column(String(36), nullable=False, index=True)
+    source_session_id = Column(String(36), nullable=True, index=True)
     artifact_uri = Column(String(512), nullable=False)
     artifact_size_bytes = Column(Integer, default=0)
     metrics_summary = Column(JSON, default=dict)
+    # AI-generated 1-2 sentence summary of what makes this model unique
+    # (e.g. "XGBoost depth=8 tuned via 30-trial Optuna sweep"). Mandatory
+    # at registration time; legacy rows backfill to "".
+    description = Column(Text, default="")
+    # Final hyperparams the agent passed to start-training, frozen here so
+    # the registry view doesn't have to re-walk the snapshot manifest.
+    hyperparams = Column(JSON, default=dict)
     framework = Column(String(50), nullable=True)
     status = Column(String(20), default="ready")
     created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    experiment = relationship(
+        "Experiment", back_populates="registered_models", foreign_keys=[experiment_id]
+    )
 
     def to_dict(self):
         return {
             "id": self.id,
             "project_id": self.project_id,
+            "experiment_id": self.experiment_id,
             "name": self.name,
             "version": self.version,
             "source_session_id": self.source_session_id,
             "artifact_uri": self.artifact_uri,
             "artifact_size_bytes": self.artifact_size_bytes or 0,
             "metrics_summary": self.metrics_summary or {},
+            "description": self.description or "",
+            "hyperparams": self.hyperparams or {},
             "framework": self.framework,
             "status": self.status,
             "created_at": self.created_at,
@@ -362,18 +507,27 @@ class Deployment(Base):
 
 
 class RunSnapshot(Base):
-    """Reproducibility manifest captured after a training session completes.
+    """Reproducibility manifest captured after a training experiment completes.
 
     Hashes splits + script files, captures pip freeze, and freezes the
     final hyperparams used. The manifest_uri points to a .json file on the
-    volume that mirrors the in-DB summary.
+    volume that mirrors the in-DB summary. Tied to an Experiment in the
+    flipped schema (one snapshot per experiment); `session_id` kept
+    nullable for legacy rows.
     """
 
     __tablename__ = "run_snapshots"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    # New canonical link — one snapshot per experiment.
+    experiment_id = Column(
+        String(36), ForeignKey("experiments.id"), nullable=True, index=True
+    )
+    # Legacy: pre-flip snapshots were keyed on session. Kept nullable +
+    # non-unique because a single session now hosts N experiments, each
+    # with its own snapshot.
     session_id = Column(
-        String(36), ForeignKey("sessions.id"), nullable=False, index=True, unique=True
+        String(36), ForeignKey("sessions.id"), nullable=True, index=True
     )
     dataset_hash = Column(String(64), nullable=True)
     code_hash = Column(String(64), nullable=True)
@@ -385,6 +539,7 @@ class RunSnapshot(Base):
     def to_dict(self):
         return {
             "id": self.id,
+            "experiment_id": self.experiment_id,
             "session_id": self.session_id,
             "dataset_hash": self.dataset_hash,
             "code_hash": self.code_hash,
@@ -396,10 +551,17 @@ class RunSnapshot(Base):
 
 
 class DatasetVersion(Base):
-    """Content-addressed snapshot of an uploaded dataset file.
+    """A versioned dataset on the volume (raw upload or agent-processed).
 
-    Multiple uploads of the same content collapse onto a single hash; an
-    edited re-upload becomes a new version with `parent_hash` linking back.
+    Two flavors:
+      - kind='raw': uploaded by the user directly to the project (or
+        imported from S3). Auto-registered.
+      - kind='processed': written by an agent during prep. Declared via
+        the register-dataset skill so the platform never has to guess
+        what's a dataset vs an intermediate artifact.
+
+    Versions form a graph via `parent_id` (self FK). The lineage view
+    walks that graph to render Raw → Processed-v1, v2, ... → Models.
     """
 
     __tablename__ = "dataset_versions"
@@ -408,20 +570,93 @@ class DatasetVersion(Base):
     project_id = Column(
         String(36), ForeignKey("projects.id"), nullable=False, index=True
     )
+    # raw | processed. Defaults to 'raw' for legacy rows (the only kind
+    # that existed pre-flip).
+    kind = Column(String(20), nullable=False, default="raw", index=True)
+    # Human-readable label. For raw uploads this is the file name; for
+    # processed the agent supplies it.
+    name = Column(String(255), nullable=True)
+    # AI-generated 1-2 sentence description (mandatory for processed).
+    description = Column(Text, default="")
     hash = Column(String(64), nullable=False, index=True)
     path = Column(String(512), nullable=False)
     size_bytes = Column(Integer, default=0)
+    # Self-FK for the graph edge: which DatasetVersion was this derived
+    # from? Replaces the legacy `parent_hash` (still kept for back-compat).
+    parent_id = Column(
+        Integer, ForeignKey("dataset_versions.id"), nullable=True, index=True
+    )
     parent_hash = Column(String(64), nullable=True)
+    # The session whose agent produced this version (only populated for
+    # processed datasets).
+    source_session_id = Column(String(36), nullable=True, index=True)
+    # The experiment whose agent produced this version (only for processed).
+    source_experiment_id = Column(
+        String(36), ForeignKey("experiments.id"), nullable=True, index=True
+    )
+    # Free-form structured metadata: columns, target, splits, quality
+    # stats, etc. Replaces the per-session ProcessedDatasetMeta table
+    # going forward; old rows are backfilled by migration.
+    dataset_metadata = Column("metadata", JSON, default=dict)
     created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    parent = relationship("DatasetVersion", remote_side=[id])
 
     def to_dict(self):
         return {
             "id": self.id,
             "project_id": self.project_id,
+            "kind": self.kind or "raw",
+            "name": self.name or "",
+            "description": self.description or "",
             "hash": self.hash,
             "path": self.path,
             "size_bytes": self.size_bytes or 0,
+            "parent_id": self.parent_id,
             "parent_hash": self.parent_hash,
+            "source_session_id": self.source_session_id,
+            "source_experiment_id": self.source_experiment_id,
+            "metadata": self.dataset_metadata or {},
+            "created_at": self.created_at,
+        }
+
+
+class ExperimentDataset(Base):
+    """M2M join: which DatasetVersions feed an Experiment, and in what role.
+
+    Typical case: 1 row per experiment with role='input' pointing at the
+    processed dataset that was used. Multi-input experiments (e.g.
+    feature-store joins) get multiple rows. role='output' is reserved for
+    cases where an experiment also produces a derived dataset.
+    """
+
+    __tablename__ = "experiment_datasets"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    experiment_id = Column(
+        String(36),
+        ForeignKey("experiments.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    dataset_version_id = Column(
+        Integer,
+        ForeignKey("dataset_versions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    role = Column(String(20), nullable=False, default="input")
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    experiment = relationship("Experiment", back_populates="dataset_links")
+    dataset_version = relationship("DatasetVersion")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "experiment_id": self.experiment_id,
+            "dataset_version_id": self.dataset_version_id,
+            "role": self.role,
             "created_at": self.created_at,
         }
 
