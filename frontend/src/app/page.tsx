@@ -221,6 +221,14 @@ export default function HomePage() {
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const sseRef = useRef<EventSource | null>(null);
+  // Reconnect state — exponential backoff up to 10s, reset on successful
+  // open. Tracked outside the connectSSE closure so we can clear pending
+  // timers on session change / unmount.
+  const sseReconnectRef = useRef<{
+    sid: string | null;
+    attempts: number;
+    timer: ReturnType<typeof setTimeout> | null;
+  }>({ sid: null, attempts: 0, timer: null });
   const inputRef = useRef<MentionInputHandle | null>(null);
   const prevExperimentIdRef = useRef<string | null>(null);
   const streamingItemIdRef = useRef<string | null>(null);
@@ -293,10 +301,23 @@ export default function HomePage() {
   const connectSSE = useCallback(
     (sid: string) => {
       if (sseRef.current) sseRef.current.close();
+      // Cancel any pending reconnect timer for the previous session id —
+      // we don't want a stale backoff to fire after we've already opened
+      // a fresh connection for the new session.
+      if (sseReconnectRef.current.timer) {
+        clearTimeout(sseReconnectRef.current.timer);
+        sseReconnectRef.current.timer = null;
+      }
+      sseReconnectRef.current.sid = sid;
       const url = `${getSSEBase()}/api/sessions/${sid}/stream`;
       const source = new EventSource(url);
 
-      source.onopen = () => setSseConnected(true);
+      source.onopen = () => {
+        setSseConnected(true);
+        // Successful open clears the backoff so the next failure starts
+        // from 1s, not from wherever we left off.
+        sseReconnectRef.current.attempts = 0;
+      };
       source.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data) as SSEEvent;
@@ -765,11 +786,59 @@ export default function HomePage() {
           /* ignore parse errors */
         }
       };
-      source.onerror = () => setSseConnected(false);
+      source.onerror = () => {
+        setSseConnected(false);
+        // The browser auto-retries on transient transport errors as long
+        // as readyState stays at CONNECTING. When it transitions to
+        // CLOSED (4xx, hard disconnect, server reload, etc.) the
+        // connection is dead — we have to reopen it ourselves. Backoff:
+        // 1s, 2s, 4s, 8s, 10s cap.
+        if (source.readyState !== EventSource.CLOSED) return;
+        if (sseReconnectRef.current.timer) return; // already scheduled
+        const attempts = sseReconnectRef.current.attempts + 1;
+        const delay = Math.min(1000 * 2 ** (attempts - 1), 10000);
+        sseReconnectRef.current.attempts = attempts;
+        sseReconnectRef.current.timer = setTimeout(() => {
+          sseReconnectRef.current.timer = null;
+          // Don't reconnect if the user navigated to a different session
+          // in the interim — `connectSSE` for the new session would have
+          // already cleared the timer above, but be defensive.
+          if (sseReconnectRef.current.sid === sid) {
+            connectSSE(sid);
+          }
+        }, delay);
+      };
       sseRef.current = source;
     },
     [addItem],
   );
+
+  // Tab-visibility heartbeat: when the tab regains focus, force a reopen
+  // if the existing connection isn't OPEN. Catches the case where the
+  // browser silently closed the EventSource while the tab was hidden
+  // (Chrome will close idle connections after some time).
+  useEffect(() => {
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return;
+      const sid = sseReconnectRef.current.sid;
+      if (!sid) return;
+      const src = sseRef.current;
+      if (src && src.readyState === EventSource.OPEN) return;
+      connectSSE(sid);
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => document.removeEventListener('visibilitychange', onVisibility);
+  }, [connectSSE]);
+
+  // Clear any pending reconnect timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (sseReconnectRef.current.timer) {
+        clearTimeout(sseReconnectRef.current.timer);
+        sseReconnectRef.current.timer = null;
+      }
+    };
+  }, []);
 
   // ---------------------------------------------------------------------------
   // Reset state when active experiment changes
