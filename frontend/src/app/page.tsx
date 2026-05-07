@@ -1593,6 +1593,16 @@ export default function HomePage() {
                 )}
               </button>
               <button
+                onClick={() => {
+                  openCanvas();
+                  window.dispatchEvent(new CustomEvent('trainable:open-lineage-tab'));
+                }}
+                className="p-1.5 rounded-lg transition-colors hover:bg-violet-600/20 text-gray-400 hover:text-violet-400"
+                title="Lineage"
+              >
+                <GitBranch className="w-4 h-4" />
+              </button>
+              <button
                 onClick={() => (canvasOpen ? workspacePanelRef.current?.collapse() : openCanvas())}
                 className={`p-1.5 rounded-lg transition-colors ${
                   canvasOpen

@@ -16,7 +16,11 @@ import {
   Settings,
   Search,
   X,
+  Box,
+  FlaskConical,
+  GitBranch,
 } from 'lucide-react';
+import Link from 'next/link';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
 import type { Experiment, Project, SandboxConfig } from '@/lib/types';
@@ -703,6 +707,45 @@ export default function Sidebar() {
 
       {sidebarOpen && (
         <div className="px-2 pb-1.5 space-y-1.5">
+          {/* Top-of-tree quick nav: Lineage / Models / Experiments. Lives
+              above the project list so the user can pop into the global
+              views without first picking a project. */}
+          <div className="space-y-0.5 pb-1.5 border-b border-white/[0.05]">
+            {activeProjectId ? (
+              <Link
+                href={`/projects/${activeProjectId}/lineage`}
+                className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-100 hover:bg-white/[0.04] transition-colors"
+                title="Project data lineage graph"
+              >
+                <GitBranch className="w-3.5 h-3.5 text-violet-400" />
+                Lineage
+              </Link>
+            ) : (
+              <span
+                className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-gray-600 cursor-not-allowed"
+                title="Select a project first to view its lineage"
+              >
+                <GitBranch className="w-3.5 h-3.5 text-gray-700" />
+                Lineage
+              </span>
+            )}
+            <Link
+              href="/experiments"
+              className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-100 hover:bg-white/[0.04] transition-colors"
+              title="Experiments list"
+            >
+              <FlaskConical className="w-3.5 h-3.5 text-amber-400" />
+              Experiments
+            </Link>
+            <Link
+              href="/models"
+              className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-100 hover:bg-white/[0.04] transition-colors"
+              title="Registered models"
+            >
+              <Box className="w-3.5 h-3.5 text-blue-400" />
+              Models
+            </Link>
+          </div>
           <div className="relative">
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-600" />
             <input
