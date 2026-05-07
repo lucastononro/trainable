@@ -30,7 +30,10 @@ class Credentials:
     """
 
     mode: AuthMode
-    token: str = ""
+    # repr=False so the secret never lands in tracebacks, logger.exception
+    # output, or accidental f-strings. Use `creds.token` explicitly when the
+    # value is actually needed.
+    token: str = field(default="", repr=False)
     transport: str = ""
     auth_file: str = ""
     extra: dict = field(default_factory=dict)
