@@ -2,7 +2,7 @@
 
 import logging
 
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -21,6 +21,19 @@ if not settings.database_url.startswith("sqlite"):
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+# SQLite doesn't enforce FK constraints unless PRAGMA foreign_keys=ON is set
+# per connection. Without this, ON DELETE CASCADE is silently a no-op,
+# leaving orphan rows after parent deletes (and breaking our tests). Postgres
+# enforces FKs unconditionally so this listener is a SQLite-only concern.
+if settings.database_url.startswith("sqlite"):
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_fk_pragma(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
 
 
 class Base(DeclarativeBase):
@@ -144,6 +157,47 @@ def _run_migrations(connection):
             )
             connection.execute(text("DELETE FROM experiments WHERE project_id IS NULL"))
             logger.info("[DB] Wiped %d experiments", orphans)
+
+    # ------------------------------------------------------------------
+    # FK upgrade: usage_events.session_id ON DELETE CASCADE.
+    # The original FK was created without a delete action, so deleting a
+    # session that has any usage_events rows fails with FK violation —
+    # which makes "delete chat" in the UI fail for any session that
+    # produced LLM/sandbox events. The model now declares CASCADE so
+    # fresh DBs are fine; this block migrates pre-existing Postgres DBs.
+    # SQLite doesn't support DROP/ADD CONSTRAINT in-place; we skip it
+    # because tests recreate the schema each run via create_all.
+    # ------------------------------------------------------------------
+    if connection.dialect.name == "postgresql" and insp.has_table("usage_events"):
+        try:
+            rule = connection.execute(
+                text(
+                    "SELECT confdeltype FROM pg_constraint "
+                    "WHERE conname = 'usage_events_session_id_fkey'"
+                )
+            ).scalar()
+            # confdeltype: 'a'=NO ACTION, 'r'=RESTRICT, 'c'=CASCADE,
+            # 'n'=SET NULL, 'd'=SET DEFAULT. Migrate anything that's not CASCADE.
+            if rule and rule != "c":
+                connection.execute(
+                    text(
+                        "ALTER TABLE usage_events "
+                        "DROP CONSTRAINT usage_events_session_id_fkey"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE usage_events "
+                        "ADD CONSTRAINT usage_events_session_id_fkey "
+                        "FOREIGN KEY (session_id) REFERENCES sessions(id) "
+                        "ON DELETE CASCADE"
+                    )
+                )
+                logger.info(
+                    "[DB] Migrated usage_events.session_id FK to ON DELETE CASCADE"
+                )
+        except Exception as e:
+            logger.warning("[DB] usage_events FK migration skipped: %s", e)
 
     # ------------------------------------------------------------------
     # Indexes on hot FK columns. `CREATE INDEX IF NOT EXISTS` is supported
