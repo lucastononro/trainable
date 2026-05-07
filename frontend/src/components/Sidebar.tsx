@@ -20,6 +20,7 @@ import {
   FlaskConical,
 } from 'lucide-react';
 import Link from 'next/link';
+import { useRouter, usePathname } from 'next/navigation';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
 import type { Experiment, Project, SandboxConfig } from '@/lib/types';
@@ -359,6 +360,8 @@ export default function Sidebar() {
     sidebarOpen,
     setSidebarOpen,
   } = useApp();
+  const router = useRouter();
+  const pathname = usePathname();
   const [creating, setCreating] = useState(false);
   const [pendingRenameProjectId, setPendingRenameProjectId] = useState<string | null>(null);
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set());
@@ -761,9 +764,10 @@ export default function Sidebar() {
                       key={exp.id}
                       exp={exp}
                       isActive={exp.id === activeExperimentId}
-                      onClick={() =>
-                        setActiveExperiment(exp.id, exp.session_id ?? exp.latest_session_id)
-                      }
+                      onClick={() => {
+                        setActiveExperiment(exp.id, exp.session_id ?? exp.latest_session_id);
+                        if (pathname !== '/') router.push('/');
+                      }}
                       onRename={(name) => handleRenameExperiment(exp.id, name)}
                       onDelete={(e) => handleDeleteExperiment(exp.id, e)}
                       onDragStart={(e) => handleDragStart(e, exp.id)}

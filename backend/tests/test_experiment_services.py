@@ -410,3 +410,59 @@ async def test_experiment_lineage_walks_parent_chain():
     g = await build_experiment_lineage(exp["id"])
     raw_node = next((n for n in g["nodes"] if n["id"] == f"dataset:{raw['id']}"), None)
     assert raw_node is not None, "Raw ancestor should be in the experiment subgraph"
+
+
+@pytest.mark.asyncio
+async def test_register_dataset_auto_links_single_raw():
+    """When parent_dataset_id is omitted but the project has exactly
+    one raw upload, register-dataset should auto-link to it so the
+    lineage graph isn't orphaned."""
+    pid, sid = await _seed_project_session()
+    raw = await record_upload(
+        project_id=pid,
+        path=f"/projects/{pid}/datasets/iris.csv",
+        content=b"a,b\n1,2\n",
+        name="iris.csv",
+    )
+    exp = await create_experiment_declared(session_id=sid, name="exp", hypothesis="t")
+    out = await register_dataset_declared(
+        experiment_id=exp["id"],
+        path="/sessions/x/data/train.parquet",
+        name="train",
+        description="d",
+        content_hash="z" * 64,
+        size_bytes=10,
+        # parent_dataset_id deliberately omitted
+    )
+    assert out["parent_id"] == raw["id"], (
+        "Expected auto-link to the only raw dataset in the project"
+    )
+
+
+@pytest.mark.asyncio
+async def test_register_dataset_no_auto_link_with_multiple_raws():
+    """With 2+ raw uploads, the auto-link is intentionally silent —
+    require explicit parent_dataset_id."""
+    pid, sid = await _seed_project_session()
+    await record_upload(
+        project_id=pid,
+        path=f"/projects/{pid}/datasets/a.csv",
+        content=b"a",
+        name="a.csv",
+    )
+    await record_upload(
+        project_id=pid,
+        path=f"/projects/{pid}/datasets/b.csv",
+        content=b"b",
+        name="b.csv",
+    )
+    exp = await create_experiment_declared(session_id=sid, name="exp", hypothesis="t")
+    out = await register_dataset_declared(
+        experiment_id=exp["id"],
+        path="/sessions/x/data/train.parquet",
+        name="train",
+        description="d",
+        content_hash="q" * 64,
+        size_bytes=10,
+    )
+    assert out["parent_id"] is None

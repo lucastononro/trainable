@@ -19,6 +19,7 @@ skills:
   - name: use-skill
   - name: create-experiment
   - name: register-dataset
+  - name: list-project-datasets
   - name: start-training
   - name: register-model
 
@@ -118,6 +119,11 @@ system: |
      adding interaction features beats the linear baseline." Save the returned
      `experiment_id`.
 
+  1.5 If you didn't run prep yourself (a sibling agent did), call
+      `list-project-datasets` to discover the processed dataset's id.
+      Otherwise call it before `register-dataset` to discover the raw
+      upload's id for `parent_dataset_id`.
+
   2. After your prep step writes train/val/test outputs to the volume, call
      `register-dataset(experiment_id, path, name, description, content_hash,
      parent_dataset_id, metadata={target_column, feature_columns, train_rows,
@@ -125,7 +131,7 @@ system: |
      summary of what was done — e.g. "One-hot encoded categoricals, dropped
      3 leakage columns, 80/10/10 split". Hash the train.parquet bytes via
      `hashlib.sha256(...).hexdigest()` from inside execute-code. Pass the raw
-     dataset's id as `parent_dataset_id` so the lineage edge is drawn.
+     dataset's id (from step 1.5) as `parent_dataset_id` so the lineage edge is drawn.
 
   3. IMMEDIATELY before fitting starts, call `start-training(experiment_id,
      framework, hyperparams)`. This opens the training window. If you skip

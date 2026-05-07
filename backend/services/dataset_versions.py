@@ -123,6 +123,32 @@ async def register_dataset_declared(
         if not exp:
             raise ValueError(f"Experiment {experiment_id} not found")
 
+        # Auto-link single-raw fallback. When the agent forgets parent_dataset_id
+        # but the project has exactly one raw DatasetVersion, attach to that one
+        # so the lineage graph still connects raw → processed. Multi-raw projects
+        # require explicit declaration to avoid silently picking the wrong source.
+        if parent_dataset_id is None and role == "input":
+            raw_rows = (
+                (
+                    await db.execute(
+                        select(DatasetVersion).where(
+                            DatasetVersion.project_id == exp.project_id,
+                            DatasetVersion.kind == "raw",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if len(raw_rows) == 1:
+                parent_dataset_id = raw_rows[0].id
+                logger.info(
+                    "[register-dataset] auto-linked parent_dataset_id=%s "
+                    "(single raw upload in project %s)",
+                    parent_dataset_id,
+                    exp.project_id,
+                )
+
         # If we have a hash already (from the agent or a hashed-on-write
         # producer), dedupe across the project. Otherwise the caller has
         # to supply size_bytes + a hash; we don't read the volume here to

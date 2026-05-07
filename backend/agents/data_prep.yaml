@@ -16,6 +16,7 @@ skills:
   - name: list-session-agents
   - name: create-experiment
   - name: register-dataset
+  - name: list-project-datasets
 
 subagents:
   - eda
@@ -72,7 +73,11 @@ system: |
      `create-experiment(name, hypothesis)` first. The hypothesis names the
      prep approach — e.g. "Drop leakage columns and bin numerics."
 
-  2. After writing prep outputs to the volume, call `register-dataset` for
+  2. BEFORE registering anything, call `list-project-datasets` so you know
+     what raw uploads exist. You will pass one of these IDs as
+     `parent_dataset_id` in step 3 below.
+
+  3. After writing prep outputs to the volume, call `register-dataset` for
      EACH processed split that downstream training would use (typically
      just the train.parquet, since val/test are derived). Pass:
      - `experiment_id`: the active experiment.
@@ -83,9 +88,10 @@ system: |
      - `content_hash`: SHA-256 hex of the file. Compute via
        `hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()` from
        inside execute-code.
-     - `parent_dataset_id`: the raw dataset's `dataset_version_id`. Find it
-       via the project's dataset list or the `## Project files` section
-       below.
+     - `parent_dataset_id`: the raw dataset's `dataset_version_id` from the
+       `list-project-datasets` call above (step 2). This is required so
+       the lineage edge is drawn — without it, the processed dataset shows
+       up as an orphan node.
      - `metadata`: dict with `target_column`, `feature_columns`,
        `train_rows`, `val_rows`, `test_rows`, `quality_stats`. Same shape
        as your existing metadata.json.

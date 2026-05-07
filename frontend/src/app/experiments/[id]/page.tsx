@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
+  ArrowLeft,
   ArrowRight,
   Box,
   Database,
@@ -120,6 +121,13 @@ export default function ExperimentDetailPage() {
       <Sidebar />
       <div className="flex-1 flex flex-col min-w-0">
         <header className="flex items-center gap-3 px-4 py-2.5 border-b border-surface-border shrink-0 bg-surface">
+          <button
+            onClick={() => router.push('/experiments')}
+            className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-white/[0.06] transition-colors"
+            title="Back to experiments"
+          >
+            <ArrowLeft className="w-4 h-4" />
+          </button>
           <FlaskConical className="w-4 h-4 text-amber-400" />
           <h1 className="text-sm font-semibold text-white truncate">
             {detail?.name ?? 'Experiment'}

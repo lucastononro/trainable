@@ -12,6 +12,17 @@ Tells the platform: "this file on the volume is the canonical input for
 this experiment's training step." Without this call, the dataset will
 not appear in the lineage graph and downstream tools cannot reference it.
 
+## Workflow
+
+1. Call `list-project-datasets` to discover what raw uploads + processed
+   datasets already exist in this project.
+2. Pick the appropriate `parent_dataset_id`:
+   - If you're processing a single raw upload, link to its id.
+   - If you're deriving from another processed dataset (rare), link to that.
+   - If genuinely producing a fresh dataset (e.g. synthetic data with no
+     prior source), pass `parent_dataset_id=null` explicitly.
+3. Call `register-dataset` with the parent set.
+
 ## Inputs
 
 - `experiment_id` (required): from `create-experiment`.
@@ -26,7 +37,7 @@ not appear in the lineage graph and downstream tools cannot reference it.
   ```
 - `size_bytes` (optional but encouraged): file size for the metadata panel.
 - `role` (optional, default `"input"`): `"input"` (this dataset feeds the experiment's model) or `"output"` (the experiment produced this dataset, e.g. a feature store derivative).
-- `parent_dataset_id` (optional but strongly preferred): the `dataset_version_id` of the source you derived from (the raw upload, or a previous processed version). Without this the lineage graph won't connect raw → processed.
+- `parent_dataset_id` (REQUIRED unless this is your project's first dataset): the `dataset_version_id` of the source you derived from. Call **`list-project-datasets`** first to find the right raw upload to link. Without this, the lineage canvas shows your processed dataset as an orphan node and downstream tools can't trace it back to the raw upload.
 - `metadata` (optional): structured dict — `{columns, target_column, feature_columns, train_rows, val_rows, test_rows, quality_stats}`. Goes into the dataset's metadata panel so the user can inspect it without re-querying.
 
 ## Returns
