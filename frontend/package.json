@@ -11,6 +11,8 @@
     "format:check": "prettier --check 'src/**/*.{ts,tsx,css}'"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^3.0.0",
+    "@xyflow/react": "^12.10.2",
     "lucide-react": "^0.447.0",
     "next": "^14.2.35",
     "react": "^18.3.1",

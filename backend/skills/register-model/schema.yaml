@@ -1,0 +1,29 @@
+type: object
+properties:
+  experiment_id:
+    type: string
+    description: ID returned by create-experiment.
+  path:
+    type: string
+    description: Volume path to the saved model artifact.
+  framework:
+    type: string
+    description: ML framework (xgboost, lightgbm, sklearn, pytorch, tensorflow, huggingface, onnx, other).
+  metrics:
+    type: object
+    description: 'Test metrics dict (e.g. {"accuracy": 0.91, "f1": 0.88}).'
+  description:
+    type: string
+    description: 1-2 sentence summary of what makes this model unique.
+  hyperparams:
+    type: object
+    description: Final hyperparams used (overrides what was passed to start-training, if any).
+  name:
+    type: string
+    description: Override the model name (defaults to the experiment's name).
+required:
+  - experiment_id
+  - path
+  - framework
+  - metrics
+  - description

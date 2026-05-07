@@ -33,10 +33,23 @@ export interface CreateProjectResponse {
 export interface Experiment {
   id: string;
   project_id: string;
+  /** Agent-declared lifecycle parent (post schema-flip). Nullable for
+   *  legacy 1:1 rows where the session pointed at the experiment. */
+  session_id?: string | null;
   name: string;
   description: string;
+  /** 1-3 sentence statement of what this experiment tests. AI-written. */
+  hypothesis?: string;
+  /** Lifecycle state — created | prepping | training | trained |
+   *  failed | abandoned. Defaults to created on new agent-declared rows. */
+  state?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
   dataset_ref: string;
   instructions: string;
+  tags?: string[];
+  pinned?: boolean;
+  archived?: boolean;
   created_at: string;
   updated_at: string;
   latest_session_id: string | null;
@@ -305,4 +318,200 @@ export interface SkillCatalogEntry {
   when_to_use: string;
   version: string;
   files: number;
+}
+
+export interface RegisteredModel {
+  id: string;
+  project_id: string;
+  name: string;
+  version: number;
+  source_session_id: string;
+  artifact_uri: string;
+  artifact_size_bytes: number;
+  metrics_summary: Record<string, number>;
+  framework: string | null;
+  status: string;
+  created_at: string;
+}
+
+export interface DeploymentRow {
+  id: string;
+  model_id: string;
+  endpoint_url: string | null;
+  status: string;
+  error: string | null;
+  modal_app: string | null;
+  modal_function: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunSnapshotRow {
+  id: number;
+  session_id: string;
+  dataset_hash: string | null;
+  code_hash: string | null;
+  hyperparams: Record<string, unknown>;
+  env_lockfile_size: number;
+  manifest_uri: string | null;
+  created_at: string;
+}
+
+export interface DatasetVersionRow {
+  id: number;
+  project_id: string;
+  hash: string;
+  path: string;
+  size_bytes: number;
+  parent_hash: string | null;
+  created_at: string;
+}
+
+export interface CompareResponse {
+  sessions: Array<{
+    id: string;
+    experiment_id?: string;
+    experiment_name?: string;
+    state?: string;
+    model?: string | null;
+    created_at?: string;
+    missing: boolean;
+  }>;
+  metrics: Record<
+    string,
+    Array<{
+      session_id: string;
+      points: Array<{ step: number; value: number; stage: string }>;
+    }>
+  >;
+  feature_overlap?: {
+    common: string[];
+    per_session: Record<string, string[]>;
+  };
+  totals: Record<
+    string,
+    {
+      cost_usd: number;
+      input_tokens: number;
+      output_tokens: number;
+      sandbox_seconds: number;
+    }
+  >;
+}
+
+// ---------------------------------------------------------------------------
+// Lineage graph + agent-declared experiment surfaces
+// ---------------------------------------------------------------------------
+
+export type LineageNodeType = 'dataset' | 'experiment' | 'model';
+
+export interface LineageNodeBase {
+  id: string;
+  type: LineageNodeType;
+  name: string;
+  description?: string;
+  created_at?: string;
+}
+
+export interface LineageDatasetNode extends LineageNodeBase {
+  type: 'dataset';
+  kind: 'raw' | 'processed';
+  path: string;
+  size_bytes: number;
+  hash: string;
+  source_session_id: string | null;
+  source_experiment_id: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface LineageExperimentNode extends LineageNodeBase {
+  type: 'experiment';
+  experiment_id: string;
+  session_id: string | null;
+  hypothesis: string;
+  state: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface LineageModelNode extends LineageNodeBase {
+  type: 'model';
+  model_id: string;
+  experiment_id: string | null;
+  framework: string;
+  metrics_summary: Record<string, number>;
+  hyperparams: Record<string, unknown>;
+  version: number;
+}
+
+export type LineageNode = LineageDatasetNode | LineageExperimentNode | LineageModelNode;
+
+export interface LineageEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: 'derives_from' | 'feeds' | 'produces';
+}
+
+export interface LineageGraph {
+  nodes: LineageNode[];
+  edges: LineageEdge[];
+}
+
+// Project-level dataset detail (with kind/description/parent_id from the
+// agent-declared schema flip).
+export interface DatasetVersionDetail {
+  id: number;
+  project_id: string;
+  kind: 'raw' | 'processed';
+  name: string;
+  description: string;
+  hash: string;
+  path: string;
+  size_bytes: number;
+  parent_id: number | null;
+  parent_hash: string | null;
+  source_session_id: string | null;
+  source_experiment_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+// Sidebar tree row for the new Project → Session → Experiment hierarchy.
+export interface SessionRow {
+  id: string;
+  project_id: string | null;
+  experiment_id: string | null;
+  state: string;
+  model: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Standalone experiment detail page payload — the experiment row plus its
+// linked datasets (with role), the registered model, and the snapshot.
+export interface ExperimentFullDetail {
+  id: string;
+  project_id: string;
+  session_id: string | null;
+  name: string;
+  description: string;
+  hypothesis: string;
+  state: string;
+  started_at: string | null;
+  completed_at: string | null;
+  dataset_ref: string;
+  instructions: string;
+  tags: string[];
+  pinned: boolean;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  datasets: Array<DatasetVersionDetail & { role: string }>;
+  model: RegisteredModel | null;
+  snapshot: RunSnapshotRow | null;
+  /** Sessions attached to this experiment — both the canonical
+   *  Experiment.session_id (new schema) and any legacy
+   *  Session.experiment_id children, deduped by id. */
+  sessions: Session[];
 }

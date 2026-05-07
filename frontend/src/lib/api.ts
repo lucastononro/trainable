@@ -19,6 +19,15 @@ import type {
   AbortResponse,
   UsageSummary,
   SkillCatalogEntry,
+  RegisteredModel,
+  DeploymentRow,
+  RunSnapshotRow,
+  DatasetVersionRow,
+  CompareResponse,
+  LineageGraph,
+  DatasetVersionDetail,
+  SessionRow,
+  ExperimentFullDetail,
 } from './types';
 
 const API_BASE = '/api';
@@ -80,17 +89,90 @@ export const api = {
     }>(`/projects/${id}/files`),
 
   // Experiments
-  listExperiments: (projectId?: string) =>
-    fetchJSON<Experiment[]>(projectId ? `/experiments?project_id=${projectId}` : '/experiments'),
+  listExperiments: (params?: {
+    projectId?: string;
+    q?: string;
+    tag?: string;
+    pinned?: boolean;
+    archived?: boolean;
+  }) => {
+    const qs = new URLSearchParams();
+    if (params?.projectId) qs.set('project_id', params.projectId);
+    if (params?.q) qs.set('q', params.q);
+    if (params?.tag) qs.set('tag', params.tag);
+    if (params?.pinned !== undefined) qs.set('pinned', String(params.pinned));
+    if (params?.archived !== undefined) qs.set('archived', String(params.archived));
+    const suffix = qs.toString() ? `?${qs.toString()}` : '';
+    return fetchJSON<Experiment[]>(`/experiments${suffix}`);
+  },
 
   updateExperiment: (
     id: string,
-    patch: { name?: string; description?: string; project_id?: string; instructions?: string },
+    patch: {
+      name?: string;
+      description?: string;
+      project_id?: string;
+      instructions?: string;
+      tags?: string[];
+      pinned?: boolean;
+      archived?: boolean;
+    },
   ) =>
     fetchJSON<Experiment>(`/experiments/${id}`, {
       method: 'PATCH',
       body: JSON.stringify(patch),
     }),
+
+  // Model registry
+  listProjectModels: (projectId: string) =>
+    fetchJSON<RegisteredModel[]>(`/projects/${projectId}/models`),
+  promoteSession: (sessionId: string, name?: string) =>
+    fetchJSON<RegisteredModel>(`/sessions/${sessionId}/promote`, {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  canPromote: (sessionId: string) =>
+    fetchJSON<{ available: boolean; path?: string; size_bytes?: number }>(
+      `/sessions/${sessionId}/promote/check`,
+    ),
+  deployModel: (modelId: string) =>
+    fetchJSON<DeploymentRow>(`/models/${modelId}/deploy`, { method: 'POST' }),
+  modelDeployments: (modelId: string) =>
+    fetchJSON<DeploymentRow[]>(`/models/${modelId}/deployments`),
+
+  // Snapshots
+  takeSnapshot: (sessionId: string) =>
+    fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`, { method: 'POST' }),
+  getSnapshot: (sessionId: string) => fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`),
+
+  // Compare
+  compareSessions: (sessionIds: string[]) =>
+    fetchJSON<CompareResponse>(`/compare?sessions=${sessionIds.join(',')}`),
+
+  // Dataset versions
+  projectDatasetVersions: (projectId: string) =>
+    fetchJSON<DatasetVersionRow[]>(`/projects/${projectId}/dataset-versions`),
+
+  // Lineage graph (project / session / experiment scopes)
+  projectLineage: (projectId: string) => fetchJSON<LineageGraph>(`/projects/${projectId}/lineage`),
+  sessionLineage: (sessionId: string) => fetchJSON<LineageGraph>(`/sessions/${sessionId}/lineage`),
+  experimentLineage: (experimentId: string) =>
+    fetchJSON<LineageGraph>(`/experiments/${experimentId}/lineage`),
+
+  // Project-level dataset browser + metadata side panel
+  listProjectDatasets: (projectId: string) =>
+    fetchJSON<DatasetVersionDetail[]>(`/projects/${projectId}/datasets`),
+  getDataset: (datasetId: number) => fetchJSON<DatasetVersionDetail>(`/datasets/${datasetId}`),
+
+  // Sidebar tree (Project → Session → Experiment)
+  listProjectSessions: (projectId: string) =>
+    fetchJSON<SessionRow[]>(`/projects/${projectId}/sessions`),
+  listSessionExperiments: (sessionId: string) =>
+    fetchJSON<ExperimentDetail[]>(`/sessions/${sessionId}/experiments`),
+
+  // Standalone experiment detail (datasets + model + snapshot rolled up)
+  getExperimentDetail: (experimentId: string) =>
+    fetchJSON<ExperimentFullDetail>(`/experiments/${experimentId}/detail`),
 
   createExperiment: async (data: FormData): Promise<CreateExperimentResponse> => {
     const res = await fetch(`${API_BASE}/experiments`, {

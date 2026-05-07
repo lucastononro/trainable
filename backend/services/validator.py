@@ -251,11 +251,95 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
 
 
 async def validate_train_output(session_id: str, experiment_id: str) -> dict:
-    """Validate train stage outputs."""
+    """Validate train stage outputs.
+
+    With the agent-declared-experiments redesign, we check the lifecycle
+    state machine first — an experiment that called `start-training` but
+    never called `register-model` is the canonical "training abandoned"
+    signal. We still keep the legacy file-existence checks below as
+    soft warnings to surface lingering issues, but they no longer drive
+    the pass/fail decision.
+    """
+    from models import Experiment, ExperimentState, RegisteredModel
+
     await reload_volume_async()
 
     results = {"errors": [], "warnings": [], "passed": [], "stage": "train"}
 
+    # ------------------------------------------------------------------
+    # 0. Lifecycle gate — checks every agent-declared experiment in the
+    # session. With multi-experiment sessions, we evaluate each in turn.
+    # ------------------------------------------------------------------
+    try:
+        async with async_session() as db:
+            exps = (
+                (
+                    await db.execute(
+                        select(Experiment).where(Experiment.session_id == session_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # Cross-check that each `trained` experiment actually has a
+            # RegisteredModel row.
+            for exp in exps:
+                state = exp.state or ExperimentState.CREATED.value
+                if state == ExperimentState.TRAINING.value:
+                    results["errors"].append(
+                        f"CRITICAL: Experiment '{exp.name}' ({exp.id}) called "
+                        "start-training but never called register-model. "
+                        "Either call register-model with the trained "
+                        "artifact path, or this run will be auto-flagged "
+                        "as abandoned after the post-stage cleanup."
+                    )
+                elif state == ExperimentState.CREATED.value:
+                    # Created-but-never-trained is fine if the agent only
+                    # ran prep; only flag when there's a clear training
+                    # intent (the chat is the trainer agent, so we treat
+                    # any created experiment without a model as a miss).
+                    results["warnings"].append(
+                        f"Experiment '{exp.name}' ({exp.id}) was created "
+                        "but no training run was started. Call "
+                        "start-training + register-model, or close the "
+                        "experiment intentionally."
+                    )
+                elif state == ExperimentState.TRAINED.value:
+                    model = (
+                        await db.execute(
+                            select(RegisteredModel).where(
+                                RegisteredModel.experiment_id == exp.id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if model:
+                        results["passed"].append(
+                            f"Model registered for experiment "
+                            f"'{exp.name}': {model.name} v{model.version}"
+                        )
+                    else:
+                        results["errors"].append(
+                            f"Experiment '{exp.name}' marked TRAINED but "
+                            "no RegisteredModel row exists. The "
+                            "register-model handler may have failed mid-flight."
+                        )
+                elif state == ExperimentState.ABANDONED.value:
+                    results["warnings"].append(
+                        f"Experiment '{exp.name}' was abandoned mid-training."
+                    )
+                elif state == ExperimentState.FAILED.value:
+                    results["warnings"].append(
+                        f"Experiment '{exp.name}' is marked FAILED."
+                    )
+            # No declared experiments at all → defer to the legacy
+            # file-walk below, which produces its own pass/fail
+            # signals based on artifact presence.
+    except Exception as e:
+        logger.warning("Lifecycle validation skipped: %s", e)
+
+    # ------------------------------------------------------------------
+    # 1. Legacy file-existence checks — soft warnings now, not errors.
+    # ------------------------------------------------------------------
     # 1. Check model file exists — look up the most recent "model" artifact.
     #    Falls back to a workspace scan for any model extension.
     model_path: str | None = None

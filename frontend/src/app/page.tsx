@@ -3,7 +3,16 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
-import { SSEEvent, FileTreeNode, MetricPoint, ChartConfig, Mention, Draft } from '@/lib/types';
+import {
+  SSEEvent,
+  FileTreeNode,
+  MetricPoint,
+  ChartConfig,
+  Mention,
+  Draft,
+  LineageGraph as LineageGraphPayload,
+  LineageNode,
+} from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
 import {
   ImperativePanelHandle,
@@ -48,6 +57,7 @@ import {
   ListChecks,
   FileSearch,
   Wrench,
+  GitBranch,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Notebook from '@/components/notebook/Notebook';
@@ -68,6 +78,8 @@ const ZERO_USAGE: UsageTotals = {
   compute_runs: 0,
 };
 import MetricsTab from '@/components/MetricsTab';
+import LineageGraph from '@/components/lineage/LineageGraph';
+import NodeMetadataPanel from '@/components/lineage/NodeMetadataPanel';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
 import ProjectDataModal from '@/components/ProjectDataModal';
 import MentionInput, { MentionInputHandle } from '@/components/MentionInput';
@@ -728,6 +740,26 @@ export default function HomePage() {
               }
               break;
             }
+            // Lineage events from agent-declared experiment lifecycle.
+            // Notify the WorkspaceSidebar so its lineage tab refetches; on
+            // experiment_created we also auto-open the canvas + lineage tab
+            // so the user sees the new experiment land in real time.
+            case 'experiment_created':
+            case 'dataset_registered':
+            case 'model_registered':
+            case 'experiment_state_changed':
+            case 'experiments_abandoned': {
+              window.dispatchEvent(
+                new CustomEvent('trainable:lineage-changed', {
+                  detail: { kind: event.type },
+                }),
+              );
+              if (event.type === 'experiment_created') {
+                openCanvas();
+                window.dispatchEvent(new CustomEvent('trainable:open-lineage-tab'));
+              }
+              break;
+            }
           }
         } catch {
           /* ignore parse errors */
@@ -1133,7 +1165,7 @@ export default function HomePage() {
         }
 
         connectSSE(sid);
-      } catch (e) {
+      } catch {
         if (!cancelled) addItem({ type: 'error', content: 'Failed to load experiment' });
       } finally {
         if (!cancelled) setLoading(false);
@@ -2220,11 +2252,12 @@ interface OpenTab {
   label: string;
   icon: typeof FileText;
   iconColor: string;
-  type: 'file' | 'report' | 'metrics';
+  type: 'file' | 'report' | 'metrics' | 'lineage';
 }
 
 const REPORT_TAB_ID = '__report__';
 const METRICS_TAB_ID = '__metrics__';
+const LINEAGE_TAB_ID = '__lineage__';
 
 function WorkspaceSidebar({
   experimentId,
@@ -2253,6 +2286,12 @@ function WorkspaceSidebar({
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
+  // Lineage tab state — fetched lazily once the user opens the tab (or
+  // an SSE event auto-opens it). Re-fetched on lineage-changed events.
+  const [lineageData, setLineageData] = useState<LineageGraphPayload | null>(null);
+  const [lineageLoading, setLineageLoading] = useState(false);
+  const [lineageNode, setLineageNode] = useState<LineageNode | null>(null);
+
   // Listen for "open metrics tab" event from header button
   useEffect(() => {
     const handler = () => {
@@ -2274,6 +2313,58 @@ function WorkspaceSidebar({
     window.addEventListener('trainable:open-metrics-tab', handler);
     return () => window.removeEventListener('trainable:open-metrics-tab', handler);
   }, []);
+
+  // Listen for "open lineage tab" event (dispatched on experiment_created
+  // SSE) so the user lands on the new graph without manually clicking.
+  useEffect(() => {
+    const handler = () => {
+      setOpenTabs((prev) => {
+        if (prev.find((t) => t.id === LINEAGE_TAB_ID)) return prev;
+        return [
+          ...prev,
+          {
+            id: LINEAGE_TAB_ID,
+            label: 'Lineage',
+            icon: GitBranch,
+            iconColor: 'text-violet-400',
+            type: 'lineage',
+          },
+        ];
+      });
+      setActiveTabId(LINEAGE_TAB_ID);
+    };
+    window.addEventListener('trainable:open-lineage-tab', handler);
+    return () => window.removeEventListener('trainable:open-lineage-tab', handler);
+  }, []);
+
+  // Refetch lineage on session change or when an SSE event signals a
+  // change. Keeping the fetch keyed on sessionId so reopening a closed
+  // canvas doesn't double-fire.
+  const refetchLineage = useCallback(async () => {
+    if (!sessionId) {
+      setLineageData(null);
+      return;
+    }
+    setLineageLoading(true);
+    try {
+      const g = await api.sessionLineage(sessionId);
+      setLineageData(g);
+    } catch (err) {
+      console.warn('lineage fetch failed', err);
+    } finally {
+      setLineageLoading(false);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    refetchLineage();
+  }, [refetchLineage]);
+
+  useEffect(() => {
+    const handler = () => refetchLineage();
+    window.addEventListener('trainable:lineage-changed', handler);
+    return () => window.removeEventListener('trainable:lineage-changed', handler);
+  }, [refetchLineage]);
 
   // Auto-expand directories when tree updates
   useEffect(() => {
@@ -2554,6 +2645,18 @@ function WorkspaceSidebar({
                 chartConfig={chartConfig}
                 state={sessionState}
               />
+            </div>
+          ) : activeTab?.type === 'lineage' ? (
+            <div className="h-full overflow-hidden relative bg-white">
+              <LineageGraph
+                data={lineageData}
+                loading={lineageLoading}
+                height="100%"
+                onNodeClick={(n) => setLineageNode(n)}
+              />
+              {lineageNode ? (
+                <NodeMetadataPanel node={lineageNode} onClose={() => setLineageNode(null)} />
+              ) : null}
             </div>
           ) : (
             <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-black">

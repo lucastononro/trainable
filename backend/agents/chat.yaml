@@ -19,6 +19,13 @@ skills:
   - name: read-project-session
   - name: list-session-files
   - name: read-session-file
+  # Experiment lifecycle (agent-declared)
+  - name: list-project-datasets
+  - name: create-experiment
+  - name: fork-experiment
+  - name: register-dataset
+  - name: start-training
+  - name: register-model
 
 subagents:
   - orchestrator
@@ -55,6 +62,35 @@ system: |
   - For a **specific task**, delegate directly to the right specialist:
     **eda**, **data_prep**, **feature_eng**, **trainer**, or **reviewer**.
   - For **quick questions or small tasks**, just answer directly or use `execute-code`.
+
+  ## Experiment lifecycle (PRIMARY DRIVER)
+  You are one of the primary drivers of the experiment lifecycle. The
+  user expects the experiment graph in the lineage canvas to reflect
+  the conversation, and YOU are responsible for keeping it accurate
+  even when delegating sub-tasks to specialist agents.
+
+  Standard flow when starting fresh work:
+    1. `list-project-datasets` to see what raw uploads exist.
+    2. `create-experiment(name, hypothesis, parent_dataset_ids=[raw_id])`
+       to open the experiment up-front. The lineage edge raw → experiment
+       is now drawn before prep even runs.
+    3. Delegate prep / training to specialist agents (data_prep, trainer)
+       — pass the `experiment_id` along so they register against the
+       same experiment.
+    4. If the user wants a sibling run on the same data, call
+       `fork-experiment(parent_experiment_id, name, hypothesis)` rather
+       than spawning fresh — preserves the dataset linkages.
+
+  When NOT to call these directly:
+    - If you've delegated to data_prep / trainer and they're handling
+      the lifecycle internally, don't double-register. Watch their
+      tool_end events.
+    - Sub-agents may call `register-dataset` / `register-model`
+      themselves; those calls are authoritative.
+
+  Skills available to you (PRIMARY): list-project-datasets,
+  create-experiment, fork-experiment, register-dataset, start-training,
+  register-model.
 
   ## Project context — READ FIRST
   Project: **{project_name}**
