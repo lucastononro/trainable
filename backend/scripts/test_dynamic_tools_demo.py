@@ -237,9 +237,7 @@ async def _drive(provider_id: str, model: str) -> int:
                 break
 
             for call in pending:
-                print(
-                    f"  -> tool_call:      {CYAN(call['name'])} args={call['args']}"
-                )
+                print(f"  -> tool_call:      {CYAN(call['name'])} args={call['args']}")
                 handler = handlers.get(call["name"])
                 if handler is None:
                     result_text = f"Unknown tool: {call['name']}"
@@ -268,10 +266,7 @@ async def _drive(provider_id: str, model: str) -> int:
     print(f"  active tools at end: {sorted(active)}")
     print(f"  final reply:         {GREEN(repr(final_text))}")
 
-    ok = (
-        "say-magic" in active
-        and "XYZZY-2718" in final_text
-    )
+    ok = "say-magic" in active and "XYZZY-2718" in final_text
     if ok:
         print(BOLD(GREEN("\nPASS: dynamic activation worked end-to-end.\n")))
         return 0

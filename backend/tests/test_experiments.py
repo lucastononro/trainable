@@ -220,10 +220,14 @@ async def test_delete_experiment_with_usage_events(
     # The cascade should have wiped the usage_events row alongside the session.
     async with async_session() as db:
         remaining = (
-            await db.execute(
-                select(UsageEvent).where(UsageEvent.session_id == sess_id)
+            (
+                await db.execute(
+                    select(UsageEvent).where(UsageEvent.session_id == sess_id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert remaining == [], "usage_events not cascaded on session delete"
 
 
