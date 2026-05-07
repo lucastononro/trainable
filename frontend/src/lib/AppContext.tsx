@@ -15,6 +15,9 @@ interface AppState {
   models: ModelInfo[];
   /** Per-agent model overrides, persisted in localStorage. */
   agentModels: Record<string, string>;
+  /** True while the active session is running. Drives sidebar spinner. */
+  isRunning: boolean;
+  setIsRunning: (running: boolean) => void;
   refreshProjects: () => Promise<Project[]>;
   setActiveProject: (id: string | null) => void;
   setActiveExperiment: (id: string | null, sessionId?: string | null) => void;
@@ -46,6 +49,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [hydrated, setHydrated] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [agentModels, setAgentModelsState] = useState<Record<string, string>>({});
+  const [isRunning, setIsRunning] = useState(false);
 
   // Hydrate client-only state from localStorage on mount (prevents SSR mismatch)
   useEffect(() => {
@@ -190,6 +194,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         sidebarOpen,
         models,
         agentModels,
+        isRunning,
+        setIsRunning,
         refreshProjects,
         setActiveProject,
         setActiveExperiment,

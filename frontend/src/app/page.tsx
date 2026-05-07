@@ -156,6 +156,8 @@ export default function HomePage() {
     refreshExperiments,
     refreshProjects,
     agentModels,
+    isRunning,
+    setIsRunning,
   } = useApp();
   // Keep a ref for stable access inside async handlers/closures
   const agentModelsRef = useRef<Record<string, string>>({});
@@ -166,7 +168,6 @@ export default function HomePage() {
   // Chat / session state
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
   const [draft, setDraft] = useState<Draft>([]);
-  const [isRunning, setIsRunning] = useState(false);
   const [sessionState, setSessionState] = useState('created');
   const [loading, setLoading] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
@@ -294,6 +295,10 @@ export default function HomePage() {
                 setIsRunning(false);
                 // Clear all active agents when session finishes
                 setActiveAgents([]);
+                // Pull the now-final state into the experiments array so
+                // non-active sidebar rows reflect "done"/"failed"/"cancelled"
+                // without waiting on the user to trigger an unrelated refresh.
+                void refreshExperiments();
               }
               if (data.state.endsWith('_done')) {
                 const stageName = data.state.replace('_done', '');
