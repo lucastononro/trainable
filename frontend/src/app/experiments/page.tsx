@@ -13,18 +13,8 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import {
-  ArrowRight,
-  Box,
-  Database,
-  ExternalLink,
-  FlaskConical,
-  Folder,
-  Loader2,
-  RefreshCw,
-} from 'lucide-react';
+import { ArrowRight, Box, Database, FlaskConical, Folder, Loader2, RefreshCw } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
@@ -64,7 +54,7 @@ function formatTopMetric(metrics: Record<string, number> | undefined): string {
 
 export default function ExperimentsListPage() {
   const router = useRouter();
-  const { projects, setActiveProject, setActiveExperiment } = useApp();
+  const { projects } = useApp();
   const [rows, setRows] = useState<RowDetail[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -158,10 +148,8 @@ export default function ExperimentsListPage() {
     return ordered;
   })();
 
-  const openInChat = (r: RowDetail) => {
-    setActiveProject(r.project_id);
-    setActiveExperiment(r.id, r.session_id);
-    router.push('/');
+  const openLineage = (r: RowDetail) => {
+    router.push(`/experiments/${r.id}`);
   };
 
   return (
@@ -245,7 +233,7 @@ export default function ExperimentsListPage() {
                       {projectRows.map((r) => (
                         <tr
                           key={r.id}
-                          onClick={() => openInChat(r)}
+                          onClick={() => openLineage(r)}
                           className="border-b border-surface-border last:border-b-0 hover:bg-white/[0.04] cursor-pointer text-gray-300"
                         >
                           <td className="px-4 py-2.5">
@@ -277,18 +265,8 @@ export default function ExperimentsListPage() {
                           <td className="px-4 py-2.5 text-right text-[11px] text-gray-500">
                             {r.created_at ? new Date(r.created_at).toLocaleString() : ''}
                           </td>
-                          <td className="px-2 py-2.5">
-                            <div className="flex items-center justify-end gap-1">
-                              <Link
-                                href={`/experiments/${r.id}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="p-1 rounded text-gray-500 hover:text-gray-200 hover:bg-white/[0.06]"
-                                title="Open detail page"
-                              >
-                                <ExternalLink className="w-3.5 h-3.5" />
-                              </Link>
-                              <ArrowRight className="w-3.5 h-3.5 text-gray-600" />
-                            </div>
+                          <td className="px-2 py-2.5 text-right">
+                            <ArrowRight className="w-3.5 h-3.5 text-gray-600 inline" />
                           </td>
                         </tr>
                       ))}

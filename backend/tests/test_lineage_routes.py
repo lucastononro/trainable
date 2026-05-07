@@ -88,6 +88,29 @@ async def test_experiment_detail_endpoint(client):
 
 
 @pytest.mark.asyncio
+async def test_experiment_detail_includes_sessions(client):
+    """Detail payload must surface every session linked to the experiment
+    (canonical Experiment.session_id + legacy Session.experiment_id),
+    deduped."""
+    pid, sid = await _seed()
+    exp = await create_experiment_declared(session_id=sid, name="exp", hypothesis="hyp")
+
+    # Add a legacy-direction session pointing at the same experiment so
+    # we exercise the dedupe-by-id path.
+    legacy_sid = str(uuid.uuid4())
+    async with async_session() as db:
+        db.add(SessionModel(id=legacy_sid, project_id=pid, experiment_id=exp["id"]))
+        await db.commit()
+
+    resp = await client.get(f"/api/experiments/{exp['id']}/detail")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert "sessions" in body
+    ids = sorted(s["id"] for s in body["sessions"])
+    assert sorted({sid, legacy_sid}) == ids
+
+
+@pytest.mark.asyncio
 async def test_dataset_detail_404(client):
     resp = await client.get("/api/datasets/999999")
     assert resp.status_code == 404

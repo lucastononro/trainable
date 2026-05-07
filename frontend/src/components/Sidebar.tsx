@@ -18,7 +18,6 @@ import {
   X,
   Box,
   FlaskConical,
-  GitBranch,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useApp } from '@/lib/AppContext';
@@ -659,28 +658,10 @@ export default function Sidebar() {
 
       {sidebarOpen && (
         <div className="px-2 pb-1.5 space-y-1.5">
-          {/* Top-of-tree quick nav: Lineage / Models / Experiments. Lives
-              above the project list so the user can pop into the global
-              views without first picking a project. */}
+          {/* Top-of-tree quick nav: Experiments / Models. Lineage was
+              removed — clicking an experiment row in /experiments now
+              opens its lineage view, so the dedicated nav was redundant. */}
           <div className="space-y-0.5 pb-1.5 border-b border-white/[0.05]">
-            {activeProjectId ? (
-              <Link
-                href={`/projects/${activeProjectId}/lineage`}
-                className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-100 hover:bg-white/[0.04] transition-colors"
-                title="Project data lineage graph"
-              >
-                <GitBranch className="w-3.5 h-3.5 text-violet-400" />
-                Lineage
-              </Link>
-            ) : (
-              <span
-                className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-gray-600 cursor-not-allowed"
-                title="Select a project first to view its lineage"
-              >
-                <GitBranch className="w-3.5 h-3.5 text-gray-700" />
-                Lineage
-              </span>
-            )}
             <Link
               href="/experiments"
               className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs text-gray-400 hover:text-gray-100 hover:bg-white/[0.04] transition-colors"

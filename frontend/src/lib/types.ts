@@ -510,4 +510,8 @@ export interface ExperimentFullDetail {
   datasets: Array<DatasetVersionDetail & { role: string }>;
   model: RegisteredModel | null;
   snapshot: RunSnapshotRow | null;
+  /** Sessions attached to this experiment — both the canonical
+   *  Experiment.session_id (new schema) and any legacy
+   *  Session.experiment_id children, deduped by id. */
+  sessions: Session[];
 }
