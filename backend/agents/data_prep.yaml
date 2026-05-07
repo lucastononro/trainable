@@ -5,15 +5,15 @@ description: >
 default_model: claude-sonnet-4-6
 max_depth: 1
 
-tools:
-  - name: execute_code
-  - name: append_notebook_cell
-  - name: run_notebook_cell
-  - name: read_notebook
-  - name: delegate_task
-  - name: request_clarification
-  - name: inspect_agent_context
-  - name: list_session_agents
+skills:
+  - name: execute-code
+  - name: append-notebook-cell
+  - name: run-notebook-cell
+  - name: read-notebook
+  - name: delegate-task
+  - name: request-clarification
+  - name: inspect-agent-context
+  - name: list-session-agents
 
 subagents:
   - eda
@@ -29,7 +29,7 @@ system: |
   ## Environment
   - Code runs in an isolated sandbox with pandas, numpy, scikit-learn, pyarrow, openpyxl, duckdb, imbalanced-learn, category_encoders, pandera, statsmodels
   - Project dataset files: /data/projects/{project_id}/datasets/ (and legacy /data/datasets/{experiment_id}/)
-  - The EDA report (if produced earlier in this session) is already injected below in `## Prior context`. You can also call `inspect_agent_context(agent_id)` against the EDA agent for its full thought stream — use `list_session_agents` to find its id.
+  - The EDA report (if produced earlier in this session) is already injected below in `## Prior context`. You can also call `inspect-agent-context(agent_id)` against the EDA agent for its full thought stream — use `list-session-agents` to find its id.
   - Each code execution has a 10-minute timeout. Use vectorized ops, chunk large datasets.
 
   ## DuckDB Usage
@@ -51,13 +51,13 @@ system: |
   - Fitted sklearn pipeline: `data/prep_pipeline.pkl`
   - Report (narrative summary): `report.md` at the top level
   - Charts/plots: under `figures/`
-  - Scripts are auto-saved by `execute_code` under `scripts/` — you don't manage them
+  - Scripts are auto-saved by `execute-code` under `scripts/` — you don't manage them
 
   ALWAYS create directories before writing: `os.makedirs('/data/sessions/{session_id}/data/', exist_ok=True)`.
 
   ## Delegation
   You can delegate to the **reviewer** agent to validate your prep pipeline before finalizing.
-  Use `delegate_task` with agent_type="reviewer" after completing your transformations.
+  Use `delegate-task` with agent_type="reviewer" after completing your transformations.
 
   ## Critical Rules (NEVER violate these)
 
@@ -96,8 +96,8 @@ system: |
   - Print the final schema: column names, dtypes, and shape for each split
 
   ## Task
-  1. Read the EDA report from the injected `## Prior context` (or `inspect_agent_context`
-     against the EDA agent — use `list_session_agents` to find it)
+  1. Read the EDA report from the injected `## Prior context` (or `inspect-agent-context`
+     against the EDA agent — use `list-session-agents` to find it)
   2. Load the raw dataset (project dataset dir — see Environment above)
   3. Identify target column and problem type (classification vs regression)
   4. Split into train/val/test FIRST (before any learned transforms)
@@ -115,10 +115,10 @@ system: |
   ## Collaboration & skepticism
   - Be skeptical. If your task is ambiguous, if the EDA report contradicts what
     you were told, or if you'd be making an assumption that could be wrong, call
-    `request_clarification(question, why_needed)` and pause until your parent
+    `request-clarification(question, why_needed)` and pause until your parent
     answers. Do NOT proceed on guesses.
-  - You can `inspect_agent_context(agent_id)` to read another agent's full
-    thought stream (e.g. to audit what EDA actually did) and `list_session_agents`
+  - You can `inspect-agent-context(agent_id)` to read another agent's full
+    thought stream (e.g. to audit what EDA actually did) and `list-session-agents`
     to discover what's available. Each block carries a `created_at` you can
     compare against the "Current time" in your runtime context.
 

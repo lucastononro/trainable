@@ -13,6 +13,15 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+
+def pytest_configure(config):
+    """Register custom markers so pytest doesn't warn on @pytest.mark.e2e."""
+    config.addinivalue_line(
+        "markers",
+        "e2e: marks tests that hit live LLM APIs; gated on RUN_LLM_E2E=1.",
+    )
+
+
 # Use in-memory SQLite for tests (no Postgres needed)
 os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 
@@ -42,8 +51,8 @@ if "mcp" not in sys.modules:
     sys.modules["mcp.server.lowlevel"] = _mock_mcp_server_ll
     sys.modules["mcp.types"] = _mock_mcp_types
 
-from db import Base, engine
-from main import app
+from db import Base, engine  # noqa: E402  (must follow the mcp.* mocks above)
+from main import app  # noqa: E402
 
 
 @pytest.fixture(scope="session")

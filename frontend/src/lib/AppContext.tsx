@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
 import { api } from './api';
-import type { Experiment, ModelInfo, Project } from './types';
+import type { Experiment, ModelInfo, Project, ProviderInfo } from './types';
 
 interface AppState {
   projects: Project[];
@@ -10,18 +10,20 @@ interface AppState {
   experiments: Experiment[];
   activeExperimentId: string | null;
   activeSessionId: string | null;
-  selectedModel: string;
   sidebarOpen: boolean;
   models: ModelInfo[];
+  providers: ProviderInfo[];
   /** Per-agent model overrides, persisted in localStorage. */
   agentModels: Record<string, string>;
+  /** Per-agent thinking-level overrides ("off"|"low"|"medium"|"high"). */
+  agentThinking: Record<string, string>;
   refreshProjects: () => Promise<Project[]>;
   setActiveProject: (id: string | null) => void;
   setActiveExperiment: (id: string | null, sessionId?: string | null) => void;
   refreshExperiments: () => Promise<Experiment[]>;
   setSidebarOpen: (open: boolean) => void;
-  setSelectedModel: (model: string) => void;
   setAgentModel: (agentType: string, modelId: string | null) => void;
+  setAgentThinking: (agentType: string, level: string | null) => void;
 }
 
 const AppContext = createContext<AppState | null>(null);
@@ -40,12 +42,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [activeExperimentId, setActiveExperimentId] = useState<string | null>(null);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
-  const [selectedModel, setSelectedModel] = useState('claude-sonnet-4-6');
   // Always start false for SSR — hydrate from localStorage in effect below
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
   const [models, setModels] = useState<ModelInfo[]>([]);
+  const [providers, setProviders] = useState<ProviderInfo[]>([]);
   const [agentModels, setAgentModelsState] = useState<Record<string, string>>({});
+  const [agentThinking, setAgentThinkingState] = useState<Record<string, string>>({});
 
   // Hydrate client-only state from localStorage on mount (prevents SSR mismatch)
   useEffect(() => {
@@ -56,6 +59,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       try {
         const parsed = JSON.parse(storedAgentModels);
         if (parsed && typeof parsed === 'object') setAgentModelsState(parsed);
+      } catch {
+        // ignore corrupt value
+      }
+    }
+    const storedAgentThinking = localStorage.getItem('trainable:agent-thinking');
+    if (storedAgentThinking) {
+      try {
+        const parsed = JSON.parse(storedAgentThinking);
+        if (parsed && typeof parsed === 'object') setAgentThinkingState(parsed);
       } catch {
         // ignore corrupt value
       }
@@ -77,12 +89,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  // Persist agent model overrides to localStorage (after hydration)
+  const setAgentThinking = useCallback((agentType: string, level: string | null) => {
+    setAgentThinkingState((prev) => {
+      const next = { ...prev };
+      if (level) {
+        next[agentType] = level;
+      } else {
+        delete next[agentType];
+      }
+      return next;
+    });
+  }, []);
+
+  // Persist agent model + thinking overrides to localStorage (after hydration)
   useEffect(() => {
     if (hydrated && typeof window !== 'undefined') {
       localStorage.setItem('trainable:agent-models', JSON.stringify(agentModels));
     }
   }, [agentModels, hydrated]);
+
+  useEffect(() => {
+    if (hydrated && typeof window !== 'undefined') {
+      localStorage.setItem('trainable:agent-thinking', JSON.stringify(agentThinking));
+    }
+  }, [agentThinking, hydrated]);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -118,6 +148,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     api
       .listModels()
       .then(setModels)
+      .catch(() => {});
+    api
+      .listProviders()
+      .then(setProviders)
       .catch(() => {});
   }, [refreshProjects, refreshExperiments]);
 
@@ -186,17 +220,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
         experiments,
         activeExperimentId,
         activeSessionId,
-        selectedModel,
         sidebarOpen,
         models,
+        providers,
         agentModels,
+        agentThinking,
         refreshProjects,
         setActiveProject,
         setActiveExperiment,
         refreshExperiments,
         setSidebarOpen,
-        setSelectedModel,
         setAgentModel,
+        setAgentThinking,
       }}
     >
       {children}

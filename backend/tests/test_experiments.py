@@ -165,6 +165,73 @@ async def test_delete_experiment_not_found(client):
 
 
 @pytest.mark.asyncio
+async def test_delete_experiment_with_usage_events(
+    client, sample_csv, default_project_id
+):
+    """Regression: deleting a chat (experiment) whose sessions emitted
+    usage_events used to fail on a FK violation against usage_events.session_id.
+    The FK now CASCADEs, and the Session.usage_events relationship cleans up."""
+    from sqlalchemy import select
+
+    from db import async_session
+    from models import Session as SessionModel, UsageEvent
+
+    with open(sample_csv, "rb") as f:
+        create_resp = await client.post(
+            "/api/experiments",
+            data={
+                "project_id": default_project_id,
+                "name": "Errored Chat",
+                "description": "",
+                "instructions": "",
+            },
+            files={"files": ("data.csv", f, "text/csv")},
+        )
+    exp_id = create_resp.json()["id"]
+
+    # Find the auto-created session and seed a usage_events row, mirroring
+    # what services.usage.record_llm_usage writes after an LLM call.
+    async with async_session() as db:
+        sess = (
+            await db.execute(
+                select(SessionModel).where(SessionModel.experiment_id == exp_id)
+            )
+        ).scalar_one()
+        db.add(
+            UsageEvent(
+                session_id=sess.id,
+                project_id=default_project_id,
+                kind="llm",
+                provider="openai",
+                model="gpt-4o-mini",
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=0.01,
+                is_error=True,
+            )
+        )
+        await db.commit()
+        sess_id = sess.id
+
+    resp = await client.delete(f"/api/experiments/{exp_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] is True
+
+    # The cascade should have wiped the usage_events row alongside the session.
+    async with async_session() as db:
+        remaining = (
+            (
+                await db.execute(
+                    select(UsageEvent).where(UsageEvent.session_id == sess_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert remaining == [], "usage_events not cascaded on session delete"
+
+
+@pytest.mark.asyncio
 async def test_create_experiment_from_s3_invalid_path(client, default_project_id):
     resp = await client.post(
         "/api/experiments/from-s3",

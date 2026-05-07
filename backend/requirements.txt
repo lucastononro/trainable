@@ -5,6 +5,12 @@ asyncpg>=0.30.0
 aiosqlite==0.20.0
 anthropic>=0.42.0
 claude-agent-sdk>=0.1.51
+openai>=1.54.0
+google-genai>=0.3.0
+# litellm: >=1.83.7 covers CVE-2026-42208 (SQL injection in proxy auth,
+# CVSS 9.3, actively exploited). The malicious 1.82.7 / 1.82.8 from the
+# March 2026 PyPI supply-chain compromise are also quarantined upstream.
+litellm>=1.83.7
 modal>=1.2.0
 python-multipart==0.0.12
 python-dotenv==1.0.1

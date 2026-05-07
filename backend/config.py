@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     modal_volume_name: str = "trainable-data"
 
     # -- Claude / Agent --
-    claude_model: str = "claude-opus-4-6"
+    claude_model: str = "claude-sonnet-4-6"
     claude_code_oauth_token: str = ""
     agent_max_turns: int = 30
     agent_timeout_seconds: int = Field(

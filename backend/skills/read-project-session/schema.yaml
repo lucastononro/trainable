@@ -1,0 +1,21 @@
+type: object
+properties:
+  session_id:
+    type: string
+    description: The session_id to read. Must belong to the same project.
+  tail:
+    type: integer
+    description: Return the most recent N messages (default 30 when nothing else is
+      set).
+  offset:
+    type: integer
+    description: Starting offset for pagination when `tail` is not set.
+  limit:
+    type: integer
+    description: Max number of messages to return (used with offset).
+  include_tool_events:
+    type: boolean
+    description: If true, also include tool_start/tool_end/subagent events. Default
+      false.
+required:
+- session_id

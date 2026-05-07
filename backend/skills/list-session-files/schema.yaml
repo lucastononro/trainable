@@ -1,0 +1,14 @@
+type: object
+properties:
+  session_id:
+    type: string
+    description: The session_id to list files from. Must belong to the same project.
+  glob:
+    type: string
+    description: Optional fnmatch pattern to filter by relative path (e.g. "*.md",
+      "figures/*.png", "data/*.parquet").
+  limit:
+    type: integer
+    description: Max number of files to return (default/maximum 200).
+required:
+- session_id

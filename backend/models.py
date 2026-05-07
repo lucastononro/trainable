@@ -129,6 +129,15 @@ class Session(Base):
         uselist=False,
         cascade="all, delete-orphan",
     )
+    # passive_deletes lets the DB-level ON DELETE CASCADE handle the cleanup
+    # without SQLAlchemy first SELECTing every usage_events row into memory
+    # — relevant because long-running chats can accumulate hundreds of them.
+    usage_events = relationship(
+        "UsageEvent",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+    )
 
     def to_dict(self):
         return {
@@ -285,7 +294,10 @@ class UsageEvent(Base):
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     session_id = Column(
-        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+        String(36),
+        ForeignKey("sessions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     project_id = Column(String(36), index=True, nullable=True)
     kind = Column(String(20), nullable=False, default="llm")
@@ -307,6 +319,8 @@ class UsageEvent(Base):
     is_error = Column(Boolean, default=False)
     extra = Column(JSON, default=dict)
     created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    session = relationship("Session", back_populates="usage_events")
 
     def to_dict(self):
         return {

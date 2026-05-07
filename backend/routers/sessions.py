@@ -128,6 +128,7 @@ async def send_message(
         user_content = body.content
         selected_model = body.model or session.model
         agent_models = body.agent_models or {}
+        agent_thinking = body.agent_thinking or {}
         mentions_payload = mention_dicts or None
 
         # Per-project sandbox config (GPU, timeout per profile)
@@ -153,6 +154,7 @@ async def send_message(
                     sandbox_config=sandbox_config,
                     model=selected_model,
                     agent_models=agent_models,
+                    agent_thinking=agent_thinking,
                     mentions=mentions_payload,
                 )
                 async with async_session() as fresh_db:

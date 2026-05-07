@@ -1,0 +1,17 @@
+type: object
+properties:
+  question:
+    type: string
+    description: The clarifying question to ask the parent agent
+  why_needed:
+    type: string
+    description: Brief explanation of what you'd do differently depending on the answer
+  urgency:
+    type: string
+    enum:
+    - low
+    - normal
+    - high
+    description: Hint to the UI about how prominently to surface this if escalated
+required:
+- question

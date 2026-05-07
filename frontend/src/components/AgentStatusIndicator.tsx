@@ -283,7 +283,55 @@ function StatusView({
 /* ---------- CONFIG VIEW (per-agent model overrides) ---------- */
 
 function ConfigView({ onBack }: { onBack: () => void }) {
-  const { models, agentModels, setAgentModel } = useApp();
+  const { models, providers, agentModels, setAgentModel, agentThinking, setAgentThinking } =
+    useApp();
+
+  // Per-agent provider filter — UI-only, not persisted: it just narrows the
+  // model dropdown. The actual model id is what gets sent to the backend.
+  const [providerFilter, setProviderFilter] = useState<Record<string, string>>({});
+
+  // Map provider id → availability info from /api/providers. A provider is
+  // selectable only when both flags are true:
+  //   - `available`        — API key / OAuth present
+  //   - `runner_supported` — agent runner can actually dispatch to it
+  // The frontend tooltips explain whichever is missing first.
+  type Avail = { available: boolean; missing_env: string[]; runner_supported: boolean };
+  const availabilityById: Record<string, Avail> = {};
+  for (const p of providers) {
+    availabilityById[p.id] = {
+      available: p.available,
+      missing_env: p.missing_env,
+      runner_supported: p.runner_supported,
+    };
+  }
+  // Fallback when /api/providers hasn't responded yet — be permissive so
+  // we don't gray out everything on load.
+  const getAvail = (pid: string): Avail =>
+    availabilityById[pid] ?? { available: true, missing_env: [], runner_supported: true };
+  const isProviderUsable = (pid: string) => {
+    const a = getAvail(pid);
+    return a.available && a.runner_supported;
+  };
+  /** Reason a provider is unusable, or null if it's fine. */
+  const unusableReason = (pid: string): string | null => {
+    const a = getAvail(pid);
+    if (!a.available) {
+      return `${pid} is not configured — set ${a.missing_env.join(' or ')} in .env`;
+    }
+    if (!a.runner_supported) {
+      return `${pid} not yet supported by the agent runner — only Claude works today`;
+    }
+    return null;
+  };
+
+  // Stable list of providers seen in the catalog. Sorted with usable ones
+  // first so the picker leads with what the user can actually run.
+  const allProviders = Array.from(new Set(models.map((m) => m.provider).filter(Boolean)));
+  allProviders.sort((a, b) => {
+    const av = isProviderUsable(a) ? 0 : 1;
+    const bv = isProviderUsable(b) ? 0 : 1;
+    return av - bv || a.localeCompare(b);
+  });
 
   return (
     <>
@@ -299,14 +347,22 @@ function ConfigView({ onBack }: { onBack: () => void }) {
           Agent Models
         </span>
       </div>
-      <div className="py-1 max-h-[400px] overflow-y-auto">
+      <div className="py-1 max-h-[480px] overflow-y-auto">
         <div className="px-3 py-2 text-[10px] text-gray-600 border-b border-white/[0.04]">
-          Override the default model each agent uses. Persisted locally.
+          Override the default model, provider, and reasoning level per agent. Persisted locally.
         </div>
         {ALL_AGENT_TYPES.map((agentType) => {
           const am = getAgentMeta(agentType);
           const ac = getColors(am.color);
           const override = agentModels[agentType];
+          const selectedModel = models.find((m) => m.id === override);
+          const activeProvider = providerFilter[agentType] || selectedModel?.provider || '';
+          const filteredModels = activeProvider
+            ? models.filter((m) => m.provider === activeProvider)
+            : models;
+          const thinkingSpec = selectedModel?.thinking;
+          const thinkingValue = agentThinking[agentType] ?? thinkingSpec?.default ?? '';
+          const overrideReason = selectedModel ? unusableReason(selectedModel.provider) : null;
           return (
             <div
               key={agentType}
@@ -316,11 +372,19 @@ function ConfigView({ onBack }: { onBack: () => void }) {
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className={`text-xs font-medium ${ac.text}`}>{am.label}</span>
-                  {override && (
+                  {(override || agentThinking[agentType]) && (
                     <button
-                      onClick={() => setAgentModel(agentType, null)}
+                      onClick={() => {
+                        setAgentModel(agentType, null);
+                        setAgentThinking(agentType, null);
+                        setProviderFilter((prev) => {
+                          const next = { ...prev };
+                          delete next[agentType];
+                          return next;
+                        });
+                      }}
                       className="p-0.5 rounded hover:bg-white/[0.08] text-gray-600 hover:text-gray-400"
-                      title="Reset to default"
+                      title="Reset to defaults"
                     >
                       <RotateCcw className="w-3 h-3" />
                     </button>
@@ -329,18 +393,103 @@ function ConfigView({ onBack }: { onBack: () => void }) {
                 {am.description && (
                   <p className="text-[10px] text-gray-600 mt-0.5 leading-tight">{am.description}</p>
                 )}
-                <select
-                  value={override || ''}
-                  onChange={(e) => setAgentModel(agentType, e.target.value || null)}
-                  className="mt-1.5 w-full text-[11px] bg-white/[0.04] border border-white/[0.08] rounded-md px-2 py-1 text-gray-300 focus:outline-none focus:border-white/[0.15] cursor-pointer"
-                >
-                  <option value="">Default</option>
-                  {models.map((m) => (
-                    <option key={m.id} value={m.id}>
-                      {m.name}
+                <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                  <select
+                    value={activeProvider}
+                    onChange={(e) => {
+                      const next = e.target.value;
+                      setProviderFilter((prev) => ({ ...prev, [agentType]: next }));
+                      // If the currently-chosen model isn't in the new provider, clear it
+                      if (next && selectedModel && selectedModel.provider !== next) {
+                        setAgentModel(agentType, null);
+                        setAgentThinking(agentType, null);
+                      }
+                    }}
+                    className="text-[11px] bg-white/[0.04] border border-white/[0.08] rounded-md px-2 py-1 text-gray-300 focus:outline-none focus:border-white/[0.15] cursor-pointer"
+                    title="Filter by provider"
+                  >
+                    <option value="">Any provider</option>
+                    {allProviders.map((p) => {
+                      const reason = unusableReason(p);
+                      const ok = !reason;
+                      const a = getAvail(p);
+                      const suffix = !a.runner_supported
+                        ? ' · runner-only Claude'
+                        : !a.available
+                          ? ' · no key'
+                          : '';
+                      return (
+                        <option key={p} value={p} disabled={!ok} title={reason ?? undefined}>
+                          {p}
+                          {suffix}
+                        </option>
+                      );
+                    })}
+                  </select>
+                  <select
+                    value={override || ''}
+                    onChange={(e) => {
+                      const nextId = e.target.value;
+                      // Refuse to select an unusable model (the option is
+                      // disabled, but be defensive).
+                      if (nextId) {
+                        const m = models.find((x) => x.id === nextId);
+                        if (m && !isProviderUsable(m.provider)) return;
+                      }
+                      setAgentModel(agentType, nextId || null);
+                      setAgentThinking(agentType, null);
+                    }}
+                    className="text-[11px] bg-white/[0.04] border border-white/[0.08] rounded-md px-2 py-1 text-gray-300 focus:outline-none focus:border-white/[0.15] cursor-pointer"
+                  >
+                    <option value="">
+                      Default{' '}
+                      {agentType === 'reviewer' ? '· Claude Haiku 4.5' : '· Claude Sonnet 4.6'}
                     </option>
-                  ))}
-                </select>
+                    {filteredModels.map((m) => {
+                      const reason = unusableReason(m.provider);
+                      const ok = !reason;
+                      const a = getAvail(m.provider);
+                      const suffix = !a.runner_supported
+                        ? ' · not yet supported'
+                        : !a.available
+                          ? ' · no key'
+                          : '';
+                      return (
+                        <option key={m.id} value={m.id} disabled={!ok} title={reason ?? undefined}>
+                          {m.name}
+                          {m.experimental ? ' (preview)' : ''}
+                          {suffix}
+                        </option>
+                      );
+                    })}
+                  </select>
+                </div>
+                {overrideReason && (
+                  <p
+                    className="mt-1 text-[10px] text-amber-400/80 leading-tight"
+                    title={overrideReason}
+                  >
+                    {overrideReason}
+                  </p>
+                )}
+                {thinkingSpec && thinkingSpec.levels.length > 0 && (
+                  <div className="mt-1.5 flex items-center gap-1.5">
+                    <span className="text-[10px] text-gray-500 shrink-0">Thinking</span>
+                    <select
+                      value={thinkingValue}
+                      onChange={(e) => setAgentThinking(agentType, e.target.value || null)}
+                      className="flex-1 text-[11px] bg-white/[0.04] border border-white/[0.08] rounded-md px-2 py-1 text-gray-300 focus:outline-none focus:border-white/[0.15] cursor-pointer"
+                      title="Reasoning effort"
+                    >
+                      {thinkingSpec.levels.map((lvl) => (
+                        <option key={lvl} value={lvl}>
+                          {lvl}
+                          {lvl === thinkingSpec.default ? ' · default' : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             </div>
           );

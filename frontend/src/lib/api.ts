@@ -13,10 +13,12 @@ import type {
   Artifact,
   MetricPoint,
   ModelInfo,
+  ProviderInfo,
   FileTreeNode,
   DeleteResponse,
   AbortResponse,
   UsageSummary,
+  SkillCatalogEntry,
 } from './types';
 
 const API_BASE = '/api';
@@ -125,6 +127,7 @@ export const api = {
     runAgent: boolean = false,
     agentModels?: Record<string, string>,
     mentions?: Mention[],
+    agentThinking?: Record<string, string>,
   ) =>
     fetchJSON<Message>(`/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -133,6 +136,9 @@ export const api = {
         run_agent: runAgent,
         ...(agentModels && Object.keys(agentModels).length > 0
           ? { agent_models: agentModels }
+          : {}),
+        ...(agentThinking && Object.keys(agentThinking).length > 0
+          ? { agent_thinking: agentThinking }
           : {}),
         ...(mentions && mentions.length > 0 ? { mentions } : {}),
       }),
@@ -162,6 +168,15 @@ export const api = {
 
   // Models
   listModels: () => fetchJSON<ModelInfo[]>('/models'),
+  listProviders: () => fetchJSON<ProviderInfo[]>('/providers'),
+
+  // Usage / cost
+  usageSummary: () => fetchJSON<UsageSummary>(`/usage/summary`),
+  projectUsage: (projectId: string) => fetchJSON<UsageSummary>(`/projects/${projectId}/usage`),
+  sessionUsage: (sessionId: string) => fetchJSON<UsageSummary>(`/sessions/${sessionId}/usage`),
+
+  // Skills catalog
+  listSkills: () => fetchJSON<SkillCatalogEntry[]>(`/skills`),
 
   // Quick create (no files required) — requires a project
   quickCreate: async (
@@ -202,9 +217,4 @@ export const api = {
     if (!res.ok) throw new Error(`Attach failed: ${res.status}`);
     return res.json();
   },
-
-  // Usage / cost
-  usageSummary: () => fetchJSON<UsageSummary>(`/usage/summary`),
-  projectUsage: (projectId: string) => fetchJSON<UsageSummary>(`/projects/${projectId}/usage`),
-  sessionUsage: (sessionId: string) => fetchJSON<UsageSummary>(`/sessions/${sessionId}/usage`),
 };
