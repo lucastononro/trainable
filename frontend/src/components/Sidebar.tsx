@@ -186,6 +186,7 @@ const EditableName = ({
 function ExperimentRow({
   exp,
   isActive,
+  liveRunning,
   onClick,
   onRename,
   onDelete,
@@ -194,12 +195,17 @@ function ExperimentRow({
 }: {
   exp: Experiment;
   isActive: boolean;
+  liveRunning: boolean;
   onClick: () => void;
   onRename: (newName: string) => void;
   onDelete: (e: React.MouseEvent) => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragEnd: () => void;
 }) {
+  // Drive the spinner from local `isRunning` for the active row so it lights
+  // up the moment the user submits, instead of waiting for an experiments
+  // refresh round-trip to surface the backend's `*_running` state.
+  const displayState = liveRunning ? 'chat_running' : exp.latest_state;
   const editHandle = useRef<EditableNameHandle | null>(null);
   return (
     <div
@@ -214,7 +220,7 @@ function ExperimentRow({
           : 'text-gray-400 hover:bg-white/[0.04] hover:text-gray-300'
       }`}
     >
-      <StatusIcon state={exp.latest_state} />
+      <StatusIcon state={displayState} />
       <div className="flex-1 min-w-0">
         <EditableName
           value={exp.name}
@@ -359,6 +365,7 @@ export default function Sidebar() {
     refreshProjects,
     sidebarOpen,
     setSidebarOpen,
+    isRunning,
   } = useApp();
   const router = useRouter();
   const pathname = usePathname();
@@ -850,6 +857,10 @@ export default function Sidebar() {
                           key={key}
                           exp={displayExp}
                           isActive={isActive}
+                          // Live spinner mirrors the same isActive logic so
+                          // a sibling experiment running in the same chat
+                          // still flips the bucketed row to spinning state.
+                          liveRunning={isActive && isRunning}
                           // Click → drop into the chat at the latest
                           // experiment so a fresh sibling is selected on
                           // entry. The row's NAME stays anchored.
