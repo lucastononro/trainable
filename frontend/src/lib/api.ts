@@ -139,8 +139,7 @@ export const api = {
   // Snapshots
   takeSnapshot: (sessionId: string) =>
     fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`, { method: 'POST' }),
-  getSnapshot: (sessionId: string) =>
-    fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`),
+  getSnapshot: (sessionId: string) => fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`),
 
   // Compare
   compareSessions: (sessionIds: string[]) =>

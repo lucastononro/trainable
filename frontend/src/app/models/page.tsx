@@ -92,9 +92,7 @@ export default function ModelsPage() {
 
       <main className="max-w-5xl mx-auto px-6 py-6">
         {!projectId && (
-          <div className="text-xs text-gray-500">
-            Pick a project from the sidebar first.
-          </div>
+          <div className="text-xs text-gray-500">Pick a project from the sidebar first.</div>
         )}
 
         {error && (

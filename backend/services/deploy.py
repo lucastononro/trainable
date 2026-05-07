@@ -169,8 +169,11 @@ async def _provision_endpoint(
 
     from services.volume import get_volume
 
-    app = await modal.App.lookup.aio(app_name, create_if_missing=True)
-    image = _build_serving_image()
+    # Provisioning is metadata-only in this build (see comment below); we
+    # still touch the App + image so misconfigured Modal envs surface here
+    # instead of at endpoint-call time.
+    _ = await modal.App.lookup.aio(app_name, create_if_missing=True)
+    _ = _build_serving_image()
 
     code = f"""
 import pickle

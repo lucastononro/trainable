@@ -425,7 +425,7 @@ export default function Sidebar() {
   const allTags = useMemo(() => {
     const seen = new Map<string, number>();
     for (const exp of experiments) {
-      for (const t of ((exp.tags as string[] | undefined) ?? [])) {
+      for (const t of (exp.tags as string[] | undefined) ?? []) {
         seen.set(t, (seen.get(t) ?? 0) + 1);
       }
     }

@@ -104,10 +104,10 @@ async def list_experiments(
     if archived is None:
         # By default, hide archived experiments unless explicitly requested.
         query = query.where(
-            (Experiment.archived == False) | (Experiment.archived.is_(None))
-        )  # noqa: E712
+            (Experiment.archived.is_(False)) | (Experiment.archived.is_(None))
+        )
     elif archived is True:
-        query = query.where(Experiment.archived == True)  # noqa: E712
+        query = query.where(Experiment.archived.is_(True))
     if q:
         like = f"%{q.lower()}%"
         from sqlalchemy import func, or_
