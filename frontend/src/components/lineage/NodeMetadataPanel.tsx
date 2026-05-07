@@ -65,18 +65,32 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
       </header>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {node.description ? (
-          <section>
-            <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500 mb-1">
-              Description
-            </h3>
-            <p className="text-sm text-gray-300 leading-relaxed">{node.description}</p>
-          </section>
-        ) : (
-          <section className="text-sm text-gray-500 italic">
-            No AI-generated description yet — the agent didn&apos;t supply one at registration time.
-          </section>
-        )}
+        {/* Experiments use `hypothesis` as the user-facing summary, so
+            don't show the "missing description" message when one is
+            present — the experiment section below renders the
+            hypothesis prominently. For datasets/models the description
+            is the primary surface, so we keep the empty-state message. */}
+        {(() => {
+          if (node.description) {
+            return (
+              <section>
+                <h3 className="text-xs font-medium uppercase tracking-wide text-gray-500 mb-1">
+                  Description
+                </h3>
+                <p className="text-sm text-gray-300 leading-relaxed">{node.description}</p>
+              </section>
+            );
+          }
+          if (node.type === 'experiment' && node.hypothesis) {
+            return null;
+          }
+          return (
+            <section className="text-sm text-gray-500 italic">
+              No AI-generated description yet — the agent didn&apos;t supply one at registration
+              time.
+            </section>
+          );
+        })()}
 
         {node.type === 'dataset' ? (
           <section>
@@ -117,8 +131,9 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
             </h3>
             <Row label="State" value={node.state} />
             {node.hypothesis ? <Row label="Hypothesis" value={node.hypothesis} /> : null}
-            <Row label="Started" value={node.started_at || '—'} />
-            <Row label="Completed" value={node.completed_at || '—'} />
+            {/* Started/Completed dropped — they're often empty (the
+                state itself + the Created timestamp tell the user
+                everything they need at a glance). */}
             <Row
               label="Session"
               value={

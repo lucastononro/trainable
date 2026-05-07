@@ -21,7 +21,11 @@ strategy, **create a new experiment**.
 
 - `name` (required): a short label, e.g. `"xgb_baseline"`, `"linear_with_interactions"`.
 - `hypothesis` (required, 1-3 sentences): what you're trying. The whole point of declaring this is so the user can later browse experiments and immediately understand why each one was run.
-- `description` (optional): longer notes if you need them.
+- `description` (optional): longer notes if you want to expand on the
+  hypothesis. The lineage canvas already renders `hypothesis` as the
+  experiment's primary description, so leave this empty unless you
+  have substantive extra context (failed sub-runs, cross-references,
+  follow-up tasks).
 - `parent_dataset_ids` (optional): list of `dataset_version_id` integers this experiment will derive from (e.g. the raw dataset id the user uploaded). Use this if you already know which datasets you'll be using before the prep step runs.
 
 ## Returns

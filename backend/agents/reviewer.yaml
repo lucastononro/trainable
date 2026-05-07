@@ -68,6 +68,15 @@ system: |
   - Does the registered model's `description` honestly summarize the actual
     approach (framework, key hyperparams, tuning method) and do the logged
     `metrics` match what the report claims?
+  - For each registered dataset and model, the `description` field is
+    user-facing and must contain 1-3 substantive sentences. Flag any
+    description that is empty, less than 30 characters, or generic
+    (e.g. "processed dataset", "trained model", "the model") as a
+    Critical Issue. Cite the specific dataset/model id in your report.
+  - For each registered processed dataset, `parent_dataset_id` must
+    point at the upstream raw or processed dataset. Orphaned processed
+    datasets (parent_id NULL while raw uploads exist in the same project)
+    are a Critical Issue.
   Missing or out-of-order calls leave the experiment as `abandoned` in the
   lineage canvas, so call them out explicitly in the review report.
 

@@ -83,8 +83,17 @@ system: |
      - `experiment_id`: the active experiment.
      - `path`: the volume path you wrote (e.g. `/sessions/{session_id}/data/train.parquet`).
      - `name`: a label, e.g. `"iris_train_scaled"`.
-     - `description`: 1-2 sentences on what was done. The user reads this when
-       inspecting the lineage graph node.
+     - `description`: 1-3 sentences, user-facing. The user reads this when
+       inspecting the lineage graph node. EXAMPLES:
+
+         GOOD: "Stratified 70/15/15 split on `churn`, one-hot encoded
+         the 7 categorical columns, dropped `customerID` (leakage),
+         median-imputed `MonthlyCharges` nulls. Final shape 7032×31."
+
+         BAD: "processed dataset" / "the data" / "training data v1"
+
+       If you can't articulate what's distinct, the prep pass is
+       probably redundant.
      - `content_hash`: SHA-256 hex of the file. Compute via
        `hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()` from
        inside execute-code.
