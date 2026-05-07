@@ -285,6 +285,72 @@ async def test_transition_abandoned_sweeps_training_experiments():
     assert states[e2["id"]] == ExperimentState.CREATED.value
 
 
+@pytest.mark.asyncio
+async def test_fork_experiment_inherits_dataset_links():
+    """Fork must copy parent's role='input' ExperimentDataset rows so
+    the new experiment can jump straight to training without re-running
+    prep or register-dataset."""
+    from services.experiments import fork_experiment
+    from models import ExperimentDataset
+
+    pid, sid = await _seed_project_session()
+    raw = await record_upload(
+        project_id=pid,
+        path=f"/projects/{pid}/datasets/iris.csv",
+        content=b"a,b\n1,2\n",
+        name="iris.csv",
+    )
+    parent = await create_experiment_declared(
+        session_id=sid, name="parent", hypothesis="t"
+    )
+    proc = await register_dataset_declared(
+        experiment_id=parent["id"],
+        path="/sessions/x/data/train.parquet",
+        name="train",
+        description="d",
+        content_hash="z" * 64,
+        size_bytes=10,
+        parent_dataset_id=raw["id"],
+    )
+
+    forked = await fork_experiment(
+        parent_experiment_id=parent["id"],
+        name="parent_v2",
+        hypothesis="Different hyperparams on the same prep",
+    )
+    assert forked["id"] != parent["id"]
+    assert forked["session_id"] == sid
+    assert forked["state"] == "created"
+
+    async with async_session() as db:
+        links = (
+            (
+                await db.execute(
+                    select(ExperimentDataset).where(
+                        ExperimentDataset.experiment_id == forked["id"]
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert len(links) == 1
+    assert links[0].dataset_version_id == proc["id"]
+    assert links[0].role == "input"
+
+
+@pytest.mark.asyncio
+async def test_fork_experiment_rejects_unknown_parent():
+    from services.experiments import fork_experiment
+
+    with pytest.raises(ValueError, match="not found"):
+        await fork_experiment(
+            parent_experiment_id="nonexistent",
+            name="x",
+            hypothesis="y",
+        )
+
+
 # ---------------------------------------------------------------------------
 # Lineage builders
 # ---------------------------------------------------------------------------
@@ -323,12 +389,16 @@ async def test_session_lineage_returns_subgraph():
     g = await build_session_lineage(sid)
 
     node_types = sorted({n["type"] for n in g["nodes"]})
-    assert node_types == ["dataset", "experiment", "model"]
+    # Experiment-type nodes were removed from the graph — the layout is
+    # Data → Models, with experiments implicit in the model's metadata.
+    assert node_types == ["dataset", "model"]
     assert any(n["kind"] == "raw" for n in g["nodes"] if n["type"] == "dataset")
     assert any(n["kind"] == "processed" for n in g["nodes"] if n["type"] == "dataset")
 
     edge_kinds = sorted({e["kind"] for e in g["edges"]})
-    assert edge_kinds == ["derives_from", "feeds", "produces"]
+    # `feeds` (dataset → experiment) and `produces` (experiment → model)
+    # are gone; replaced by the direct `trained_into` edge.
+    assert edge_kinds == ["derives_from", "trained_into"]
 
     # raw→processed edge exists
     assert any(

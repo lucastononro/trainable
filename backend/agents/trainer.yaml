@@ -114,10 +114,17 @@ system: |
   registry is built entirely from these calls — heuristic file detection has
   been removed.
 
-  1. BEFORE training, call `create-experiment(name, hypothesis)`. The hypothesis
-     is a 1-2 sentence statement of what you're trying — e.g. "Test whether
-     adding interaction features beats the linear baseline." Save the returned
+  1. BEFORE training, call `create-experiment(name, hypothesis,
+     parent_dataset_ids=[raw_id])`. The hypothesis is a 1-2 sentence
+     statement of what you're trying — e.g. "Test whether adding
+     interaction features beats the linear baseline." Save the returned
      `experiment_id`.
+
+     If you don't know the raw_id yet, run step 1.5 first (call
+     list-project-datasets) and pass the id from there. Skipping
+     `parent_dataset_ids` is acceptable ONLY if the experiment uses no
+     upstream data (pure synthetic / on-the-fly generation), which is
+     rare.
 
   1.5 Call `list-project-datasets` to see the dataset graph for this
       project. You'll get a list of every DatasetVersion (raw +

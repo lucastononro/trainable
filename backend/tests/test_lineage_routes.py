@@ -55,7 +55,8 @@ async def test_session_lineage_endpoint(client):
     assert resp.status_code == 200
     body = resp.json()
     types = sorted({n["type"] for n in body["nodes"]})
-    assert types == ["dataset", "experiment", "model"]
+    # Experiments are no longer rendered as nodes in the lineage graph.
+    assert types == ["dataset", "model"]
 
 
 @pytest.mark.asyncio

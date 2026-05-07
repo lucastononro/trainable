@@ -60,21 +60,6 @@ def _model_node(m: RegisteredModel) -> dict[str, Any]:
     }
 
 
-def _experiment_node(e: Experiment) -> dict[str, Any]:
-    return {
-        "id": f"experiment:{e.id}",
-        "type": "experiment",
-        "name": e.name,
-        "experiment_id": e.id,
-        "session_id": e.session_id,
-        "hypothesis": e.hypothesis or "",
-        "state": e.state or "created",
-        "started_at": e.started_at,
-        "completed_at": e.completed_at,
-        "created_at": e.created_at,
-    }
-
-
 async def _collect_dataset_chain(db, root_ids: set[int]) -> dict[int, DatasetVersion]:
     """Walk parent_id from every root toward ancestors so the graph
     includes Raw → Processed lineage even if only the leaf was requested."""
@@ -106,15 +91,9 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
         return {"nodes": [], "edges": []}
 
     async with async_session() as db:
-        experiments = (
-            (
-                await db.execute(
-                    select(Experiment).where(Experiment.id.in_(experiment_ids))
-                )
-            )
-            .scalars()
-            .all()
-        )
+        # We don't render experiment-type nodes anymore (the layout is
+        # Data → Models with the experiment implicit), so we only need
+        # the input-dataset links + the registered models.
         links = (
             (
                 await db.execute(
@@ -151,10 +130,12 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
         seen_ids.add(n["id"])
         nodes.append(n)
 
+    # Experiments are NOT rendered as nodes — the user's reference
+    # screenshot shows just data → models, with the experiment being
+    # the implicit context (each model carries experiment_id). Keeping
+    # them as nodes was visual noise.
     for dv in datasets.values():
         _add(_dataset_node(dv))
-    for e in experiments:
-        _add(_experiment_node(e))
     for m in models:
         _add(_model_node(m))
 
@@ -172,29 +153,28 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
                 }
             )
 
-    # dataset → experiment via ExperimentDataset(role='input')
+    # Direct dataset → model edges via ExperimentDataset(role='input').
+    # If experiment X has model M and input datasets D1, D2 then we emit
+    # M←D1 and M←D2. Without the experiment node in between, the graph
+    # reads as "this model came from this data."
+    inputs_per_experiment: dict[str, list[int]] = {}
     for link in links:
         if link.role != "input":
             continue
-        edges.append(
-            {
-                "id": f"e_link_{link.id}",
-                "source": f"dataset:{link.dataset_version_id}",
-                "target": f"experiment:{link.experiment_id}",
-                "kind": "feeds",
-            }
+        inputs_per_experiment.setdefault(link.experiment_id, []).append(
+            link.dataset_version_id
         )
-
-    # experiment → model
     for m in models:
-        edges.append(
-            {
-                "id": f"e_exp_to_model_{m.id}",
-                "source": f"experiment:{m.experiment_id}",
-                "target": f"model:{m.id}",
-                "kind": "produces",
-            }
-        )
+        for dv_id in inputs_per_experiment.get(m.experiment_id, []):
+            edges.append(
+                {
+                    "id": f"e_dv{dv_id}_to_model_{m.id}",
+                    "source": f"dataset:{dv_id}",
+                    "target": f"model:{m.id}",
+                    "kind": "trained_into",
+                    "experiment_id": m.experiment_id,
+                }
+            )
 
     return {"nodes": nodes, "edges": edges}
 

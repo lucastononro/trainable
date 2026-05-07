@@ -6,9 +6,12 @@
  * smooth bezier edges. Layout is computed via dagre (hierarchical layered
  * graph) so columns line up cleanly even when the graph branches.
  *
- * The node renderers (DatasetNode / ExperimentNode / ModelNode) are kept
- * lean — color, label, and a one-line subtitle — so the canvas reads
- * cleanly at the in-session 30/70 split.
+ * The node renderers (DatasetNode / ModelNode) are kept lean — color,
+ * label, and a one-line subtitle — so the canvas reads cleanly at the
+ * in-session 30/70 split. Experiment-type nodes were intentionally
+ * dropped: the layout is Data → Models with the experiment implicit
+ * (each model carries experiment_id internally), matching the
+ * reference screenshot the user supplied.
  */
 
 import { useMemo } from 'react';
@@ -27,12 +30,10 @@ import '@xyflow/react/dist/style.css';
 
 import type { LineageGraph as LineageGraphPayload, LineageNode } from '@/lib/types';
 import DatasetNode from './DatasetNode';
-import ExperimentNode from './ExperimentNode';
 import ModelNode from './ModelNode';
 
 const NODE_TYPES = {
   dataset: DatasetNode,
-  experiment: ExperimentNode,
   model: ModelNode,
 };
 

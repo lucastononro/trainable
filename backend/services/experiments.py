@@ -159,6 +159,90 @@ async def create_experiment_declared(
     return result
 
 
+async def fork_experiment(
+    *,
+    parent_experiment_id: str,
+    name: str,
+    hypothesis: str,
+    description: str = "",
+) -> dict[str, Any]:
+    """Spawn a derivative experiment that inherits the parent's input
+    datasets.
+
+    Used for "try a different model on the same prep" workflows. Copies
+    every `ExperimentDataset` row with `role='input'` from the parent
+    onto the new experiment so the agent can skip register-dataset and
+    jump straight to start-training. The parent is left untouched — its
+    state and linkages are unchanged.
+    """
+    if not name.strip():
+        raise ValueError("name is required for fork-experiment")
+    if not hypothesis.strip():
+        raise ValueError("hypothesis is required (1-3 sentences)")
+
+    async with async_session() as db:
+        parent = (
+            await db.execute(
+                select(Experiment).where(Experiment.id == parent_experiment_id)
+            )
+        ).scalar_one_or_none()
+        if not parent:
+            raise ValueError(f"Parent experiment {parent_experiment_id} not found")
+
+        eid = str(uuid.uuid4())
+        now = _now()
+        exp = Experiment(
+            id=eid,
+            project_id=parent.project_id,
+            session_id=parent.session_id,
+            name=name.strip(),
+            description=description,
+            hypothesis=hypothesis.strip(),
+            state=ExperimentState.CREATED.value,
+            dataset_ref="",
+            created_at=now,
+            updated_at=now,
+        )
+        db.add(exp)
+        await db.flush()
+
+        parent_links = (
+            (
+                await db.execute(
+                    select(ExperimentDataset).where(
+                        ExperimentDataset.experiment_id == parent_experiment_id,
+                        ExperimentDataset.role == "input",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for link in parent_links:
+            db.add(
+                ExperimentDataset(
+                    experiment_id=eid,
+                    dataset_version_id=link.dataset_version_id,
+                    role=link.role,
+                )
+            )
+
+        await db.commit()
+        await db.refresh(exp)
+        result = exp.to_dict()
+        sid = exp.session_id
+
+    if sid:
+        try:
+            await broadcaster.publish(
+                sid,
+                {"type": "experiment_created", "data": result},
+            )
+        except Exception as e:
+            logger.debug("SSE publish for experiment_created skipped: %s", e)
+    return result
+
+
 async def transition_state(
     *,
     experiment_id: str,

@@ -70,8 +70,14 @@ system: |
 
   1. If the parent agent didn't pass an `experiment_id` in your task input
      (check `## Prior context` and `## Custom instructions`), call
-     `create-experiment(name, hypothesis)` first. The hypothesis names the
-     prep approach — e.g. "Drop leakage columns and bin numerics."
+     `create-experiment(name, hypothesis, parent_dataset_ids=[raw_id])`
+     first. The hypothesis names the prep approach — e.g. "Drop leakage
+     columns and bin numerics."
+
+     CRITICAL: pass the raw upload's id from `list-project-datasets`
+     (step 2) as `parent_dataset_ids`. Without this, the lineage canvas
+     won't connect the raw → experiment edge until later — and if prep
+     fails before register-dataset, the experiment stays orphan.
 
   2. BEFORE registering anything, call `list-project-datasets` so you know
      what raw uploads exist. You will pass one of these IDs as

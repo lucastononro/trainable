@@ -759,21 +759,75 @@ export default function Sidebar() {
                   onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, project.id)}
                 >
-                  {projectExperiments.map((exp) => (
-                    <ExperimentRow
-                      key={exp.id}
-                      exp={exp}
-                      isActive={exp.id === activeExperimentId}
-                      onClick={() => {
-                        setActiveExperiment(exp.id, exp.session_id ?? exp.latest_session_id);
-                        if (pathname !== '/') router.push('/');
-                      }}
-                      onRename={(name) => handleRenameExperiment(exp.id, name)}
-                      onDelete={(e) => handleDeleteExperiment(exp.id, e)}
-                      onDragStart={(e) => handleDragStart(e, exp.id)}
-                      onDragEnd={handleDragLeave}
-                    />
-                  ))}
+                  {(() => {
+                    // Bucket experiments by session so multi-experiment
+                    // chats render as ONE sidebar row, not N. The user
+                    // perceived N rows as "N new sessions with the same
+                    // conversation" — they all do point to the same
+                    // session, so a single entry is the honest UI. The
+                    // `+N more` suffix tells the user there are siblings;
+                    // the canvas / /experiments page is where you drill
+                    // into the individual experiments.
+                    type Bucket = {
+                      key: string;
+                      primary: Experiment;
+                      siblings: Experiment[];
+                    };
+                    const order: string[] = [];
+                    const buckets = new Map<string, Bucket>();
+                    for (const exp of projectExperiments) {
+                      const key = exp.session_id ?? exp.latest_session_id ?? exp.id;
+                      const existing = buckets.get(key);
+                      if (!existing) {
+                        order.push(key);
+                        buckets.set(key, { key, primary: exp, siblings: [] });
+                      } else {
+                        existing.siblings.push(exp);
+                        // Keep the most recently created experiment as
+                        // the bucket's display row.
+                        if ((exp.created_at ?? '') > (existing.primary.created_at ?? '')) {
+                          existing.siblings.push(existing.primary);
+                          existing.primary = exp;
+                        }
+                      }
+                    }
+                    return order.map((key) => {
+                      const b = buckets.get(key)!;
+                      const total = 1 + b.siblings.length;
+                      const displayExp =
+                        total > 1
+                          ? {
+                              ...b.primary,
+                              name: `${b.primary.name} (+${total - 1} more)`,
+                            }
+                          : b.primary;
+                      // The active state follows whichever experiment in
+                      // this bucket is active — clicking the bucket lands
+                      // on the latest experiment, but the row stays
+                      // highlighted if any sibling is active.
+                      const isActive =
+                        b.primary.id === activeExperimentId ||
+                        b.siblings.some((s) => s.id === activeExperimentId);
+                      return (
+                        <ExperimentRow
+                          key={key}
+                          exp={displayExp}
+                          isActive={isActive}
+                          onClick={() => {
+                            setActiveExperiment(
+                              b.primary.id,
+                              b.primary.session_id ?? b.primary.latest_session_id,
+                            );
+                            if (pathname !== '/') router.push('/');
+                          }}
+                          onRename={(name) => handleRenameExperiment(b.primary.id, name)}
+                          onDelete={(e) => handleDeleteExperiment(b.primary.id, e)}
+                          onDragStart={(e) => handleDragStart(e, b.primary.id)}
+                          onDragEnd={handleDragLeave}
+                        />
+                      );
+                    });
+                  })()}
                   <button
                     onClick={(e) => handleNewChatInProject(project.id, e)}
                     title={`New chat in ${project.name}`}

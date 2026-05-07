@@ -99,10 +99,6 @@ function Legend() {
         Processed
       </span>
       <span className="inline-flex items-center gap-1.5">
-        <span className="inline-block w-2.5 h-2.5 rounded-sm bg-amber-500/40 border border-amber-500/60" />
-        Experiment
-      </span>
-      <span className="inline-flex items-center gap-1.5">
         <span className="inline-block w-2.5 h-2.5 rounded-sm bg-violet-500/40 border border-violet-500/60" />
         Model
       </span>

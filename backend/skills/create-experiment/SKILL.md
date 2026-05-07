@@ -17,6 +17,24 @@ experiment only if you're refining the same model on the same dataset.
 For a different model, a different feature set, or a different prep
 strategy, **create a new experiment**.
 
+## Standard flow
+
+The expected order, every time you start a fresh attempt:
+
+1. **`list-project-datasets`** — discover raw uploads + processed datasets
+   already in the project. You'll get their `id`s.
+2. **`create-experiment(name, hypothesis, parent_dataset_ids=[raw_id])`** —
+   spawn the experiment AND link the raw upload as an input. The lineage
+   canvas immediately shows raw → experiment.
+3. (data_prep agent) **`register-dataset(experiment_id, parent_dataset_id=raw_id, …)`**
+   — register processed splits, chained from the raw.
+4. (trainer agent) **`start-training`** → fit → **`register-model`**.
+
+Skipping step 1 or omitting `parent_dataset_ids` in step 2 means the
+raw upload doesn't appear connected to your experiment in the canvas
+until prep runs and registers the linkage indirectly. Fix this at
+experiment-creation time, not later.
+
 ## Inputs
 
 - `name` (required): a short label, e.g. `"xgb_baseline"`, `"linear_with_interactions"`.
@@ -26,7 +44,15 @@ strategy, **create a new experiment**.
   experiment's primary description, so leave this empty unless you
   have substantive extra context (failed sub-runs, cross-references,
   follow-up tasks).
-- `parent_dataset_ids` (optional): list of `dataset_version_id` integers this experiment will derive from (e.g. the raw dataset id the user uploaded). Use this if you already know which datasets you'll be using before the prep step runs.
+- `parent_dataset_ids` (STRONGLY RECOMMENDED for the first call in a
+  session): list of `dataset_version_id` integers this experiment will
+  derive from. Pass the raw upload's id here so the lineage edge raw →
+  experiment is recorded immediately, before prep even runs. Discover
+  raw ids via `list-project-datasets` first.
+
+  Skip this only if the experiment is purely synthetic (no upstream
+  data) or if you're forking — `fork-experiment` inherits the parent's
+  linkages automatically.
 
 ## Returns
 
