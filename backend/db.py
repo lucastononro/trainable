@@ -212,14 +212,18 @@ def _run_migrations(connection):
             connection.execute(text("ALTER TABLE experiments ADD COLUMN tags JSON"))
             logger.info("[DB] Added tags column to experiments")
         if "pinned" not in ecols:
-            # SQLite has no real BOOLEAN; INTEGER 0/1 works on both backends.
+            # `DEFAULT FALSE` is the portable form: Postgres rejects
+            # integer literals for boolean defaults, and SQLite 3.23+
+            # accepts FALSE (stored as 0). The earlier `DEFAULT 0` form
+            # broke startup on Postgres with "column is of type boolean
+            # but default expression is of type integer".
             connection.execute(
-                text("ALTER TABLE experiments ADD COLUMN pinned BOOLEAN DEFAULT 0")
+                text("ALTER TABLE experiments ADD COLUMN pinned BOOLEAN DEFAULT FALSE")
             )
             logger.info("[DB] Added pinned column to experiments")
         if "archived" not in ecols:
             connection.execute(
-                text("ALTER TABLE experiments ADD COLUMN archived BOOLEAN DEFAULT 0")
+                text("ALTER TABLE experiments ADD COLUMN archived BOOLEAN DEFAULT FALSE")
             )
             logger.info("[DB] Added archived column to experiments")
 
