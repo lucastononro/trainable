@@ -2,23 +2,30 @@
 
 /**
  * LineageGraph — renders a {nodes, edges} payload from the backend lineage
- * endpoints as an n8n-style flow with rounded-rectangle nodes and smooth
- * edges. Three node kinds (dataset, experiment, model) get their own custom
- * components so we can tune label + color hint without conditionals
- * scattered through the renderer.
+ * endpoints as a left-to-right DAG with rounded-rectangle nodes and
+ * smooth bezier edges. Layout is computed via dagre (hierarchical layered
+ * graph) so columns line up cleanly even when the graph branches.
  *
- * Layout is computed via a simple longest-path leveling: raw datasets at
- * x=0, processed at the next column based on parent depth, experiments
- * after their inputs, models after their experiment. The user can still
- * drag nodes around; we just supply sensible initial positions.
+ * The node renderers (DatasetNode / ExperimentNode / ModelNode) are kept
+ * lean — color, label, and a one-line subtitle — so the canvas reads
+ * cleanly at the in-session 30/70 split.
  */
 
 import { useMemo } from 'react';
-import { Background, Controls, MarkerType, ReactFlow, type Edge, type Node } from '@xyflow/react';
+import dagre from '@dagrejs/dagre';
+import {
+  Background,
+  BackgroundVariant,
+  Controls,
+  MarkerType,
+  ReactFlow,
+  type Edge,
+  type Node,
+} from '@xyflow/react';
 
 import '@xyflow/react/dist/style.css';
 
-import type { LineageEdge, LineageGraph as LineageGraphPayload, LineageNode } from '@/lib/types';
+import type { LineageGraph as LineageGraphPayload, LineageNode } from '@/lib/types';
 import DatasetNode from './DatasetNode';
 import ExperimentNode from './ExperimentNode';
 import ModelNode from './ModelNode';
@@ -29,6 +36,9 @@ const NODE_TYPES = {
   model: ModelNode,
 };
 
+const NODE_W = 220;
+const NODE_H = 86;
+
 interface Props {
   data: LineageGraphPayload | null;
   loading?: boolean;
@@ -36,44 +46,46 @@ interface Props {
   height?: number | string;
 }
 
-const COL_WIDTH = 240;
-const ROW_HEIGHT = 130;
-
-function levelOf(nodeId: string, edges: LineageEdge[], cache: Map<string, number>): number {
-  if (cache.has(nodeId)) return cache.get(nodeId)!;
-  const incoming = edges.filter((e) => e.target === nodeId);
-  if (incoming.length === 0) {
-    cache.set(nodeId, 0);
-    return 0;
-  }
-  // Mark in-progress to break cycles defensively.
-  cache.set(nodeId, 0);
-  const lvl = 1 + Math.max(...incoming.map((e) => levelOf(e.source, edges, cache)));
-  cache.set(nodeId, lvl);
-  return lvl;
-}
-
 function layout(payload: LineageGraphPayload): {
   nodes: Node[];
   edges: Edge[];
 } {
-  const cache = new Map<string, number>();
-  const levels = new Map<string, number>();
+  const g = new dagre.graphlib.Graph({ compound: false })
+    .setDefaultEdgeLabel(() => ({}))
+    .setGraph({
+      rankdir: 'LR',
+      // Comfortable spacing between columns and within a level so the
+      // graph reads at a glance at the in-session 30/70 split width.
+      ranksep: 90,
+      nodesep: 36,
+      edgesep: 16,
+      marginx: 24,
+      marginy: 24,
+    });
+
   for (const n of payload.nodes) {
-    levels.set(n.id, levelOf(n.id, payload.edges, cache));
+    g.setNode(n.id, { width: NODE_W, height: NODE_H });
   }
-  // Bucket by level → row index per level.
-  const rowCounters = new Map<number, number>();
+  for (const e of payload.edges) {
+    g.setEdge(e.source, e.target);
+  }
+
+  dagre.layout(g);
+
   const positioned: Node[] = payload.nodes.map((n) => {
-    const lvl = levels.get(n.id) ?? 0;
-    const row = rowCounters.get(lvl) ?? 0;
-    rowCounters.set(lvl, row + 1);
+    const layoutNode = g.node(n.id);
     return {
       id: n.id,
       type: n.type,
       data: { node: n },
-      position: { x: lvl * COL_WIDTH, y: row * ROW_HEIGHT },
-    } as Node;
+      // dagre centers nodes; React Flow positions by top-left.
+      position: {
+        x: (layoutNode?.x ?? 0) - NODE_W / 2,
+        y: (layoutNode?.y ?? 0) - NODE_H / 2,
+      },
+      sourcePosition: 'right' as const,
+      targetPosition: 'left' as const,
+    } as unknown as Node;
   });
 
   const edges: Edge[] = payload.edges.map((e) => ({
@@ -82,8 +94,13 @@ function layout(payload: LineageGraphPayload): {
     target: e.target,
     type: 'smoothstep',
     animated: e.kind === 'feeds',
-    markerEnd: { type: MarkerType.ArrowClosed, width: 14, height: 14 },
-    style: { stroke: '#3b82f6', strokeWidth: 1.5 },
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      width: 16,
+      height: 16,
+      color: '#60a5fa',
+    },
+    style: { stroke: '#60a5fa', strokeWidth: 1.6 },
   }));
 
   return { nodes: positioned, edges };
@@ -105,7 +122,10 @@ export default function LineageGraph({ data, loading = false, onNodeClick, heigh
 
   if (!data || data.nodes.length === 0) {
     return (
-      <div className="flex items-center justify-center text-gray-500 text-sm" style={{ height }}>
+      <div
+        className="flex items-center justify-center text-gray-500 text-sm px-6 text-center"
+        style={{ height }}
+      >
         No lineage to show yet. Once an agent runs create-experiment + register-dataset +
         register-model, the graph will populate here.
       </div>
@@ -113,7 +133,7 @@ export default function LineageGraph({ data, loading = false, onNodeClick, heigh
   }
 
   return (
-    <div style={{ height, width: '100%' }}>
+    <div style={{ height, width: '100%' }} className="bg-white">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -123,10 +143,18 @@ export default function LineageGraph({ data, loading = false, onNodeClick, heigh
           onNodeClick?.(payloadNode);
         }}
         fitView
+        fitViewOptions={{ padding: 0.18, minZoom: 0.4, maxZoom: 1.2 }}
+        nodesDraggable
+        nodesConnectable={false}
+        edgesFocusable={false}
         proOptions={{ hideAttribution: true }}
       >
-        <Background gap={20} size={1} color="#e5e7eb" />
-        <Controls position="bottom-right" showInteractive={false} />
+        <Background gap={22} size={1.3} color="#dbeafe" variant={BackgroundVariant.Dots} />
+        <Controls
+          position="bottom-right"
+          showInteractive={false}
+          className="!bg-white !border !border-gray-200 !rounded-md !shadow-sm"
+        />
       </ReactFlow>
     </div>
   );

@@ -199,8 +199,51 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
     return {"nodes": nodes, "edges": edges}
 
 
+async def _attach_project_raw(
+    base: dict[str, Any], project_id: str | None
+) -> dict[str, Any]:
+    """Augment a {nodes, edges} payload with the project's raw datasets.
+
+    Without this, session- and experiment-scoped graphs omit raw data
+    whenever the agent forgot to set `parent_dataset_id` on the
+    register-dataset call — which is the common case during early use.
+    Raw datasets are project-scoped, so we always attach them as
+    starting points; missing edges to processed datasets just mean
+    "lineage was never declared."
+    """
+    if not project_id:
+        return base
+    async with async_session() as db:
+        rows = (
+            (
+                await db.execute(
+                    select(DatasetVersion).where(
+                        DatasetVersion.project_id == project_id,
+                        DatasetVersion.kind == "raw",
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+    seen = {n["id"] for n in base["nodes"]}
+    for dv in rows:
+        nid = f"dataset:{dv.id}"
+        if nid not in seen:
+            base["nodes"].append(_dataset_node(dv))
+            seen.add(nid)
+    return base
+
+
 async def build_experiment_lineage(experiment_id: str) -> dict[str, Any]:
-    return await _build_for_experiments([experiment_id])
+    base = await _build_for_experiments([experiment_id])
+    async with async_session() as db:
+        pid = (
+            await db.execute(
+                select(Experiment.project_id).where(Experiment.id == experiment_id)
+            )
+        ).scalar_one_or_none()
+    return await _attach_project_raw(base, pid)
 
 
 async def build_session_lineage(session_id: str) -> dict[str, Any]:
@@ -214,7 +257,24 @@ async def build_session_lineage(session_id: str) -> dict[str, Any]:
             .scalars()
             .all()
         )
-    return await _build_for_experiments(list(ids))
+        sess = (
+            await db.execute(
+                select(SessionModel.project_id, SessionModel.experiment_id).where(
+                    SessionModel.id == session_id
+                )
+            )
+        ).one_or_none()
+        # Resolve project_id, falling back to the legacy session→experiment
+        # join for sessions that predate the schema flip.
+        pid = sess[0] if sess else None
+        if not pid and sess and sess[1]:
+            pid = (
+                await db.execute(
+                    select(Experiment.project_id).where(Experiment.id == sess[1])
+                )
+            ).scalar_one_or_none()
+    base = await _build_for_experiments(list(ids))
+    return await _attach_project_raw(base, pid)
 
 
 async def build_project_lineage(project_id: str) -> dict[str, Any]:
@@ -230,30 +290,8 @@ async def build_project_lineage(project_id: str) -> dict[str, Any]:
             .scalars()
             .all()
         )
-        # Plus any orphan raw datasets the user uploaded to the project
-        # that aren't yet attached to any experiment — they should still
-        # show up as starting points in the graph.
-        raw_only = (
-            (
-                await db.execute(
-                    select(DatasetVersion).where(
-                        DatasetVersion.project_id == project_id,
-                        DatasetVersion.kind == "raw",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-
     base = await _build_for_experiments(list(exp_ids))
-    seen = {n["id"] for n in base["nodes"]}
-    for dv in raw_only:
-        nid = f"dataset:{dv.id}"
-        if nid not in seen:
-            base["nodes"].append(_dataset_node(dv))
-            seen.add(nid)
-    return base
+    return await _attach_project_raw(base, project_id)
 
 
 async def list_project_datasets(project_id: str) -> list[dict]:

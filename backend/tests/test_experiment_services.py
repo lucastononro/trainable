@@ -358,6 +358,37 @@ async def test_project_lineage_includes_orphan_raw_datasets():
 
 
 @pytest.mark.asyncio
+async def test_session_lineage_includes_orphan_raw():
+    """Raw datasets uploaded to the project must show up in the session
+    view even when the agent never linked them via parent_dataset_id."""
+    pid, sid = await _seed_project_session()
+    raw = await record_upload(
+        project_id=pid,
+        path=f"/projects/{pid}/datasets/iris.csv",
+        content=b"a,b\n1,2\n",
+        name="iris.csv",
+    )
+    # Create an experiment + processed dataset but DO NOT link parent.
+    exp = await create_experiment_declared(
+        session_id=sid, name="exp", hypothesis="t"
+    )
+    await register_dataset_declared(
+        experiment_id=exp["id"],
+        path="/sessions/x/data/train.parquet",
+        name="train",
+        description="d",
+        content_hash="z" * 64,
+        size_bytes=10,
+        # parent_dataset_id intentionally omitted
+    )
+    g = await build_session_lineage(sid)
+    raw_node_id = f"dataset:{raw['id']}"
+    assert any(n["id"] == raw_node_id for n in g["nodes"]), (
+        "Raw dataset should appear in session lineage even without parent linkage"
+    )
+
+
+@pytest.mark.asyncio
 async def test_experiment_lineage_walks_parent_chain():
     """Even if only the leaf processed dataset is registered to the
     experiment, the graph should include its raw ancestor via parent_id."""

@@ -9,15 +9,22 @@ interface Data {
   node: LineageModelNode;
 }
 
+const HANDLE_STYLE: React.CSSProperties = {
+  background: 'transparent',
+  border: 'none',
+  width: 8,
+  height: 8,
+};
+
 export default function ModelNode({ data }: NodeProps) {
   const node = (data as unknown as Data).node;
   const topMetric = Object.entries(node.metrics_summary || {})[0];
 
   return (
-    <div className="min-w-[180px] max-w-[220px] rounded-2xl border-2 border-violet-300 bg-violet-50 text-violet-900 px-4 py-2.5 shadow-sm transition-shadow hover:shadow-md cursor-pointer">
-      <Handle type="target" position={Position.Left} className="!bg-violet-400" />
-      <Handle type="source" position={Position.Right} className="!bg-violet-400" />
-      <div className="flex items-center gap-2 text-xs font-medium opacity-70 uppercase tracking-wide">
+    <div className="group w-[220px] h-[86px] rounded-2xl border border-violet-300 bg-violet-50 text-violet-900 px-4 py-2.5 shadow-sm transition-all hover:shadow-md hover:border-violet-400 cursor-pointer flex flex-col justify-center">
+      <Handle type="target" position={Position.Left} style={HANDLE_STYLE} />
+      <Handle type="source" position={Position.Right} style={HANDLE_STYLE} />
+      <div className="flex items-center gap-1.5 text-[10px] font-medium opacity-70 uppercase tracking-wide">
         <Box className="w-3 h-3" />
         Model{node.framework ? ` · ${node.framework}` : ''}
       </div>
@@ -25,7 +32,7 @@ export default function ModelNode({ data }: NodeProps) {
         {node.name}
       </div>
       {topMetric ? (
-        <div className="mt-1 text-xs opacity-70">
+        <div className="text-[11px] opacity-70">
           {topMetric[0]}: {Number(topMetric[1]).toFixed(3)}
         </div>
       ) : null}
