@@ -15,6 +15,7 @@ from routers import (
     data_explorer,
     experiments,
     files,
+    lineage,
     models,
     notebook,
     projects,
@@ -92,6 +93,7 @@ app.include_router(skills_router.router, prefix="/api")
 app.include_router(registry.router, prefix="/api")
 app.include_router(compare.router, prefix="/api")
 app.include_router(snapshots.router, prefix="/api")
+app.include_router(lineage.router, prefix="/api")
 
 
 @app.get("/api/health")
