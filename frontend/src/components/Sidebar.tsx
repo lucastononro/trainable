@@ -247,43 +247,6 @@ function ExperimentRow({
 }
 
 // -----------------------------------------------------------------------------
-// SessionGroup — collapsible row that groups multiple experiments under one
-// session. Single-experiment sessions are auto-flattened upstream so the
-// sidebar doesn't add a wrapper for the common (legacy) 1:1 case.
-// -----------------------------------------------------------------------------
-function SessionGroup({
-  sessionId,
-  expanded,
-  onToggle,
-  count,
-  children,
-}: {
-  sessionId: string;
-  expanded: boolean;
-  onToggle: () => void;
-  count: number;
-  children: React.ReactNode;
-}) {
-  const short = sessionId.length > 8 ? sessionId.slice(0, 8) : sessionId;
-  return (
-    <div className="space-y-0.5">
-      <button
-        onClick={onToggle}
-        className="w-full flex items-center gap-2 pl-3 pr-2 py-1 rounded-lg text-left text-gray-500 hover:bg-white/[0.04] hover:text-gray-300 transition-colors"
-        title={`Session ${sessionId}`}
-      >
-        <ChevronRight
-          className={`w-3 h-3 shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`}
-        />
-        <span className="text-[11px] uppercase tracking-wide">Session · {short}</span>
-        <span className="ml-auto text-[10px] text-gray-600">{count}</span>
-      </button>
-      {expanded && <div className="space-y-0.5">{children}</div>}
-    </div>
-  );
-}
-
-// -----------------------------------------------------------------------------
 // ProjectSection — collapsible header + drop target
 // -----------------------------------------------------------------------------
 function ProjectSection({
@@ -400,17 +363,6 @@ export default function Sidebar() {
   const [creating, setCreating] = useState(false);
   const [pendingRenameProjectId, setPendingRenameProjectId] = useState<string | null>(null);
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(() => new Set());
-  // Sessions are auto-expanded on first render so the user sees their
-  // experiments without an extra click; collapsing is per-session.
-  const [collapsedSessionIds, setCollapsedSessionIds] = useState<Set<string>>(() => new Set());
-  const toggleSession = useCallback((sid: string) => {
-    setCollapsedSessionIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(sid)) next.delete(sid);
-      else next.add(sid);
-      return next;
-    });
-  }, []);
   const [dropTargetProjectId, setDropTargetProjectId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTag, setActiveTag] = useState<string | null>(null);
@@ -823,52 +775,23 @@ export default function Sidebar() {
                   onDragLeave={handleDragLeave}
                   onDrop={(e) => handleDrop(e, project.id)}
                 >
-                  {(() => {
-                    // Bucket experiments by session_id so a session that
-                    // hosts multiple agent-declared experiments collapses
-                    // under a single Session header. Legacy 1:1 rows
-                    // (one experiment, one session) auto-flatten — we
-                    // render the experiment directly without the wrapper
-                    // so the existing UX doesn't change for old data.
-                    const buckets = new Map<string, Experiment[]>();
-                    for (const exp of projectExperiments) {
-                      const sid = exp.session_id ?? exp.latest_session_id ?? exp.id;
-                      if (!buckets.has(sid)) buckets.set(sid, []);
-                      buckets.get(sid)!.push(exp);
-                    }
-                    const renderExp = (exp: Experiment) => (
-                      <ExperimentRow
-                        key={exp.id}
-                        exp={exp}
-                        isActive={exp.id === activeExperimentId}
-                        onClick={() =>
-                          setActiveExperiment(exp.id, exp.session_id ?? exp.latest_session_id)
-                        }
-                        onRename={(name) => handleRenameExperiment(exp.id, name)}
-                        onDelete={(e) => handleDeleteExperiment(exp.id, e)}
-                        onDragStart={(e) => handleDragStart(e, exp.id)}
-                        onDragEnd={handleDragLeave}
-                      />
-                    );
-                    return Array.from(buckets.entries()).map(([sid, exps]) => {
-                      if (exps.length <= 1) {
-                        // Legacy / single-experiment session: skip wrapper.
-                        return exps.map(renderExp);
+                  {projectExperiments.map((exp) => (
+                    <ExperimentRow
+                      key={exp.id}
+                      exp={exp}
+                      isActive={exp.id === activeExperimentId}
+                      onClick={() =>
+                        setActiveExperiment(
+                          exp.id,
+                          exp.session_id ?? exp.latest_session_id,
+                        )
                       }
-                      const expanded = !collapsedSessionIds.has(sid);
-                      return (
-                        <SessionGroup
-                          key={sid}
-                          sessionId={sid}
-                          expanded={expanded}
-                          count={exps.length}
-                          onToggle={() => toggleSession(sid)}
-                        >
-                          {exps.map(renderExp)}
-                        </SessionGroup>
-                      );
-                    });
-                  })()}
+                      onRename={(name) => handleRenameExperiment(exp.id, name)}
+                      onDelete={(e) => handleDeleteExperiment(exp.id, e)}
+                      onDragStart={(e) => handleDragStart(e, exp.id)}
+                      onDragEnd={handleDragLeave}
+                    />
+                  ))}
                   <button
                     onClick={(e) => handleNewChatInProject(project.id, e)}
                     title={`New chat in ${project.name}`}

@@ -57,6 +57,20 @@ system: |
   5. **Reproducibility**: random seeds set, pipeline saved, data versioning
   6. **Edge Cases**: handling of missing values, class imbalance, outlier sensitivity
 
+  ## Experiment lifecycle checklist (MANDATORY)
+  Every session that ran data_prep + trainer must follow the agent-declared
+  lifecycle. Audit it via `inspect-agent-context` against each agent and
+  flag any of the following as **Critical Issues**:
+  - Did **data_prep** call `register-dataset` on the processed train split,
+    with `parent_dataset_id` pointing at the raw dataset?
+  - Did **trainer** call `create-experiment` BEFORE training, then
+    `start-training`, then `register-model` after fitting — in that order?
+  - Does the registered model's `description` honestly summarize the actual
+    approach (framework, key hyperparams, tuning method) and do the logged
+    `metrics` match what the report claims?
+  Missing or out-of-order calls leave the experiment as `abandoned` in the
+  lineage canvas, so call them out explicitly in the review report.
+
   ## Output Format
   Write a review report with sections:
   - **Summary**: Overall assessment (PASS / PASS WITH NOTES / NEEDS FIXES)
