@@ -166,6 +166,56 @@ async def test_sdk_aggregate_used_when_present(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_provider_flushes_accumulator_on_mid_stream_exception(monkeypatch):
+    """When the SDK throws mid-stream (e.g. CLIConnectionError because
+    the claude-code subprocess died), ResultMessage never fires and
+    the accumulator hasn't been flushed. The exception handler must
+    emit a final usage event from whatever was accumulated so the run
+    still gets attributed tokens — otherwise OAuth runs silently
+    drop usage on every transport error."""
+    import services.llm.claude_provider as cp_module
+
+    async def _flaky_query(*args, **kwargs):
+        # Two AssistantMessages with real usage, then a connection error.
+        yield _FakeAssistantMessage(
+            model="claude-sonnet-4-6",
+            usage={"input_tokens": 50, "output_tokens": 25},
+            text="thinking…",
+        )
+        yield _FakeAssistantMessage(
+            model="claude-sonnet-4-6",
+            usage={"input_tokens": 70, "output_tokens": 30},
+            text="more thinking…",
+        )
+        raise RuntimeError("ProcessTransport is not ready for writing")
+
+    monkeypatch.setattr(cp_module, "query", _flaky_query)
+    monkeypatch.setattr(cp_module, "AssistantMessage", _FakeAssistantMessage)
+    monkeypatch.setattr(cp_module, "ResultMessage", _FakeResultMessage)
+    monkeypatch.setattr(cp_module, "ClaudeAgentOptions", lambda **kw: kw)
+
+    provider = ClaudeProvider()
+    events = []
+    async for ev in provider.run(
+        prompt="hi", system_prompt="", model="claude-sonnet-4-6"
+    ):
+        events.append(ev)
+
+    finals = [ev for ev in events if ev.kind == "usage" and not ev.data.get("partial")]
+    errors = [ev for ev in events if ev.kind == "error"]
+
+    assert len(finals) == 1, (
+        f"Expected 1 flushed usage event after mid-stream crash, got {len(finals)}"
+    )
+    u = finals[0].data["usage"]
+    assert u["input_tokens"] == 120  # 50 + 70
+    assert u["output_tokens"] == 55  # 25 + 30
+    # The error is still surfaced so the runner can log it.
+    assert len(errors) == 1
+    assert "ProcessTransport" in errors[0].data["message"]
+
+
+@pytest.mark.asyncio
 async def test_no_usage_at_all_yields_no_final_usage(monkeypatch):
     """When neither SDK aggregate nor AssistantMessage carry usage, the
     provider should not emit a phantom usage event."""

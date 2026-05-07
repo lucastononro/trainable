@@ -238,6 +238,26 @@ class ClaudeProvider(LLMProvider):
 
         except Exception as e:
             logger.exception("ClaudeProvider.run failed")
+            # Flush whatever per-turn usage we accumulated before the
+            # exception so the run still gets attributed tokens. Without
+            # this, OAuth runs that crash mid-stream (e.g. the SDK's
+            # CLIConnectionError "ProcessTransport is not ready for
+            # writing" after the underlying claude-code subprocess dies)
+            # leave the cost badge at $0 even though tokens were
+            # demonstrably consumed.
+            if accumulated:
+                logger.info(
+                    "Claude provider crashed mid-stream; flushing "
+                    "accumulated per-turn usage across %d model(s) so "
+                    "the run is still attributed tokens",
+                    len(accumulated),
+                )
+                for m_name, m_usage in accumulated.items():
+                    yield LLMEvent.usage(
+                        model=m_name,
+                        usage=m_usage,
+                        total_cost_usd=None,
+                    )
             yield LLMEvent.error(str(e))
 
         yield LLMEvent.done()
