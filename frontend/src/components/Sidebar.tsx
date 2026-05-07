@@ -781,10 +781,7 @@ export default function Sidebar() {
                       exp={exp}
                       isActive={exp.id === activeExperimentId}
                       onClick={() =>
-                        setActiveExperiment(
-                          exp.id,
-                          exp.session_id ?? exp.latest_session_id,
-                        )
+                        setActiveExperiment(exp.id, exp.session_id ?? exp.latest_session_id)
                       }
                       onRename={(name) => handleRenameExperiment(exp.id, name)}
                       onDelete={(e) => handleDeleteExperiment(exp.id, e)}

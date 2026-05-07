@@ -171,9 +171,7 @@ export default function ExperimentsListPage() {
         <header className="flex items-center gap-3 px-4 py-2.5 border-b border-surface-border shrink-0 bg-surface">
           <FlaskConical className="w-4 h-4 text-amber-400" />
           <h1 className="text-sm font-semibold text-white">Experiments</h1>
-          {hydrating ? (
-            <Loader2 className="w-3 h-3 text-gray-500 animate-spin" />
-          ) : null}
+          {hydrating ? <Loader2 className="w-3 h-3 text-gray-500 animate-spin" /> : null}
           <div className="flex-1" />
           <button
             onClick={fetchExperiments}
@@ -202,8 +200,8 @@ export default function ExperimentsListPage() {
             <div className="text-center py-20 text-gray-500">
               <FlaskConical className="w-8 h-8 mx-auto mb-2 text-gray-700" />
               <p className="text-sm">
-                No experiments yet. They&apos;ll appear here once an agent calls
-                create-experiment in any session.
+                No experiments yet. They&apos;ll appear here once an agent calls create-experiment
+                in any session.
               </p>
             </div>
           ) : (
@@ -271,12 +269,8 @@ export default function ExperimentsListPage() {
                               {r.state}
                             </span>
                           </td>
-                          <td className="px-4 py-2.5">
-                            {r.datasetName ?? (hydrating ? '—' : '')}
-                          </td>
-                          <td className="px-4 py-2.5">
-                            {r.modelName ?? (hydrating ? '—' : '')}
-                          </td>
+                          <td className="px-4 py-2.5">{r.datasetName ?? (hydrating ? '—' : '')}</td>
+                          <td className="px-4 py-2.5">{r.modelName ?? (hydrating ? '—' : '')}</td>
                           <td className="px-4 py-2.5 font-mono text-[11px] text-gray-400">
                             {r.modelMetric ?? ''}
                           </td>
