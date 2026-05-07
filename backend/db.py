@@ -223,7 +223,9 @@ def _run_migrations(connection):
             logger.info("[DB] Added pinned column to experiments")
         if "archived" not in ecols:
             connection.execute(
-                text("ALTER TABLE experiments ADD COLUMN archived BOOLEAN DEFAULT FALSE")
+                text(
+                    "ALTER TABLE experiments ADD COLUMN archived BOOLEAN DEFAULT FALSE"
+                )
             )
             logger.info("[DB] Added archived column to experiments")
 

@@ -369,9 +369,7 @@ async def test_session_lineage_includes_orphan_raw():
         name="iris.csv",
     )
     # Create an experiment + processed dataset but DO NOT link parent.
-    exp = await create_experiment_declared(
-        session_id=sid, name="exp", hypothesis="t"
-    )
+    exp = await create_experiment_declared(session_id=sid, name="exp", hypothesis="t")
     await register_dataset_declared(
         experiment_id=exp["id"],
         path="/sessions/x/data/train.parquet",
