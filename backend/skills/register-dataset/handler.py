@@ -10,8 +10,28 @@ from services.dataset_versions import register_dataset_declared
 logger = logging.getLogger(__name__)
 
 
-def create_handler(**_):
+def create_handler(*, session_id: str = "", publish_fn=None, **_):
     async def handler(args: dict):
+        if publish_fn:
+            await publish_fn(
+                session_id,
+                "tool_start",
+                {
+                    "tool": "register-dataset",
+                    "input": {
+                        "experiment_id": (args.get("experiment_id") or "")[:8] + "…",
+                        "name": args.get("name") or "(no name)",
+                        "role": args.get("role") or "input",
+                        "parent_dataset_id": args.get("parent_dataset_id"),
+                    },
+                },
+                role="tool",
+            )
+
+        output_text = ""
+        is_error = False
+        response: dict
+
         try:
             row = await register_dataset_declared(
                 experiment_id=str(args.get("experiment_id") or "").strip(),
@@ -24,36 +44,56 @@ def create_handler(**_):
                 content_hash=str(args.get("content_hash") or "").strip() or None,
                 size_bytes=int(args.get("size_bytes") or 0),
             )
+            summary = {
+                "dataset_version_id": row["id"],
+                "kind": row["kind"],
+                "name": row["name"],
+                "hash": row["hash"][:12] + "…" if row["hash"] else "",
+                "parent_id": row.get("parent_id"),
+            }
+            output_text = (
+                f"Registered {row['kind']} dataset id={row['id']} "
+                f"parent_id={row.get('parent_id') or 'none'}"
+            )
+            response = {
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Dataset registered. Save dataset_version_id if you "
+                            "plan to derive further datasets from it.\n\n"
+                            + json.dumps(summary, indent=2)
+                        ),
+                    }
+                ]
+            }
         except ValueError as e:
-            return {
+            output_text = f"register-dataset failed: {e}"
+            is_error = True
+            response = {
                 "content": [{"type": "text", "text": f"register-dataset failed: {e}"}],
                 "is_error": True,
             }
         except Exception as e:
             logger.exception("register-dataset unexpected failure")
-            return {
+            output_text = f"register-dataset error: {e}"
+            is_error = True
+            response = {
                 "content": [{"type": "text", "text": f"register-dataset error: {e}"}],
                 "is_error": True,
             }
 
-        summary = {
-            "dataset_version_id": row["id"],
-            "kind": row["kind"],
-            "name": row["name"],
-            "hash": row["hash"][:12] + "…" if row["hash"] else "",
-            "parent_id": row.get("parent_id"),
-        }
-        return {
-            "content": [
+        if publish_fn:
+            await publish_fn(
+                session_id,
+                "tool_end",
                 {
-                    "type": "text",
-                    "text": (
-                        "Dataset registered. Save dataset_version_id if you "
-                        "plan to derive further datasets from it.\n\n"
-                        + json.dumps(summary, indent=2)
-                    ),
-                }
-            ]
-        }
+                    "tool": "register-dataset",
+                    "output": output_text,
+                    "is_error": is_error,
+                },
+                role="tool",
+            )
+        return response
 
     return handler
