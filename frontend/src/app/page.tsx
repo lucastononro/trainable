@@ -900,8 +900,29 @@ export default function HomePage() {
     prevExperimentIdRef.current = activeExperimentId;
     let cancelled = false;
 
+    // Safety net: if load() hangs (await never resolves), the spinner
+    // would otherwise stay forever and the user has to refresh. Cap at
+    // 30s — anything slower than that is a bug we want to surface, not
+    // hide behind an infinite spinner.
+    const loadingTimeout = setTimeout(() => {
+      if (cancelled) return;
+      console.warn(`[load] safety timeout — load() didn't complete in 30s, forcing loading=false`);
+      setLoading(false);
+    }, 30000);
+
     const load = async () => {
+      // Tag every step of the load pipeline so the browser console shows
+      // exactly where the hang is when the chat appears stuck on the
+      // spinner — historically we've had this be the WebSocket-equivalent
+      // (SSE) connection open, sometimes a slow getSession, sometimes a
+      // 500 on /files/tree cascading. Cheap to leave on; only fires once
+      // per session-change.
+      const _t0 = performance.now();
+      const _tag = activeSessionId?.slice(0, 8) ?? 'noid';
+      const _log = (label: string) =>
+        console.debug(`[load:${_tag}] +${(performance.now() - _t0).toFixed(0)}ms ${label}`);
       setLoading(true);
+      _log('start');
       resetSessionState();
 
       // Hydrate the CostBadge from the session's historical usage rows.
@@ -931,12 +952,16 @@ export default function HomePage() {
         });
 
       try {
+        _log('fetch getExperiment');
         const exp = await api.getExperiment(activeExperimentId);
+        _log('got getExperiment');
         if (cancelled) return;
         setExperimentName(exp.name);
 
         const sid = activeSessionId;
+        _log('fetch getSession');
         const sessionData = await api.getSession(sid);
+        _log('got getSession');
         if (cancelled) return;
 
         // Reconstruct chat from saved messages
@@ -1233,10 +1258,15 @@ export default function HomePage() {
           if (inFlightSubAgents.length > 0) setActiveAgents(inFlightSubAgents);
         }
 
+        _log('connectSSE');
         connectSSE(sid);
+        _log('connectSSE returned');
       } catch (e) {
+        _log(`error: ${e instanceof Error ? e.message : String(e)}`);
         if (!cancelled) addItem({ type: 'error', content: 'Failed to load experiment' });
       } finally {
+        _log(`done cancelled=${cancelled}`);
+        clearTimeout(loadingTimeout);
         if (!cancelled) setLoading(false);
       }
     };
@@ -1244,6 +1274,7 @@ export default function HomePage() {
     load();
     return () => {
       cancelled = true;
+      clearTimeout(loadingTimeout);
       sseRef.current?.close();
     };
   }, [activeExperimentId, activeSessionId, connectSSE, addItem, resetSessionState]);
