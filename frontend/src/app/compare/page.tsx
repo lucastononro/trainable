@@ -17,7 +17,16 @@ import {
 import { api } from '@/lib/api';
 import type { CompareResponse, Experiment } from '@/lib/types';
 
-const SERIES_COLORS = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb923c', '#22d3ee', '#9ca3af'];
+const SERIES_COLORS = [
+  '#60a5fa',
+  '#34d399',
+  '#fbbf24',
+  '#f472b6',
+  '#a78bfa',
+  '#fb923c',
+  '#22d3ee',
+  '#9ca3af',
+];
 
 function CompareInner() {
   const searchParams = useSearchParams();
@@ -109,9 +118,7 @@ function CompareInner() {
       <main className="max-w-6xl mx-auto px-6 py-6 space-y-6">
         <section className="flex flex-wrap items-center gap-2">
           {sessionIds.length === 0 && (
-            <p className="text-xs text-gray-500">
-              No sessions selected. Pick one to compare:
-            </p>
+            <p className="text-xs text-gray-500">No sessions selected. Pick one to compare:</p>
           )}
           {sessionIds.map((sid) => (
             <span
@@ -265,9 +272,7 @@ function CompareInner() {
                     </span>
                   </div>
                   {Object.entries(data.feature_overlap.per_session).map(([sid, feats]) => {
-                    const unique = feats.filter(
-                      (f) => !data.feature_overlap!.common.includes(f),
-                    );
+                    const unique = feats.filter((f) => !data.feature_overlap!.common.includes(f));
                     if (unique.length === 0) return null;
                     return (
                       <div key={sid}>
