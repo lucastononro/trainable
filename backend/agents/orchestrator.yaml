@@ -18,6 +18,13 @@ skills:
   - name: read-project-session
   - name: list-session-files
   - name: read-session-file
+  # Experiment lifecycle (agent-declared)
+  - name: list-project-datasets
+  - name: create-experiment
+  - name: fork-experiment
+  - name: register-dataset
+  - name: start-training
+  - name: register-model
 
 subagents:
   - eda
@@ -56,17 +63,34 @@ system: |
   - If something fails, explain what went wrong and suggest alternatives
   - You can also run code directly with `execute-code` for quick checks or small tasks
 
-  ## Agent-declared experiments (awareness only)
-  Runs are tracked as **declared experiments**: data_prep + trainer call
-  `create-experiment` → `register-dataset` → `start-training` → `register-model`
-  themselves to populate the lineage canvas. You do NOT call these skills
-  yourself — you don't have them, and the orchestrator's job is purely to
-  route. When you delegate, pass any existing `experiment_id` along in the
-  task instructions so sibling agents register against the same experiment
-  instead of starting a new one. The validator flags any experiment left in
-  `training` state without a register-model call; if a sub-agent's report
-  doesn't mention these calls, treat it as suspect and follow up with
-  `inspect-agent-context`.
+  ## Experiment lifecycle (PRIMARY DRIVER)
+  You are one of the primary drivers of the experiment lifecycle. The
+  user expects the experiment graph in the lineage canvas to reflect
+  the conversation, and YOU are responsible for keeping it accurate
+  even when delegating sub-tasks to specialist agents.
+
+  Standard flow when starting fresh work:
+    1. `list-project-datasets` to see what raw uploads exist.
+    2. `create-experiment(name, hypothesis, parent_dataset_ids=[raw_id])`
+       to open the experiment up-front. The lineage edge raw → experiment
+       is now drawn before prep even runs.
+    3. Delegate prep / training to specialist agents (data_prep, trainer)
+       — pass the `experiment_id` along so they register against the
+       same experiment.
+    4. If the user wants a sibling run on the same data, call
+       `fork-experiment(parent_experiment_id, name, hypothesis)` rather
+       than spawning fresh — preserves the dataset linkages.
+
+  When NOT to call these directly:
+    - If you've delegated to data_prep / trainer and they're handling
+      the lifecycle internally, don't double-register. Watch their
+      tool_end events.
+    - Sub-agents may call `register-dataset` / `register-model`
+      themselves; those calls are authoritative.
+
+  Skills available to you (PRIMARY): list-project-datasets,
+  create-experiment, fork-experiment, register-dataset, start-training,
+  register-model.
 
   ## Tool choice: scripts over notebooks
   When you run code yourself, prefer `execute-code` (throwaway scripts) over

@@ -16,6 +16,13 @@ skills:
   - name: list-session-agents
   - name: list-available-skills
   - name: use-skill
+  # Experiment lifecycle (agent-declared)
+  - name: list-project-datasets
+  - name: create-experiment
+  - name: fork-experiment
+  - name: register-dataset
+  - name: start-training
+  - name: register-model
 
 subagents:
   - data_prep
@@ -109,17 +116,25 @@ system: |
      - Include a clear recommendation for the target column and problem type
      - Flag any data quality issues the next agent should know about
 
-  ## Hand-off to data_prep / trainer (awareness only)
-  EDA itself does NOT register experiments or datasets — you don't have those
-  skills and shouldn't try. Downstream **data_prep** owns the lineage calls:
-  it will run `create-experiment(name, hypothesis)` and then
-  `register-dataset(role='input', parent_dataset_id=<raw>)` against the
-  processed splits, and **trainer** continues with `start-training` /
-  `register-model`. In your `report.md`, name the raw dataset clearly and
-  explicitly mention this hand-off — e.g. "data_prep should declare an
-  experiment for this study and register the processed train.parquet with
-  the raw file as `parent_dataset_id`." That note is what keeps the lineage
-  canvas connected from raw → processed → model.
+  ## Experiment lifecycle (secondary)
+
+  chat / orchestrator are the primary drivers of the experiment lifecycle.
+  They normally call `create-experiment(parent_dataset_ids=[raw_id])`
+  before delegating to you, so your task input usually carries an
+  active `experiment_id`. You have the lifecycle skills available
+  but DEFER to the parent's choices unless the context says otherwise.
+
+  When EDA finds something noteworthy that warrants a separate
+  registration (e.g. you produced an annotated dataset variant the
+  agent should reference), call `register-dataset(experiment_id, ...)`
+  yourself — your registration is authoritative for that artifact.
+  But don't call `start-training` / `register-model` from EDA — those
+  are the trainer's job.
+
+  Skills available: list-project-datasets, create-experiment,
+  fork-experiment, register-dataset, start-training, register-model.
+  Use list-project-datasets liberally to read the graph; use
+  register-dataset when you've produced a dataset worth tracking.
 
   ## Collaboration & skepticism
   - Be skeptical. If your task is ambiguous, if the dataset shape contradicts

@@ -17,9 +17,11 @@ skills:
   - name: list-session-agents
   - name: list-available-skills
   - name: use-skill
-  - name: create-experiment
-  - name: register-dataset
+  # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
+  - name: create-experiment
+  - name: fork-experiment
+  - name: register-dataset
   - name: start-training
   - name: register-model
 
@@ -109,6 +111,15 @@ system: |
   - Budget tuning appropriately: 30-50 optuna trials for the final model
 
   ## Mandatory Experiment Lifecycle (NON-NEGOTIABLE)
+  Ownership note: chat / orchestrator typically open the experiment
+  via `create-experiment` before delegating to you, so step 1 is
+  usually a no-op for you (your task input carries the
+  `experiment_id`). When the parent agent didn't pre-open one, OR
+  when you want a sibling run on the same data, use `fork-experiment
+  (parent_experiment_id, name, hypothesis)` so the dataset linkages
+  are inherited automatically — saves you from re-running
+  list-project-datasets and re-doing parent_dataset_id math.
+
   Every training run MUST follow this lifecycle. Skipping a step means the
   work is not tracked and will not appear in the lineage canvas. The user's
   registry is built entirely from these calls — heuristic file detection has

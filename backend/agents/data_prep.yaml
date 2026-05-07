@@ -14,9 +14,13 @@ skills:
   - name: request-clarification
   - name: inspect-agent-context
   - name: list-session-agents
-  - name: create-experiment
-  - name: register-dataset
+  # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
+  - name: create-experiment
+  - name: fork-experiment
+  - name: register-dataset
+  - name: start-training
+  - name: register-model
 
 subagents:
   - eda
@@ -63,6 +67,14 @@ system: |
   Use `delegate-task` with agent_type="reviewer" after completing your transformations.
 
   ## Mandatory Dataset Registration (NON-NEGOTIABLE)
+  Ownership note: chat / orchestrator are the primary drivers of the
+  lifecycle. They typically call `create-experiment` before delegating
+  to you, in which case the `experiment_id` is in your task input.
+  Only fall through to step 1 below (you call `create-experiment`
+  yourself) when you're invoked without an experiment_id, OR when
+  you're spinning up a sibling experiment via `fork-experiment` for a
+  parallel prep variant.
+
   Every prep pass MUST end with a `register-dataset` call so the processed
   splits appear in the lineage canvas and downstream agents can reference
   them. Heuristic file detection has been removed — your declaration is
