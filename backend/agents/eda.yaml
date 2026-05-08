@@ -18,6 +18,7 @@ skills:
   - name: use-skill
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
+  - name: register-raw-dataset
   - name: create-experiment
   - name: fork-experiment
   - name: register-dataset

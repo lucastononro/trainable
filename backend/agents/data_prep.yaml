@@ -16,6 +16,7 @@ skills:
   - name: list-session-agents
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
+  - name: register-raw-dataset
   - name: create-experiment
   - name: fork-experiment
   - name: register-dataset
@@ -95,6 +96,15 @@ system: |
   2. BEFORE registering anything, call `list-project-datasets` so you know
      what raw uploads exist. You will pass one of these IDs as
      `parent_dataset_id` in step 3 below.
+
+     **If the source file you're reading from doesn't show up as
+     `kind='raw'`** (it was copied from another session, S3, or just
+     created in the workspace by another agent) — call
+     `register-raw-dataset(path=..., project_id=..., description=...)`
+     RIGHT NOW. The Raw → Processed → Model chain only renders when a
+     raw node exists at the top; without it, the canvas shows your
+     processed dataset as orphaned. The call is idempotent so it's
+     safe even if you're not sure whether the upload was registered.
 
   3. After writing prep outputs to the volume, call `register-dataset` for
      EACH processed split that downstream training would use (typically

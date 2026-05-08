@@ -172,6 +172,15 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
     # that would re-introduce the "raw → model" edge people don't want
     # in the canvas. The line should read Raw → Processed → Model, with
     # the model carrying its own per-split provenance.
+    #
+    # Collapse multiple roles for the same (dataset → model) into a
+    # single edge with a `roles` list. The common case — one processed
+    # parquet with internal train/val/test splits — would otherwise
+    # render as three perfectly-overlapping edges where only the last
+    # label is visible. Frontend labels the edge as `TRAIN/VAL/TEST`
+    # when there's more than one role, and the per-split metrics
+    # already live on the model card.
+    grouped_edges: dict[tuple[int, str], dict] = {}
     for m in models:
         refs = m.dataset_refs or {}
         for role, ref in refs.items():
@@ -180,16 +189,32 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
             dv_id = ref.get("dataset_id")
             if not dv_id:
                 continue
-            edges.append(
-                {
-                    "id": f"e_dv{dv_id}_to_model_{m.id}_{role}",
+            key = (int(dv_id), m.id)
+            if key not in grouped_edges:
+                grouped_edges[key] = {
+                    "id": f"e_dv{dv_id}_to_model_{m.id}",
                     "source": f"dataset:{dv_id}",
                     "target": f"model:{m.id}",
                     "kind": "trained_into",
-                    "role": role,
+                    "roles": [],
                     "experiment_id": m.experiment_id,
                 }
-            )
+            grouped_edges[key]["roles"].append(role)
+    # Sort each edge's roles so train comes first then val then test
+    # (alphabetical order would put test before train and read odd).
+    _role_order = ["train", "val", "validation", "test", "holdout"]
+
+    def _role_key(r: str) -> tuple[int, str]:
+        idx = _role_order.index(r) if r in _role_order else len(_role_order)
+        return (idx, r)
+
+    for e in grouped_edges.values():
+        e["roles"] = sorted(e["roles"], key=_role_key)
+        # Keep the legacy `role` field for backward-compat — it's the
+        # first role in the list, which is the most-prominent split for
+        # colouring purposes (train > val > test).
+        e["role"] = e["roles"][0]
+    edges.extend(grouped_edges.values())
     # Legacy fallback: if a model has NO dataset_refs (e.g. legacy rows
     # registered before this field existed) fall back to its experiment's
     # input links so the canvas still shows *something*.

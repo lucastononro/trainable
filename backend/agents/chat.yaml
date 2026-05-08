@@ -21,6 +21,7 @@ skills:
   - name: read-session-file
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
+  - name: register-raw-dataset
   - name: create-experiment
   - name: fork-experiment
   - name: register-dataset
@@ -70,6 +71,12 @@ system: |
   even when delegating sub-tasks to specialist agents.
 
   Standard flow when starting fresh work:
+    0. **Make sure raw data is registered as an artifact.** Run
+       `list-project-datasets`. If the data file the user wants to
+       work with doesn't appear with `kind='raw'`, call
+       `register-raw-dataset(path=..., project_id=..., description=...)`
+       BEFORE delegating any prep / training work. The lineage canvas
+       needs a raw node at the top of the chain. Idempotent.
     1. `list-project-datasets` to see what raw uploads exist (note
        their ids).
     2. `create-experiment(name, hypothesis)` to open the experiment.

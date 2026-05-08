@@ -476,7 +476,15 @@ export interface LineageEdge {
   source: string;
   target: string;
   kind: 'derives_from' | 'feeds' | 'produces' | 'trained_into';
+  // Single-role legacy field — set to the first role when `roles` has
+  // multiple. Drives the edge colour.
   role?: 'train' | 'val' | 'test' | 'legacy' | string;
+  // Full list of roles for `trained_into` edges. When the agent points
+  // train/val/test all at the same dataset (the common single-parquet-
+  // with-internal-split case) the backend collapses them to one edge
+  // with `roles=["train","val","test"]` so the canvas doesn't render
+  // three overlapping arrows.
+  roles?: string[];
 }
 
 export interface LineageGraph {

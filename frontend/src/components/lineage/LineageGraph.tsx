@@ -100,16 +100,35 @@ function layout(payload: LineageGraphPayload): {
     test: '#fbbf24',
   };
   const edges: Edge[] = payload.edges.map((e) => {
-    const role = e.role && e.role !== 'legacy' ? e.role : undefined;
+    // Backend collapses overlapping role edges (same source+target)
+    // into one with `roles: [...]` — the edge label shows all roles.
+    // For single-role edges fall back to the legacy `role` field.
+    const roles =
+      e.roles && e.roles.length > 0
+        ? e.roles.filter((r) => r !== 'legacy')
+        : e.role && e.role !== 'legacy'
+          ? [e.role]
+          : [];
+    const isMultiRole = roles.length > 1;
+    // For multi-role edges use a neutral sky stroke so no single split
+    // dominates the colour. Single-role uses its split colour.
+    const primaryRole = roles[0];
     const color =
-      e.kind === 'trained_into' && role ? (ROLE_COLORS[role] ?? '#7dd3fc') : '#7dd3fc';
+      e.kind === 'trained_into'
+        ? isMultiRole
+          ? '#7dd3fc'
+          : (ROLE_COLORS[primaryRole ?? ''] ?? '#7dd3fc')
+        : '#7dd3fc';
+    const label = isMultiRole
+      ? roles.map((r) => r.toUpperCase()).join(' / ')
+      : primaryRole;
     return {
       id: e.id,
       source: e.source,
       target: e.target,
       type: 'smoothstep',
       animated: e.kind === 'feeds',
-      label: role,
+      label,
       labelStyle: {
         fill: color,
         fontSize: 10,
@@ -126,7 +145,9 @@ function layout(payload: LineageGraphPayload): {
         height: 16,
         color,
       },
-      style: { stroke: color, strokeWidth: 1.6 },
+      // Multi-role edges get a slightly thicker stroke so they read as
+      // "this carries multiple roles" without visual ambiguity.
+      style: { stroke: color, strokeWidth: isMultiRole ? 2.0 : 1.6 },
     };
   });
 

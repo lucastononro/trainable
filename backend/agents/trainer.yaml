@@ -19,6 +19,7 @@ skills:
   - name: use-skill
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
+  - name: register-raw-dataset
   - name: create-experiment
   - name: fork-experiment
   - name: register-dataset
@@ -141,6 +142,17 @@ system: |
       processed) with its id, kind, name, description, and parent_id.
       Trace the chain: which raw upload feeds which processed split.
       You'll need the right `parent_dataset_id` for step 2.
+
+      **If the input file your prep is reading from has NO row with
+      `kind='raw'`** in the listing (the common case when files were
+      copied via S3 sync, mounted from another session, or otherwise
+      didn't go through POST /api/experiments) — call
+      `register-raw-dataset(path=..., project_id=..., description=...)`
+      FIRST. This produces the starting node in the lineage canvas
+      without which the graph reads as `Processed → Model` with no
+      origin and the user can't audit where the data came from. The
+      call is idempotent (deduped by content hash) so it's safe to
+      run preemptively.
 
       If you find a processed dataset already registered for the
       target raw upload (e.g. data_prep ran earlier in this session),
