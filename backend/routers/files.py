@@ -87,6 +87,12 @@ async def file_tree(root: str = "/"):
 
     The root is typically /sessions/{uuid}. We unwrap wrapper directories
     so the UI sees eda/, prep/, train/ at the top level.
+
+    A brand-new session won't have a workspace directory until the first
+    agent run creates one — `listdir_async` raises FileNotFoundError in
+    that case. Return an empty tree (200) instead of a 500 so the
+    frontend's session-load path doesn't have to special-case "not yet
+    populated" sessions.
     """
     try:
         root = _validate_path(root)
@@ -95,6 +101,13 @@ async def file_tree(root: str = "/"):
         tree = _unwrap_tree(tree)
         tree["name"] = "workspace"
         return tree
+    except FileNotFoundError:
+        return {
+            "name": "workspace",
+            "path": root,
+            "type": "directory",
+            "children": [],
+        }
     except Exception as e:
         logger.error(f"file_tree error: {e}")
         raise HTTPException(status_code=500, detail=str(e))

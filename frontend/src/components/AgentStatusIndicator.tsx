@@ -10,6 +10,7 @@ import {
   Settings,
   RotateCcw,
   ArrowLeft,
+  Wand2,
 } from 'lucide-react';
 import { useApp } from '@/lib/AppContext';
 
@@ -54,8 +55,17 @@ const AGENT_META: Record<string, { label: string; color: string; description: st
     color: 'gray',
     description: 'Root conversational agent (always main)',
   },
+  deploy: {
+    label: 'Deploy Agent',
+    color: 'emerald',
+    description: 'Generates Modal serving apps + ships models to production',
+  },
 };
 
+// Order matches the natural ML pipeline so the picker reads
+// chat → orchestrator → EDA → prep → feat eng → train → review →
+// deploy. Adding a new agent? Drop it here AND in
+// AGENT_TYPE_INFO above so it gets a colour + description.
 const ALL_AGENT_TYPES = [
   'chat',
   'orchestrator',
@@ -64,6 +74,7 @@ const ALL_AGENT_TYPES = [
   'feature_eng',
   'trainer',
   'reviewer',
+  'deploy',
 ];
 
 const COLOR_MAP: Record<string, { bg: string; text: string; dot: string; ring: string }> = {
@@ -114,6 +125,12 @@ const COLOR_MAP: Record<string, { bg: string; text: string; dot: string; ring: s
     text: 'text-teal-400',
     dot: 'bg-teal-400',
     ring: 'ring-teal-400/30',
+  },
+  emerald: {
+    bg: 'bg-emerald-500/15',
+    text: 'text-emerald-400',
+    dot: 'bg-emerald-400',
+    ring: 'ring-emerald-400/30',
   },
 };
 
@@ -333,6 +350,39 @@ function ConfigView({ onBack }: { onBack: () => void }) {
     return av - bv || a.localeCompare(b);
   });
 
+  // "Set all" bulk control. The dropdown reflects the shared override only
+  // when every agent has the same model id set; otherwise it shows blank
+  // (= per-agent / mixed). Picking a model writes it to every agent and
+  // clears thinking so each picks up the new model's default.
+  const overrideValues = ALL_AGENT_TYPES.map((t) => agentModels[t] || '');
+  const allSame = overrideValues.every((v) => v === overrideValues[0]);
+  const bulkValue = allSame ? overrideValues[0] : '';
+  const bulkSelected = bulkValue ? models.find((m) => m.id === bulkValue) : undefined;
+  const [bulkProvider, setBulkProvider] = useState<string>('');
+  const activeBulkProvider = bulkProvider || bulkSelected?.provider || '';
+  const filteredBulkModels = activeBulkProvider
+    ? models.filter((m) => m.provider === activeBulkProvider)
+    : models;
+  const anyOverride =
+    overrideValues.some((v) => v) || ALL_AGENT_TYPES.some((t) => agentThinking[t]);
+
+  const applyToAll = (modelId: string) => {
+    ALL_AGENT_TYPES.forEach((t) => {
+      setAgentModel(t, modelId || null);
+      setAgentThinking(t, null);
+    });
+    setProviderFilter({});
+  };
+
+  const resetAll = () => {
+    ALL_AGENT_TYPES.forEach((t) => {
+      setAgentModel(t, null);
+      setAgentThinking(t, null);
+    });
+    setProviderFilter({});
+    setBulkProvider('');
+  };
+
   return (
     <>
       <div className="flex items-center gap-2 px-3 py-2 border-b border-white/[0.06]">
@@ -350,6 +400,99 @@ function ConfigView({ onBack }: { onBack: () => void }) {
       <div className="py-1 max-h-[480px] overflow-y-auto">
         <div className="px-3 py-2 text-[10px] text-gray-600 border-b border-white/[0.04]">
           Override the default model, provider, and reasoning level per agent. Persisted locally.
+        </div>
+        <div className="px-3 py-2 border-b border-white/[0.06] bg-white/[0.02]">
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <Wand2 className="w-3 h-3 text-violet-400" />
+              <span className="text-[11px] font-medium text-gray-300">Set all agents</span>
+              {!allSame && anyOverride && (
+                <span
+                  className="text-[10px] text-gray-600"
+                  title="Agents currently have different overrides"
+                >
+                  · mixed
+                </span>
+              )}
+            </div>
+            {anyOverride && (
+              <button
+                onClick={resetAll}
+                className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-gray-500 hover:text-gray-300 hover:bg-white/[0.06] transition-colors"
+                title="Clear all per-agent overrides"
+              >
+                <RotateCcw className="w-3 h-3" />
+                Reset all
+              </button>
+            )}
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            <select
+              value={activeBulkProvider}
+              onChange={(e) => {
+                const next = e.target.value;
+                setBulkProvider(next);
+                // If the current bulk model isn't in the new provider, clear all overrides
+                // so the dropdown returns to "Default" — picking a new model below re-applies.
+                if (next && bulkSelected && bulkSelected.provider !== next) {
+                  applyToAll('');
+                }
+              }}
+              className="text-[11px] bg-white/[0.04] border border-white/[0.08] rounded-md px-2 py-1 text-gray-300 focus:outline-none focus:border-white/[0.15] cursor-pointer"
+              title="Filter by provider"
+            >
+              <option value="">Any provider</option>
+              {allProviders.map((p) => {
+                const reason = unusableReason(p);
+                const ok = !reason;
+                const a = getAvail(p);
+                const suffix = !a.runner_supported
+                  ? ' · runner-only Claude'
+                  : !a.available
+                    ? ' · no key'
+                    : '';
+                return (
+                  <option key={p} value={p} disabled={!ok} title={reason ?? undefined}>
+                    {p}
+                    {suffix}
+                  </option>
+                );
+              })}
+            </select>
+            <select
+              value={allSame ? bulkValue : ''}
+              onChange={(e) => {
+                const nextId = e.target.value;
+                if (nextId) {
+                  const m = models.find((x) => x.id === nextId);
+                  if (m && !isProviderUsable(m.provider)) return;
+                }
+                applyToAll(nextId);
+              }}
+              className="text-[11px] bg-white/[0.04] border border-white/[0.08] rounded-md px-2 py-1 text-gray-300 focus:outline-none focus:border-white/[0.15] cursor-pointer"
+            >
+              <option value="">
+                {allSame ? 'Per-agent defaults' : 'Mixed — pick one to sync'}
+              </option>
+              {filteredBulkModels.map((m) => {
+                const reason = unusableReason(m.provider);
+                const ok = !reason;
+                const a = getAvail(m.provider);
+                const suffix = !a.runner_supported
+                  ? ' · not yet supported'
+                  : !a.available
+                    ? ' · no key'
+                    : '';
+                return (
+                  <option key={m.id} value={m.id} disabled={!ok} title={reason ?? undefined}>
+                    {m.name}
+                    {m.experimental ? ' (preview)' : ''}
+                    {suffix}
+                  </option>
+                );
+              })}
+            </select>
+          </div>
         </div>
         {ALL_AGENT_TYPES.map((agentType) => {
           const am = getAgentMeta(agentType);

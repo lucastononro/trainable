@@ -17,6 +17,16 @@ skills:
   - name: list-session-agents
   - name: list-available-skills
   - name: use-skill
+  # Experiment lifecycle (agent-declared)
+  - name: list-project-datasets
+  - name: register-raw-dataset
+  - name: create-experiment
+  - name: fork-experiment
+  - name: register-dataset
+  - name: start-training
+  - name: register-model
+  - name: create-serving-app
+  - name: validate-serving-app
 
 subagents:
   - reviewer
@@ -102,6 +112,156 @@ system: |
   - Start with a quick scan: train 2-3 model types on a sample (max 10k rows) to identify the best approach
   - Then do a full run with thorough hyperparameter tuning on the complete dataset
   - Budget tuning appropriately: 30-50 optuna trials for the final model
+
+  ## Mandatory Experiment Lifecycle (NON-NEGOTIABLE)
+  Ownership note: chat / orchestrator typically open the experiment
+  via `create-experiment` before delegating to you, so step 1 is
+  usually a no-op for you (your task input carries the
+  `experiment_id`). When the parent agent didn't pre-open one, OR
+  when you want a sibling run on the same data, use `fork-experiment
+  (parent_experiment_id, name, hypothesis)` so the dataset linkages
+  are inherited automatically — saves you from re-running
+  list-project-datasets and re-doing parent_dataset_id math.
+
+  Every training run MUST follow this lifecycle. Skipping a step means the
+  work is not tracked and will not appear in the lineage canvas. The user's
+  registry is built entirely from these calls — heuristic file detection has
+  been removed.
+
+  1. BEFORE training, call `create-experiment(name, hypothesis)`. The
+     hypothesis is a 1-2 sentence statement of what you're trying — e.g.
+     "Test whether adding interaction features beats the linear
+     baseline." Save the returned `experiment_id`.
+
+     DO NOT pass `parent_dataset_ids` for raw uploads on
+     create-experiment — that creates a misleading direct edge from
+     raw → model in the lineage canvas. Raw → Processed is wired by
+     the next step (register-dataset.parent_dataset_id), and
+     Processed → Model is wired by register-model.training_dataset_id.
+
+  1.5 Call `list-project-datasets` to see the dataset graph for this
+      project. You'll get a list of every DatasetVersion (raw +
+      processed) with its id, kind, name, description, and parent_id.
+      Trace the chain: which raw upload feeds which processed split.
+      You'll need the right `parent_dataset_id` for step 2.
+
+      **If the input file your prep is reading from has NO row with
+      `kind='raw'`** in the listing (the common case when files were
+      copied via S3 sync, mounted from another session, or otherwise
+      didn't go through POST /api/experiments) — call
+      `register-raw-dataset(path=..., project_id=..., description=...)`
+      FIRST. This produces the starting node in the lineage canvas
+      without which the graph reads as `Processed → Model` with no
+      origin and the user can't audit where the data came from. The
+      call is idempotent (deduped by content hash) so it's safe to
+      run preemptively.
+
+      If you find a processed dataset already registered for the
+      target raw upload (e.g. data_prep ran earlier in this session),
+      pass ITS id as `parent_dataset_id` for register-dataset — don't
+      re-register the processed split. The lineage edge becomes:
+      raw → existing_processed → your_new_split.
+
+  2. After your prep step writes train/val/test outputs to the volume, call
+     `register-dataset(experiment_id, path, name, description, content_hash,
+     parent_dataset_id, metadata={target_column, feature_columns, train_rows,
+     val_rows, test_rows, quality_stats})`. Hash the train.parquet bytes via
+     `hashlib.sha256(...).hexdigest()` from inside execute-code. Pass the raw
+     dataset's id (from step 1.5) as `parent_dataset_id` so the lineage edge is drawn.
+
+     The `description` must be 1-3 sentences and user-facing. EXAMPLES:
+
+       GOOD: "Stratified 70/15/15 split on `churn`, one-hot encoded
+       the 7 categorical columns, dropped `customerID` (leakage),
+       median-imputed `MonthlyCharges` nulls. Final shape 7032×31."
+
+       BAD: "processed dataset" / "the data" / "training data v1"
+
+     If you can't articulate what's distinct about this dataset, the
+     prep pass is probably redundant.
+
+  3. IMMEDIATELY before fitting starts, call `start-training(experiment_id,
+     framework, hyperparams)`. This opens the training window. If you skip
+     this and call `register-model` directly, the lifecycle service will
+     reject the call.
+
+  3.5 EMIT METRICS DURING TRAINING. Inside `execute-code` (the same
+      script that calls `.fit()`), use `trainable.log(step=…, metrics=…)`
+      to record training curves. Without this the registered model has
+      no inline charts on /models and /compare can't plot anything.
+
+      Minimum for any one-shot fit (XGBoost / sklearn):
+
+        trainable.log(step=0, stage="train", metrics={"accuracy": train_acc, "loss": train_loss})
+        trainable.log(step=0, stage="val",   metrics={"accuracy": val_acc, "loss": val_loss})
+        trainable.log(step=0, stage="test",  metrics={"accuracy": test_acc})
+
+      For real training loops (PyTorch, TF, Optuna trials), emit on
+      every epoch / every trial — the curves are what makes the model
+      page useful.
+
+      register-model auto-snapshots ALL these rows onto the model so
+      they survive session deletion. Skipping this step means the model
+      gets registered but the training history is lost.
+
+  4. IMMEDIATELY after fitting succeeds and you've saved the artifact,
+     call:
+
+       register-model(
+         experiment_id, path, framework, metrics, description,
+         hyperparams,
+         training_dataset_id=<processed_id from step 2>,   # MANDATORY
+         validation_dataset_id=<id, if held out separately>,
+         test_dataset_id=<id, if held out separately>,
+         split_metrics={                                   # if you have them
+           "train": {...}, "val": {...}, "test": {...}
+         },
+       )
+
+     `training_dataset_id` is the **processed** dataset's id from
+     step 2 — NEVER the raw upload's id (the call rejects raws). This
+     is what makes the lineage canvas draw `Processed → Model` cleanly
+     and lets the model card show train/val/test metrics next to each
+     dataset name in the UI.
+
+     If you only had one processed file with internal splits (the
+     common case), pass that one id as `training_dataset_id` and put
+     the per-split numbers in `split_metrics`. Don't fabricate
+     separate dataset ids you didn't actually register.
+
+     The `description` must be 1-3 sentences and user-facing. EXAMPLES:
+
+       GOOD: "XGBoost depth=8, n_estimators=400, learning_rate=0.05,
+       tuned via 50-trial Optuna sweep on val ROC-AUC. Class weights
+       balanced for the 5.6:1 churn imbalance."
+
+       BAD: "trained model" / "xgboost" / "the model"
+
+     If you can't articulate what's distinct about this model, the
+     experiment is probably redundant.
+
+  5. AFTER register-model succeeds and the user has expressed any
+     interest in deploying / serving the model (or at the end of any
+     finished training run when the user said "deploy this" or "stand
+     this up"), call `create-serving-app(model_id=<id from step 4>)`.
+     This writes the Modal serving app (`app.py`) to the volume next
+     to the artifact and unlocks the **Deploy** button on /models.
+     Until you call this, that button is greyed out — clicking it
+     returns a 400 telling the user to ask you to run this skill.
+
+     For exploratory training where the user explicitly said "no
+     deploy yet" or "just train, don't ship", skip this step. But err
+     on the side of generating the app — it's idempotent and cheap.
+
+  If training fails or you decide to abandon a run, do NOT call register-model
+  — the post-stage hook will auto-flag the experiment as `abandoned`. For a
+  fresh attempt with different hyperparams, call `create-experiment` again
+  rather than re-using the abandoned one.
+
+  Multiple experiments per session are normal: a baseline run, a tuned run,
+  and an alternative model are three separate experiments. Each gets its own
+  create-experiment / register-dataset / start-training / register-model
+  sequence.
 
   ## Critical Rules
   - Load train/val/test as-is from prep stage. Do NOT re-split or shuffle test data

@@ -1,0 +1,19 @@
+type: object
+properties:
+  project_id:
+    type: string
+    description: Target project (required when no experiment_id is in scope).
+  experiment_id:
+    type: string
+    description: An experiment whose project to use, when project_id isn't supplied.
+  path:
+    type: string
+    description: Volume path to the raw file (e.g. /projects/{project_id}/datasets/iris.csv).
+  name:
+    type: string
+    description: Human-readable file name (defaults to basename of path).
+  description:
+    type: string
+    description: Where this raw data came from — one sentence (e.g. "Kaggle Titanic competition CSV, 891 rows.").
+required:
+  - path

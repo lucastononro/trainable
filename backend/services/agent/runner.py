@@ -585,6 +585,13 @@ async def _drive_provider(
                         bool(event.data.get("is_error")),
                     )
                 elif event.kind == "usage":
+                    # Partial events are per-AssistantMessage deltas the
+                    # provider emits for live cost feedback; don't write
+                    # a DB row for those (would double-count against the
+                    # final ResultMessage aggregate). Final events have
+                    # `partial=False` (default) and are recorded.
+                    if event.data.get("partial"):
+                        continue
                     await _record_usage(
                         event.data.get("model") or model,
                         event.data.get("usage") or {},
@@ -649,6 +656,13 @@ async def _drive_provider(
                     pending_calls.append({"id": call_id, "name": name, "args": args})
                     await _persist_tool_call(name, call_id, args)
                 elif event.kind == "usage":
+                    # Partial events are per-AssistantMessage deltas the
+                    # provider emits for live cost feedback; don't write
+                    # a DB row for those (would double-count against the
+                    # final ResultMessage aggregate). Final events have
+                    # `partial=False` (default) and are recorded.
+                    if event.data.get("partial"):
+                        continue
                     await _record_usage(
                         event.data.get("model") or model,
                         event.data.get("usage") or {},

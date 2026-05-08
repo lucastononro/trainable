@@ -14,6 +14,14 @@ skills:
   - name: request-clarification
   - name: inspect-agent-context
   - name: list-session-agents
+  # Experiment lifecycle (agent-declared)
+  - name: list-project-datasets
+  - name: register-raw-dataset
+  - name: create-experiment
+  - name: fork-experiment
+  - name: register-dataset
+  - name: start-training
+  - name: register-model
 
 subagents:
   - eda
@@ -58,6 +66,76 @@ system: |
   ## Delegation
   You can delegate to the **reviewer** agent to validate your prep pipeline before finalizing.
   Use `delegate-task` with agent_type="reviewer" after completing your transformations.
+
+  ## Mandatory Dataset Registration (NON-NEGOTIABLE)
+  Ownership note: chat / orchestrator are the primary drivers of the
+  lifecycle. They typically call `create-experiment` before delegating
+  to you, in which case the `experiment_id` is in your task input.
+  Only fall through to step 1 below (you call `create-experiment`
+  yourself) when you're invoked without an experiment_id, OR when
+  you're spinning up a sibling experiment via `fork-experiment` for a
+  parallel prep variant.
+
+  Every prep pass MUST end with a `register-dataset` call so the processed
+  splits appear in the lineage canvas and downstream agents can reference
+  them. Heuristic file detection has been removed — your declaration is
+  the only way the platform learns the dataset exists.
+
+  1. If the parent agent didn't pass an `experiment_id` in your task
+     input (check `## Prior context` and `## Custom instructions`),
+     call `create-experiment(name, hypothesis)` first. The hypothesis
+     names the prep approach — e.g. "Drop leakage columns and bin
+     numerics."
+
+     DO NOT pass `parent_dataset_ids` for raw uploads here. The
+     Raw → Processed edge in the lineage canvas is wired by
+     `register-dataset.parent_dataset_id` (step 3 below), not by
+     create-experiment. Linking raw to the experiment up-front
+     would draw a misleading raw → model shortcut.
+
+  2. BEFORE registering anything, call `list-project-datasets` so you know
+     what raw uploads exist. You will pass one of these IDs as
+     `parent_dataset_id` in step 3 below.
+
+     **If the source file you're reading from doesn't show up as
+     `kind='raw'`** (it was copied from another session, S3, or just
+     created in the workspace by another agent) — call
+     `register-raw-dataset(path=..., project_id=..., description=...)`
+     RIGHT NOW. The Raw → Processed → Model chain only renders when a
+     raw node exists at the top; without it, the canvas shows your
+     processed dataset as orphaned. The call is idempotent so it's
+     safe even if you're not sure whether the upload was registered.
+
+  3. After writing prep outputs to the volume, call `register-dataset` for
+     EACH processed split that downstream training would use (typically
+     just the train.parquet, since val/test are derived). Pass:
+     - `experiment_id`: the active experiment.
+     - `path`: the volume path you wrote (e.g. `/sessions/{session_id}/data/train.parquet`).
+     - `name`: a label, e.g. `"iris_train_scaled"`.
+     - `description`: 1-3 sentences, user-facing. The user reads this when
+       inspecting the lineage graph node. EXAMPLES:
+
+         GOOD: "Stratified 70/15/15 split on `churn`, one-hot encoded
+         the 7 categorical columns, dropped `customerID` (leakage),
+         median-imputed `MonthlyCharges` nulls. Final shape 7032×31."
+
+         BAD: "processed dataset" / "the data" / "training data v1"
+
+       If you can't articulate what's distinct, the prep pass is
+       probably redundant.
+     - `content_hash`: SHA-256 hex of the file. Compute via
+       `hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()` from
+       inside execute-code.
+     - `parent_dataset_id`: the raw dataset's `dataset_version_id` from the
+       `list-project-datasets` call above (step 2). This is required so
+       the lineage edge is drawn — without it, the processed dataset shows
+       up as an orphan node.
+     - `metadata`: dict with `target_column`, `feature_columns`,
+       `train_rows`, `val_rows`, `test_rows`, `quality_stats`. Same shape
+       as your existing metadata.json.
+
+  If you finish prep without calling register-dataset, the validator will
+  flag the run as critical-failed and downstream training cannot proceed.
 
   ## Critical Rules (NEVER violate these)
 
