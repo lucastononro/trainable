@@ -55,8 +55,17 @@ const AGENT_META: Record<string, { label: string; color: string; description: st
     color: 'gray',
     description: 'Root conversational agent (always main)',
   },
+  deploy: {
+    label: 'Deploy Agent',
+    color: 'emerald',
+    description: 'Generates Modal serving apps + ships models to production',
+  },
 };
 
+// Order matches the natural ML pipeline so the picker reads
+// chat → orchestrator → EDA → prep → feat eng → train → review →
+// deploy. Adding a new agent? Drop it here AND in
+// AGENT_TYPE_INFO above so it gets a colour + description.
 const ALL_AGENT_TYPES = [
   'chat',
   'orchestrator',
@@ -65,6 +74,7 @@ const ALL_AGENT_TYPES = [
   'feature_eng',
   'trainer',
   'reviewer',
+  'deploy',
 ];
 
 const COLOR_MAP: Record<string, { bg: string; text: string; dot: string; ring: string }> = {
@@ -115,6 +125,12 @@ const COLOR_MAP: Record<string, { bg: string; text: string; dot: string; ring: s
     text: 'text-teal-400',
     dot: 'bg-teal-400',
     ring: 'ring-teal-400/30',
+  },
+  emerald: {
+    bg: 'bg-emerald-500/15',
+    text: 'text-emerald-400',
+    dot: 'bg-emerald-400',
+    ring: 'ring-emerald-400/30',
   },
 };
 
