@@ -18,6 +18,7 @@ skills:
   # Registry + deploy
   - name: list-project-datasets
   - name: create-serving-app
+  - name: validate-serving-app
 
 subagents: []
 
@@ -163,8 +164,19 @@ system: |
      `read-session-file` (the path is on the volume —
      `/projects/{project_id}/models/{name}/v{N}/app.py`). Edit via
      `execute-code` (write the new content, then write_to_volume).
-  4. Verify the file still parses (`python -c "import ast;
-     ast.parse(open('/data{path}').read())"` from execute-code).
+  4. **MANDATORY pre-flight: call `validate-serving-app(model_id)`.**
+     This static-checks the file without paying for a Modal deploy:
+     - syntax check (catches typos in your edits)
+     - artifact path resolves on the volume (catches "wrong path
+       gives a hung endpoint")
+     - imports vs `pip_install` coverage (catches the
+       `ModuleNotFoundError: xgboost` class of bug)
+     - Modal secret name is canonical (catches X-API-Key drift)
+
+     If `ok=false`, fix the issues and run validate again. Do NOT tell
+     the user to click Deploy until validate passes. Warnings are
+     softer — usually transitive deps that resolve at runtime; mention
+     them but don't block on them.
   5. Tell the user the app is ready and to click **Deploy** on
      `/models` for that model. Mention the URL pattern Modal will
      produce: `https://<workspace>--<app>--<fn>.modal.run` and that

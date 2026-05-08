@@ -28,6 +28,7 @@ skills:
   - name: start-training
   - name: register-model
   - name: create-serving-app
+  - name: validate-serving-app
 
 subagents:
   - orchestrator

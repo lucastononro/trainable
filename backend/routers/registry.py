@@ -244,6 +244,17 @@ async def put_serving_app(model_id: str, body: ServingAppUpdate):
     return {"ok": True, "path": m["serving_app_path"], "size": len(body.code)}
 
 
+@router.post("/models/{model_id}/validate-serving-app")
+async def validate_serving_app(model_id: str):
+    """Pre-deploy sanity check on the model's serving app — surfaces
+    artifact-path drift, missing pip deps, secret mismatches, and
+    syntax errors BEFORE the user clicks Deploy."""
+    try:
+        return await deploy_svc.validate_serving_app(model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.post("/models/{model_id}/rotate-key")
 async def rotate_model_key(model_id: str):
     """Regenerate the X-API-Key for a model + replace the Modal secret.

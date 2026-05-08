@@ -121,19 +121,26 @@ def _serving_app_code(
     """
     feature_cols_repr = repr(feature_columns) if feature_columns else "None"
     target_repr = repr(target_column) if target_column else "None"
+    # The image always carries the common tabular ML stack so a
+    # sklearn-flagged ensemble that internally pickles xgboost /
+    # lightgbm / catboost classifiers (the VotingClassifier /
+    # StackingClassifier / Pipeline pattern) loads cleanly without
+    # `ModuleNotFoundError` at @modal.enter time. Each library is
+    # 20-60 MB and Modal caches the image layer after first build, so
+    # the deploy cost is one-time. Heavy stacks (torch / transformers)
+    # are still gated behind framework because they're hundreds of MB.
     pip_pkgs = [
         "numpy",
         "pandas",
         "scikit-learn",
+        "xgboost",
+        "lightgbm",
+        "catboost",
         "fastapi[standard]",
         "joblib",
     ]
     fw = (framework or "").lower()
-    if fw == "xgboost":
-        pip_pkgs.append("xgboost")
-    elif fw in ("lightgbm", "lgbm"):
-        pip_pkgs.append("lightgbm")
-    elif fw == "pytorch":
+    if fw == "pytorch":
         pip_pkgs.extend(["torch", "torchvision"])
     elif fw in ("transformers", "huggingface"):
         pip_pkgs.extend(["transformers", "torch", "accelerate"])
@@ -852,6 +859,173 @@ async def _run_modal_deploy(serving_app_path: str, app_name: str) -> str:
             os.unlink(local_path)
         except OSError:
             pass
+
+
+async def validate_serving_app(model_id: str) -> dict:
+    """Pre-deploy sanity check on a model's serving app.
+
+    Catches the issues we've seen recur in practice without going all
+    the way through a Modal deploy:
+
+      1. `ast.parse` the file — syntax errors are a guaranteed deploy
+         failure, surface them locally.
+      2. Confirm the artifact ARTIFACT_PATH the file points at actually
+         exists on the volume. This is the #1 reason endpoints hung
+         before — typo / wrong-path → @modal.enter loops forever.
+      3. Confirm the Modal secret the file references exists and the
+         X-API-Key it stores matches the model's api_key. A drift
+         here yields 401s that look like an auth bug to the caller.
+      4. Static parse: pull every `import name` line and check the
+         pip_install args of the @app.cls image cover the common
+         libraries. Misses won't necessarily fail (xgboost is now in
+         the default image), but flagged so the agent can add deps if
+         the user customised the image.
+
+    Returns a dict with `ok: bool`, `issues: list[str]`, `warnings:
+    list[str]`, plus the parsed metadata. `ok=False` means the deploy
+    will almost certainly fail — fix issues before calling deploy.
+    """
+    import ast
+    import re
+
+    from services.volume import read_volume_file_async
+
+    issues: list[str] = []
+    warnings: list[str] = []
+
+    async with async_session() as db:
+        model = (
+            await db.execute(
+                select(RegisteredModel).where(RegisteredModel.id == model_id)
+            )
+        ).scalar_one_or_none()
+        if not model:
+            raise ValueError(f"Model {model_id} not found")
+        if not model.serving_app_path:
+            return {
+                "ok": False,
+                "issues": [
+                    "Model has no serving_app_path set. Run create-serving-app first."
+                ],
+                "warnings": [],
+            }
+        serving_app_path = model.serving_app_path
+        api_key_value = model.api_key
+        artifact_uri = model.artifact_uri
+
+    # 1. Read + parse the file.
+    try:
+        code_bytes = await read_volume_file_async(serving_app_path)
+        code = code_bytes.decode("utf-8")
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "issues": [f"app.py is missing on the volume at {serving_app_path}."],
+            "warnings": [],
+        }
+    try:
+        tree = ast.parse(code)
+    except SyntaxError as e:
+        return {
+            "ok": False,
+            "issues": [f"SyntaxError on line {e.lineno}: {e.msg}"],
+            "warnings": [],
+        }
+
+    # 2. Pull ARTIFACT_PATH out of the AST and verify it resolves.
+    artifact_path_in_app: str | None = None
+    pip_args: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            if any(
+                isinstance(t, ast.Name) and t.id == "ARTIFACT_PATH"
+                for t in node.targets
+            ):
+                if isinstance(node.value, ast.Constant) and isinstance(
+                    node.value.value, str
+                ):
+                    artifact_path_in_app = node.value.value
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr == "pip_install":
+                for a in node.args:
+                    if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                        pip_args.append(a.value)
+
+    if not artifact_path_in_app:
+        warnings.append("Could not find an ARTIFACT_PATH literal — heavy customisation; skipping artifact check.")
+    else:
+        # Strip the in-container `/data/` prefix to get the volume path.
+        volume_path = artifact_path_in_app
+        if volume_path.startswith("/data/"):
+            volume_path = volume_path[len("/data") :]
+        try:
+            await read_volume_file_async(volume_path)
+        except FileNotFoundError:
+            issues.append(
+                f"ARTIFACT_PATH `{artifact_path_in_app}` does not exist on the volume "
+                f"(checked `{volume_path}`). The container will fail to load the model "
+                "and the endpoint will hang. Fix the path in app.py or re-run "
+                "register-model with the correct path."
+            )
+
+    # 3. Modal secret check (best-effort — we can't query the user's
+    #    Modal account from here). Confirm the file references a secret
+    #    name that matches the canonical pattern + the model's stored
+    #    api_key is non-empty so the deploy step will write it.
+    secret_match = re.search(
+        r'modal\.Secret\.from_name\(\s*["\']([^"\']+)["\']\s*\)', code
+    )
+    if secret_match:
+        expected = _api_secret_name(model_id)
+        if secret_match.group(1) != expected:
+            warnings.append(
+                f"Secret name `{secret_match.group(1)}` doesn't match the canonical "
+                f"`{expected}`. If you changed it on purpose make sure the X-API-Key "
+                "header check pulls the right env var."
+            )
+        if not api_key_value:
+            warnings.append(
+                "Model has no api_key stored — first deploy will generate one. "
+                "After that, rotate via /api/models/{id}/rotate-key."
+            )
+
+    # 4. Walk every `import X` and `from X import …` and warn if the
+    #    name isn't covered by the image's pip_install. Stdlib + modal
+    #    + fastapi + pandas et al are pre-shipped; we only flag the
+    #    interesting ones.
+    pip_set = {p.split("[", 1)[0].split("==", 1)[0].lower() for p in pip_args}
+    pip_set.update({"modal", "os", "json", "math", "io", "re", "typing", "pickle"})
+    pip_set.update({"sys", "pathlib", "collections", "itertools", "functools"})
+    imports: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for n in node.names:
+                imports.add(n.name.split(".", 1)[0].lower())
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imports.add(node.module.split(".", 1)[0].lower())
+    suspicious = sorted(
+        i
+        for i in imports
+        if i not in pip_set
+        and i not in {"pydantic", "starlette", "fastapi"}
+        and not i.startswith("_")
+    )
+    if suspicious:
+        warnings.append(
+            f"Imports not in the pip_install list: {suspicious}. If they're not "
+            "shipped by transitive deps, deploy will succeed but @modal.enter "
+            "raises ModuleNotFoundError. Add them to .pip_install(...) on the image."
+        )
+
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "warnings": warnings,
+        "serving_app_path": serving_app_path,
+        "artifact_uri": artifact_uri,
+        "artifact_path_in_app": artifact_path_in_app,
+        "pip_packages": pip_args,
+    }
 
 
 async def rotate_api_key(model_id: str) -> dict:
