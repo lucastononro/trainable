@@ -110,6 +110,7 @@ def _serving_app_code(
     target_column: str | None,
     volume_name: str,
     compute: str = "cpu",
+    api_secret_name: str | None = None,
 ) -> str:
     """Render the Modal serving app for a registered model.
 
@@ -143,6 +144,45 @@ def _serving_app_code(
     gpu_line = f"    gpu={gpu_value!r},\n" if gpu_value else ""
     compute_label = compute if gpu_value else "CPU"
 
+    # When an api_secret_name is supplied, the @app.cls + @app.function
+    # both attach the Modal secret (so `os.environ["API_KEY"]` is
+    # available inside the container) and the endpoint validates an
+    # `X-API-Key` header against it. Skipping this would leave the
+    # endpoint open to anyone who learns the URL — Modal endpoints are
+    # public by default. Cleanly omitted when no secret is requested
+    # (e.g. local debugging deploys).
+    secrets_kwarg = (
+        f"    secrets=[modal.Secret.from_name({api_secret_name!r})],\n"
+        if api_secret_name
+        else ""
+    )
+    auth_imports = (
+        "from fastapi import Header, HTTPException\n" if api_secret_name else ""
+    )
+    auth_param = (
+        ',\n    x_api_key: str | None = Header(default=None, alias="X-API-Key")'
+        if api_secret_name
+        else ""
+    )
+    auth_check = (
+        '''
+    expected_key = os.environ.get("API_KEY", "")
+    if not expected_key or x_api_key != expected_key:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+'''
+        if api_secret_name
+        else ""
+    )
+
+    auth_doc = (
+        "\nAuthentication: every request must include the `X-API-Key` "
+        "header. The expected value lives in the Modal secret "
+        f"`{api_secret_name}`; the platform creates and rotates this "
+        "secret automatically.\n"
+        if api_secret_name
+        else ""
+    )
+
     # Triple-brace for f-string vs Python source dict literals.
     return f'''"""Modal serving app for {model_name} v{model_version}.
 
@@ -155,9 +195,11 @@ Local deploy:
 
 After deploy, Modal prints the live URL. Open it with `/docs` appended
 to see the auto-generated Swagger UI; POST to the root URL to predict.
-"""
+{auth_doc}"""
 
+import os
 import modal
+{auth_imports}
 
 app = modal.App({app_name!r})
 
@@ -178,7 +220,7 @@ TARGET_COLUMN = {target_repr}
 @app.cls(
     image=image,
     volumes={{"/data": volume}},
-{gpu_line}    scaledown_window=120,
+{gpu_line}{secrets_kwarg}    scaledown_window=120,
 )
 class Model:
     @modal.enter()
@@ -211,9 +253,14 @@ class Model:
 _model = Model()
 
 
-@app.function(image=image, volumes={{"/data": volume}})
+@app.function(
+    image=image,
+    volumes={{"/data": volume}},
+{secrets_kwarg})
 @modal.fastapi_endpoint(method="POST", docs=True)
-def {fn_name.replace("-", "_")}(request: dict):
+def {fn_name.replace("-", "_")}(
+    request: dict{auth_param},
+):
     """Predict on a batch of records.
 
     Body:
@@ -221,7 +268,7 @@ def {fn_name.replace("-", "_")}(request: dict):
 
     Returns:
       {{"predictions": [...], "model": "...", "version": ...}}
-    """
+    """{auth_check}
     records = request.get("records", [])
     if not records:
         return {{"predictions": [], "model": {model_name!r}, "version": {model_version}, "error": "no records"}}
@@ -233,10 +280,27 @@ def {fn_name.replace("-", "_")}(request: dict):
 '''
 
 
+def _api_secret_name(model_id: str) -> str:
+    """Modal secret name for a model's auth key. 12 hex chars from the
+    model uuid keeps it well under Modal's 64-char secret-name limit and
+    is uniquely deterministic per model.
+    """
+    return f"trainable-key-{model_id.replace('-', '')[:12]}"
+
+
+def _generate_api_key() -> str:
+    """43-char URL-safe random token. Same primitive used by Django's
+    SECRET_KEY default and `secrets.compare_digest`-friendly."""
+    import secrets
+
+    return secrets.token_urlsafe(32)
+
+
 async def generate_serving_app(
     model_id: str,
     *,
     compute: str = "cpu",
+    enable_auth: bool = True,
 ) -> dict[str, Any]:
     """Write a Modal serving app to the volume for the given model and
     record the path on the model row.
@@ -247,12 +311,19 @@ async def generate_serving_app(
     canonical way to flip a deployment from CPU to GPU — the file is
     overwritten in place and the next click of Deploy ships it.
 
-    Returns the {model_id, serving_app_path, code_preview, compute}
-    shape the skill handler emits to the agent.
+    `enable_auth=True` (the default) wires an `X-API-Key` header check
+    into the generated endpoint and references the Modal secret named
+    `_api_secret_name(model_id)`. The secret itself isn't created here
+    — that happens at deploy time so we have the CLI side-effects in
+    one place.
+
+    Returns the {model_id, serving_app_path, code_preview, compute,
+    api_secret_name} shape the skill handler emits to the agent.
     """
     from services.volume import write_to_volume
 
     compute = _normalize_compute(compute)
+    secret_name = _api_secret_name(model_id) if enable_auth else None
 
     async with async_session() as db:
         model = (
@@ -301,6 +372,7 @@ async def generate_serving_app(
             target_column=target_col,
             volume_name=settings.modal_volume_name,
             compute=compute,
+            api_secret_name=secret_name,
         )
 
         # Park the file alongside the artifact so it's easy to find +
@@ -321,6 +393,7 @@ async def generate_serving_app(
             "modal_app": app_name,
             "modal_function": fn_name,
             "compute": compute,
+            "api_secret_name": secret_name,
             "code_preview": code[:600] + ("…" if len(code) > 600 else ""),
         }
 
@@ -386,6 +459,45 @@ async def deploy_model(
         if existing and (existing.compute or "cpu") == compute_norm:
             return existing.to_dict()
 
+    # Ensure the model has an API key + the Modal secret exists. The
+    # key is generated once per model and reused across redeploys
+    # (incl. compute changes) so clients don't have to update their
+    # X-API-Key header every time. `rotate-key` regenerates it.
+    async with async_session() as db:
+        model = (
+            await db.execute(
+                select(RegisteredModel).where(RegisteredModel.id == model_id)
+            )
+        ).scalar_one()
+        if not model.api_key:
+            model.api_key = _generate_api_key()
+            await db.commit()
+        api_key_value = model.api_key
+    secret_name = _api_secret_name(model_id)
+    try:
+        await _ensure_modal_secret(secret_name, api_key_value)
+    except Exception as e:
+        # Surface but don't block — the deploy still ships, but
+        # without the secret the endpoint will 401 on every request.
+        # Better to surface a deploy_row.error than silently allow an
+        # open endpoint or a broken auth check.
+        logger.exception("Modal secret create failed: %s", e)
+        async with async_session() as db:
+            row = Deployment(
+                id=str(uuid.uuid4()),
+                model_id=model_id,
+                endpoint_url=None,
+                status="failed",
+                error=f"could not create Modal secret {secret_name}: {e}",
+                modal_app=app_name,
+                modal_function=fn_name,
+                compute=compute_norm,
+            )
+            db.add(row)
+            await db.commit()
+            await db.refresh(row)
+            return row.to_dict()
+
     # Regenerate app.py with the chosen compute BEFORE invoking the
     # CLI — the file on disk is the source of truth for `modal deploy`.
     # Done outside the previous async-session block so the regen
@@ -442,6 +554,60 @@ async def deploy_model(
         await db.commit()
         await db.refresh(row)
         return row.to_dict()
+
+
+async def _ensure_modal_secret(secret_name: str, value: str) -> None:
+    """Create-or-replace the named Modal secret with `API_KEY=<value>`.
+
+    Modal's CLI rejects `secret create` if the name already exists, so
+    we delete-then-create. Both calls tolerate missing-token / network
+    errors — on failure the deploy still goes through, but the
+    container will see no API_KEY and the auth check rejects every
+    request, which is the safe default. We surface the failure as a
+    ValueError so the caller can decide whether to abort.
+    """
+    import asyncio
+    import shutil
+
+    if not shutil.which("modal"):
+        raise ValueError(
+            "modal CLI not found in PATH. Install it (`pip install modal`) "
+            "and run `modal token new` to enable deploy-time secret creation."
+        )
+
+    # Delete existing — ignore failure (it might not exist yet).
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "modal",
+            "secret",
+            "delete",
+            secret_name,
+            "--yes",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await asyncio.wait_for(proc.communicate(), timeout=20)
+    except Exception:
+        pass
+
+    # Create fresh secret. `modal secret create <name> KEY=value` writes
+    # the secret atomically; any failure here is unrecoverable for this
+    # deploy.
+    proc = await asyncio.create_subprocess_exec(
+        "modal",
+        "secret",
+        "create",
+        secret_name,
+        f"API_KEY={value}",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    out_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
+    if proc.returncode != 0:
+        out = out_bytes.decode("utf-8", errors="replace")
+        raise ValueError(
+            f"modal secret create exited {proc.returncode}: {out[-500:]}"
+        )
 
 
 async def _run_modal_deploy(serving_app_path: str, app_name: str) -> str:
@@ -530,6 +696,38 @@ async def _run_modal_deploy(serving_app_path: str, app_name: str) -> str:
             os.unlink(local_path)
         except OSError:
             pass
+
+
+async def rotate_api_key(model_id: str) -> dict:
+    """Generate a fresh API key, replace the Modal secret, and return
+    the new key.
+
+    The serving app already references the secret BY NAME, so the
+    running endpoint picks up the new key on its next cold start. To
+    force an immediate cutover the user can click Redeploy after.
+    """
+    async with async_session() as db:
+        model = (
+            await db.execute(
+                select(RegisteredModel).where(RegisteredModel.id == model_id)
+            )
+        ).scalar_one_or_none()
+        if not model:
+            raise ValueError(f"Model {model_id} not found")
+        new_key = _generate_api_key()
+        secret_name = _api_secret_name(model_id)
+        await _ensure_modal_secret(secret_name, new_key)
+        model.api_key = new_key
+        await db.commit()
+        return {
+            "model_id": model_id,
+            "api_key": new_key,
+            "modal_secret": secret_name,
+            "note": (
+                "Running containers cache the previous secret value — "
+                "redeploy or wait for cold-start to roll the new key."
+            ),
+        }
 
 
 async def stop_deployment(deployment_id: str) -> dict:

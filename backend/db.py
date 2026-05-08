@@ -335,6 +335,7 @@ def _run_migrations(connection):
             ("dataset_refs", "JSON"),
             ("metrics_history", "JSON"),
             ("serving_app_path", "VARCHAR(512)"),
+            ("api_key", "VARCHAR(64)"),
         ]:
             if col_name not in mcols:
                 connection.execute(

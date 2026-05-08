@@ -16,6 +16,10 @@ import {
   Lock,
   BookOpen,
   Power,
+  Key,
+  RefreshCcw,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -130,18 +134,24 @@ function ModelCard({
   computeOptions,
   onDeploy,
   onStop,
+  onRotateKey,
   deploying,
   stopping,
+  rotating,
 }: {
   m: RegisteredModel;
   deployments: DeploymentRow[];
   computeOptions: ComputeOption[];
   onDeploy: (modelId: string, compute: string) => void;
   onStop: (deploymentId: string) => void;
+  onRotateKey: (modelId: string) => void;
   deploying: boolean;
   stopping: boolean;
+  rotating: boolean;
 }) {
   const [copied, setCopied] = useState(false);
+  const [keyCopied, setKeyCopied] = useState(false);
+  const [showKey, setShowKey] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
   // Default to CPU when there's no live deployment to inherit from;
   // otherwise pre-select whatever compute was last shipped so the
@@ -162,8 +172,15 @@ function ModelCard({
   const copyCurl = async (url: string) => {
     // Modal's @modal.fastapi_endpoint serves the predict function at
     // the root URL — no /predict suffix, unlike a typical FastAPI
-    // mount. The previous template included one and produced 404s.
-    const curl = `curl -X POST '${url}' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"records": [{"feature_a": 1.0, "feature_b": 2.0}]}'`;
+    // mount. We embed the model's X-API-Key so the example works
+    // out of the box; the user can rotate the key from the panel
+    // below if they need a fresh one.
+    const apiKey = m.api_key || '<paste-your-X-API-Key-here>';
+    const curl =
+      `curl -X POST '${url}' \\\n` +
+      `  -H 'Content-Type: application/json' \\\n` +
+      `  -H 'X-API-Key: ${apiKey}' \\\n` +
+      `  -d '{"records": [{"feature_a": 1.0, "feature_b": 2.0}]}'`;
     await navigator.clipboard.writeText(curl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -334,6 +351,47 @@ function ModelCard({
           </div>
         </div>
       ) : null}
+      {live && m.api_key ? (
+        <div className="mt-2 px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/20">
+          <div className="flex items-center gap-1.5 mb-1.5 text-[11px] text-amber-200/90">
+            <Key className="w-3 h-3" />
+            <span className="font-medium">X-API-Key</span>
+            <span className="opacity-70">— include this header on every request.</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <code className="flex-1 px-2 py-1 rounded bg-black/40 border border-white/[0.04] font-mono text-[11px] text-gray-200 break-all">
+              {showKey ? m.api_key : '•'.repeat(Math.min(m.api_key.length, 32))}
+            </code>
+            <button
+              onClick={() => setShowKey((v) => !v)}
+              className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-gray-300"
+              title={showKey ? 'Hide key' : 'Show key'}
+            >
+              {showKey ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              onClick={async () => {
+                await navigator.clipboard.writeText(m.api_key || '');
+                setKeyCopied(true);
+                setTimeout(() => setKeyCopied(false), 2000);
+              }}
+              className="inline-flex items-center justify-center w-7 h-7 rounded-md bg-white/[0.04] hover:bg-white/[0.08] text-gray-300"
+              title="Copy key to clipboard"
+            >
+              {keyCopied ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+            <button
+              onClick={() => onRotateKey(m.id)}
+              disabled={rotating}
+              className="inline-flex items-center gap-1 px-2 h-7 rounded-md bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 text-[11px] disabled:opacity-50"
+              title="Generate a new key + replace the Modal secret. Redeploy to roll containers immediately."
+            >
+              <RefreshCcw className={`w-3 h-3 ${rotating ? 'animate-spin' : ''}`} />
+              {rotating ? 'Rotating…' : 'Rotate'}
+            </button>
+          </div>
+        </div>
+      ) : null}
       {live ? (
         <div className="mt-2 flex items-center gap-1.5 text-[11px] text-gray-500">
           Redeploy on:
@@ -411,6 +469,7 @@ export default function ModelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [deploying, setDeploying] = useState<string | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
+  const [rotating, setRotating] = useState<string | null>(null);
   const [computeOptions, setComputeOptions] = useState<ComputeOption[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
@@ -466,6 +525,18 @@ export default function ModelsPage() {
       setError((e as Error).message);
     } finally {
       setStopping(null);
+    }
+  };
+
+  const onRotateKey = async (modelId: string) => {
+    setRotating(modelId);
+    try {
+      await api.rotateModelKey(modelId);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setRotating(null);
     }
   };
 
@@ -557,8 +628,10 @@ export default function ModelsPage() {
                           computeOptions={computeOptions}
                           onDeploy={onDeploy}
                           onStop={onStop}
+                          onRotateKey={onRotateKey}
                           deploying={deploying === m.id}
                           stopping={live ? stopping === live.id : false}
+                          rotating={rotating === m.id}
                         />
                       );
                     })}

@@ -173,6 +173,17 @@ async def deploy_compute_options():
     ]
 
 
+@router.post("/models/{model_id}/rotate-key")
+async def rotate_model_key(model_id: str):
+    """Regenerate the X-API-Key for a model + replace the Modal secret.
+    Existing live containers keep serving the old key until cold-start;
+    user can click Redeploy to force the cutover."""
+    try:
+        return await deploy_svc.rotate_api_key(model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/models/{model_id}/deployments")
 async def model_deployments(model_id: str):
     async with async_session() as db:

@@ -341,6 +341,10 @@ export interface RegisteredModel {
   // Deploy button on /models is disabled — there's nothing to ship.
   // Set by `create-serving-app`.
   serving_app_path?: string | null;
+  // Auto-generated X-API-Key for the deployed endpoint. Persists on
+  // the model so redeploys keep the same key; rotate via
+  // `POST /models/{id}/rotate-key`.
+  api_key?: string | null;
   framework: string | null;
   status: string;
   created_at: string;

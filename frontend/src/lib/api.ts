@@ -158,6 +158,15 @@ export const api = {
   // is configured.
   stopDeployment: (deploymentId: string) =>
     fetchJSON<DeploymentRow>(`/deployments/${deploymentId}`, { method: 'DELETE' }),
+  // Generate a fresh X-API-Key + replace the Modal secret. Returns the
+  // new key in plaintext so the user can copy it. Running containers
+  // keep the old key cached until cold-start; user can click Redeploy
+  // to force cutover.
+  rotateModelKey: (modelId: string) =>
+    fetchJSON<{ model_id: string; api_key: string; modal_secret: string; note: string }>(
+      `/models/${modelId}/rotate-key`,
+      { method: 'POST' },
+    ),
 
   // Snapshots
   takeSnapshot: (sessionId: string) =>

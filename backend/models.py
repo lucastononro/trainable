@@ -564,6 +564,12 @@ class RegisteredModel(Base):
     # disabled because there's nothing to ship — an artifact pickle by
     # itself isn't a deployable thing on Modal.
     serving_app_path = Column(String(512), nullable=True)
+    # Auto-generated random token used for the X-API-Key header check on
+    # the deployed endpoint. Created at first deploy, stored as a Modal
+    # secret named `trainable-key-{model_id[:12]}`. Persists across
+    # redeploys (incl. compute changes) so clients don't have to update
+    # every time. Rotate via POST /api/models/{id}/rotate-key.
+    api_key = Column(String(64), nullable=True)
     framework = Column(String(50), nullable=True)
     status = Column(String(20), default="ready")
     created_at = Column(String, default=lambda: utcnow().isoformat())
@@ -587,6 +593,7 @@ class RegisteredModel(Base):
             "dataset_refs": self.dataset_refs or {},
             "metrics_history": self.metrics_history or [],
             "serving_app_path": self.serving_app_path,
+            "api_key": self.api_key,
             "framework": self.framework,
             "status": self.status,
             "created_at": self.created_at,
