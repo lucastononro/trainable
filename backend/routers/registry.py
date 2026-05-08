@@ -135,12 +135,42 @@ async def download_model(model_id: str):
     )
 
 
+class DeployRequest(BaseModel):
+    """Optional body for POST /api/models/{id}/deploy.
+
+    `compute` selects the Modal target — defaults to CPU. Anything we
+    don't recognize falls back to CPU at the service layer so the user
+    never silently lights up an A100.
+    """
+
+    compute: str | None = None
+
+
 @router.post("/models/{model_id}/deploy")
-async def deploy_model(model_id: str):
+async def deploy_model(model_id: str, body: DeployRequest | None = None):
     try:
-        return await deploy_svc.deploy_model(model_id)
+        return await deploy_svc.deploy_model(
+            model_id,
+            compute=(body.compute if body else None),
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/deploy/compute-options")
+async def deploy_compute_options():
+    """List the compute targets the dropdown on /models offers. Source
+    of truth for the labels + the per-option blurb lives here so the
+    frontend doesn't drift from the backend."""
+    return [
+        {"value": "cpu", "label": "CPU", "blurb": "Default. Cheap pool, no GPU."},
+        {"value": "T4", "label": "T4 (16 GB)", "blurb": "Cheapest GPU. Good for small inference."},
+        {"value": "L4", "label": "L4 (24 GB)", "blurb": "Best price/perf for inference."},
+        {"value": "A10G", "label": "A10G (24 GB)", "blurb": "AWS-style mid-tier."},
+        {"value": "A100-40GB", "label": "A100 (40 GB)", "blurb": "Large-model inference."},
+        {"value": "A100-80GB", "label": "A100 (80 GB)", "blurb": "Extra headroom for long contexts."},
+        {"value": "H100", "label": "H100 (80 GB)", "blurb": "Top-tier. Premium $/hr."},
+    ]
 
 
 @router.get("/models/{model_id}/deployments")

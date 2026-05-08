@@ -31,7 +31,12 @@ import {
 
 import { api } from '@/lib/api';
 import Sidebar from '@/components/Sidebar';
-import type { DeploymentRow, MetricPoint, RegisteredModel } from '@/lib/types';
+import type {
+  ComputeOption,
+  DeploymentRow,
+  MetricPoint,
+  RegisteredModel,
+} from '@/lib/types';
 
 function formatBytes(n: number): string {
   if (!n) return '—';
@@ -122,6 +127,7 @@ function ModelChart({ points }: { points: MetricPoint[] }) {
 function ModelCard({
   m,
   deployments,
+  computeOptions,
   onDeploy,
   onStop,
   deploying,
@@ -129,14 +135,20 @@ function ModelCard({
 }: {
   m: RegisteredModel;
   deployments: DeploymentRow[];
-  onDeploy: (modelId: string) => void;
+  computeOptions: ComputeOption[];
+  onDeploy: (modelId: string, compute: string) => void;
   onStop: (deploymentId: string) => void;
   deploying: boolean;
   stopping: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
-  const live = deployments.find((d) => d.status === 'live');
+  // Default to CPU when there's no live deployment to inherit from;
+  // otherwise pre-select whatever compute was last shipped so the
+  // user's "redeploy" stays on the same target unless they change it.
+  const liveDep = deployments.find((d) => d.status === 'live');
+  const [compute, setCompute] = useState<string>(liveDep?.compute || 'cpu');
+  const live = liveDep;
   const failed = deployments.find((d) => d.status === 'failed');
   const refs = m.dataset_refs || {};
   const splits = Object.keys(refs);
@@ -234,14 +246,32 @@ function ModelCard({
           </a>
           {!live ? (
             hasServingApp ? (
-              <button
-                onClick={() => onDeploy(m.id)}
-                disabled={deploying}
-                className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 disabled:opacity-50"
-              >
-                <Rocket className="w-3 h-3" />
-                {deploying ? 'Deploying…' : 'Deploy'}
-              </button>
+              <div className="inline-flex items-center gap-1.5">
+                <select
+                  value={compute}
+                  onChange={(e) => setCompute(e.target.value)}
+                  disabled={deploying || computeOptions.length === 0}
+                  className="text-xs h-7 pl-2 pr-6 rounded-lg bg-white/[0.04] border border-white/[0.06] text-gray-200 hover:bg-white/[0.06] focus:outline-none focus:ring-1 focus:ring-emerald-500/40 disabled:opacity-50"
+                  title="Compute target — Modal regenerates app.py with the chosen gpu="
+                >
+                  {(computeOptions.length > 0
+                    ? computeOptions
+                    : [{ value: 'cpu', label: 'CPU', blurb: '' }]
+                  ).map((o) => (
+                    <option key={o.value} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => onDeploy(m.id, compute)}
+                  disabled={deploying}
+                  className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 disabled:opacity-50"
+                >
+                  <Rocket className="w-3 h-3" />
+                  {deploying ? 'Deploying…' : 'Deploy'}
+                </button>
+              </div>
             ) : (
               <span
                 className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-white/[0.03] text-gray-500 cursor-not-allowed"
@@ -289,7 +319,50 @@ function ModelCard({
 
       {live ? (
         <div className="mt-3 px-3 py-2 rounded-lg bg-black/30 border border-white/[0.04] font-mono text-[11px] text-gray-400 break-all">
-          {live.endpoint_url}
+          <div className="flex items-baseline justify-between gap-2 not-italic">
+            <span className="break-all">{live.endpoint_url}</span>
+            <span
+              className={`shrink-0 px-1.5 py-0.5 rounded font-sans tabular-nums text-[9px] uppercase tracking-wide ${
+                (live.compute || 'cpu') === 'cpu'
+                  ? 'bg-white/[0.06] text-gray-300'
+                  : 'bg-emerald-500/15 text-emerald-300'
+              }`}
+              title="Compute this deployment is running on"
+            >
+              {live.compute || 'cpu'}
+            </span>
+          </div>
+        </div>
+      ) : null}
+      {live ? (
+        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-gray-500">
+          Redeploy on:
+          <select
+            value={compute}
+            onChange={(e) => setCompute(e.target.value)}
+            disabled={deploying}
+            className="text-[11px] h-6 pl-1.5 pr-5 rounded bg-white/[0.04] border border-white/[0.06] text-gray-300 focus:outline-none focus:ring-1 focus:ring-emerald-500/40 disabled:opacity-50"
+          >
+            {(computeOptions.length > 0
+              ? computeOptions
+              : [{ value: 'cpu', label: 'CPU', blurb: '' }]
+            ).map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          {compute !== (live.compute || 'cpu') ? (
+            <button
+              onClick={() => onDeploy(m.id, compute)}
+              disabled={deploying}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 disabled:opacity-50"
+              title="Regenerate app.py with the selected compute and redeploy"
+            >
+              <Rocket className="w-3 h-3" />
+              {deploying ? 'Redeploying…' : 'Redeploy'}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {failed ? (
@@ -338,6 +411,7 @@ export default function ModelsPage() {
   const [error, setError] = useState<string | null>(null);
   const [deploying, setDeploying] = useState<string | null>(null);
   const [stopping, setStopping] = useState<string | null>(null);
+  const [computeOptions, setComputeOptions] = useState<ComputeOption[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const refresh = async () => {
@@ -362,12 +436,19 @@ export default function ModelsPage() {
 
   useEffect(() => {
     refresh();
+    // Fire-and-forget: compute options are static; one fetch on mount
+    // is enough. If it fails the dropdown falls back to a CPU-only
+    // entry so deploys still work.
+    api
+      .deployComputeOptions()
+      .then(setComputeOptions)
+      .catch(() => undefined);
   }, []);
 
-  const onDeploy = async (modelId: string) => {
+  const onDeploy = async (modelId: string, compute: string) => {
     setDeploying(modelId);
     try {
-      await api.deployModel(modelId);
+      await api.deployModel(modelId, compute);
       await refresh();
     } catch (e) {
       setError((e as Error).message);
@@ -473,6 +554,7 @@ export default function ModelsPage() {
                           key={m.id}
                           m={m}
                           deployments={deps}
+                          computeOptions={computeOptions}
                           onDeploy={onDeploy}
                           onStop={onStop}
                           deploying={deploying === m.id}

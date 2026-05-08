@@ -642,6 +642,11 @@ class Deployment(Base):
     error = Column(Text, nullable=True)
     modal_app = Column(String(255), nullable=True)
     modal_function = Column(String(255), nullable=True)
+    # Compute target requested at deploy time — "cpu" | "T4" | "L4" |
+    # "A10G" | "A100-40GB" | "A100-80GB" | "H100". Stored so the UI
+    # badge on /models can show "DEPLOYED ON T4" without re-parsing
+    # the serving app source.
+    compute = Column(String(20), default="cpu")
     created_at = Column(String, default=lambda: utcnow().isoformat())
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
@@ -654,6 +659,7 @@ class Deployment(Base):
             "error": self.error,
             "modal_app": self.modal_app,
             "modal_function": self.modal_function,
+            "compute": self.compute or "cpu",
             "created_at": self.created_at,
             "updated_at": self.updated_at,
         }

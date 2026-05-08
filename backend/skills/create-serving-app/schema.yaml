@@ -3,5 +3,9 @@ properties:
   model_id:
     type: string
     description: id of the RegisteredModel to wrap. Must be a model that already has dataset_refs set (i.e. went through register-model with a training_dataset_id).
+  compute:
+    type: string
+    enum: ["cpu", "T4", "L4", "A10G", "A100-40GB", "A100-80GB", "H100"]
+    description: Compute target Modal will schedule on. Defaults to "cpu". Pick a GPU only when the model needs it (transformer / large NN inference). Tabular models (XGBoost / sklearn / LightGBM) almost always run on CPU.
 required:
   - model_id

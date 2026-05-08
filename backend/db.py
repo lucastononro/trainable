@@ -296,6 +296,17 @@ def _run_migrations(connection):
                     "[DB] sessions.experiment_id nullability already loosened: %s", e
                 )
 
+    if insp.has_table("deployments"):
+        dcols = [c["name"] for c in insp.get_columns("deployments")]
+        if "compute" not in dcols:
+            connection.execute(
+                text(
+                    "ALTER TABLE deployments ADD COLUMN compute VARCHAR(20)"
+                    " DEFAULT 'cpu'"
+                )
+            )
+            logger.info("[DB] Added compute column to deployments")
+
     if insp.has_table("registered_models"):
         mcols = [c["name"] for c in insp.get_columns("registered_models")]
         # Loosen source_session_id NOT NULL on Postgres so the new

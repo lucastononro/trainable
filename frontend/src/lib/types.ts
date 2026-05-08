@@ -354,6 +354,12 @@ export interface AllModelsResponse {
   models: RegisteredModel[];
 }
 
+export interface ComputeOption {
+  value: string;
+  label: string;
+  blurb: string;
+}
+
 export interface DeploymentRow {
   id: string;
   model_id: string;
@@ -362,6 +368,9 @@ export interface DeploymentRow {
   error: string | null;
   modal_app: string | null;
   modal_function: string | null;
+  // Compute target the deployment was shipped on. Defaults to "cpu"
+  // when a deployment row predates the column.
+  compute?: string;
   created_at: string;
   updated_at: string;
 }

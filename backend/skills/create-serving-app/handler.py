@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 def create_handler(*, session_id: str = "", publish_fn=None, **_):
     async def handler(args: dict):
         model_id = str(args.get("model_id") or "").strip()
+        compute = str(args.get("compute") or "cpu").strip() or "cpu"
 
         if publish_fn:
             await publish_fn(
@@ -22,7 +23,10 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
                 "tool_start",
                 {
                     "tool": "create-serving-app",
-                    "input": {"model_id": (model_id or "")[:8] + "…"},
+                    "input": {
+                        "model_id": (model_id or "")[:8] + "…",
+                        "compute": compute,
+                    },
                 },
                 role="tool",
             )
@@ -33,7 +37,7 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
         try:
             if not model_id:
                 raise ValueError("model_id is required")
-            out = await generate_serving_app(model_id)
+            out = await generate_serving_app(model_id, compute=compute)
             output_text = (
                 f"Serving app written: {out['serving_app_path']}. "
                 f"Deploy button on /models is now enabled for this model."

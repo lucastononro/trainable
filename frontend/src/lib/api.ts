@@ -144,8 +144,13 @@ export const api = {
     fetchJSON<{ available: boolean; path?: string; size_bytes?: number }>(
       `/sessions/${sessionId}/promote/check`,
     ),
-  deployModel: (modelId: string) =>
-    fetchJSON<DeploymentRow>(`/models/${modelId}/deploy`, { method: 'POST' }),
+  deployModel: (modelId: string, compute?: string) =>
+    fetchJSON<DeploymentRow>(`/models/${modelId}/deploy`, {
+      method: 'POST',
+      body: JSON.stringify({ compute: compute || 'cpu' }),
+    }),
+  deployComputeOptions: () =>
+    fetchJSON<import('./types').ComputeOption[]>(`/deploy/compute-options`),
   modelDeployments: (modelId: string) =>
     fetchJSON<DeploymentRow[]>(`/models/${modelId}/deployments`),
   // Mark a live deployment as stopped. Backend keeps the row for audit
