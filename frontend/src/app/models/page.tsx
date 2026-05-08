@@ -38,6 +38,7 @@ import {
 
 import { api } from '@/lib/api';
 import Sidebar from '@/components/Sidebar';
+import PythonCodeEditor from '@/components/PythonCodeEditor';
 import type {
   ComputeOption,
   DeploymentRow,
@@ -529,11 +530,10 @@ function ModelCard({
           {appLoading ? (
             <div className="px-3 py-6 text-center text-[11px] text-gray-500">Loading…</div>
           ) : (
-            <textarea
+            <PythonCodeEditor
               value={appCode ?? ''}
-              onChange={(e) => setAppCode(e.target.value)}
-              spellCheck={false}
-              className="w-full h-80 px-3 py-2 bg-transparent font-mono text-[11px] text-gray-200 leading-snug resize-y focus:outline-none"
+              onChange={(code) => setAppCode(code)}
+              minHeight={320}
             />
           )}
           <div className="px-3 py-1.5 border-t border-white/[0.05] text-[10px] text-gray-500">
