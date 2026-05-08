@@ -75,9 +75,7 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
             output_text = f"create-serving-app error: {e}"
             is_error = True
             response = {
-                "content": [
-                    {"type": "text", "text": f"create-serving-app error: {e}"}
-                ],
+                "content": [{"type": "text", "text": f"create-serving-app error: {e}"}],
                 "is_error": True,
             }
 

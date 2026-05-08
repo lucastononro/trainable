@@ -58,7 +58,10 @@ async def all_models():
         return {
             "projects": list(proj_meta.values()),
             "models": [
-                {**m.to_dict(), "project_name": proj_meta.get(m.project_id, {}).get("name")}
+                {
+                    **m.to_dict(),
+                    "project_name": proj_meta.get(m.project_id, {}).get("name"),
+                }
                 for m in models_rows
             ],
         }
@@ -164,11 +167,27 @@ async def deploy_compute_options():
     frontend doesn't drift from the backend."""
     return [
         {"value": "cpu", "label": "CPU", "blurb": "Default. Cheap pool, no GPU."},
-        {"value": "T4", "label": "T4 (16 GB)", "blurb": "Cheapest GPU. Good for small inference."},
-        {"value": "L4", "label": "L4 (24 GB)", "blurb": "Best price/perf for inference."},
+        {
+            "value": "T4",
+            "label": "T4 (16 GB)",
+            "blurb": "Cheapest GPU. Good for small inference.",
+        },
+        {
+            "value": "L4",
+            "label": "L4 (24 GB)",
+            "blurb": "Best price/perf for inference.",
+        },
         {"value": "A10G", "label": "A10G (24 GB)", "blurb": "AWS-style mid-tier."},
-        {"value": "A100-40GB", "label": "A100 (40 GB)", "blurb": "Large-model inference."},
-        {"value": "A100-80GB", "label": "A100 (80 GB)", "blurb": "Extra headroom for long contexts."},
+        {
+            "value": "A100-40GB",
+            "label": "A100 (40 GB)",
+            "blurb": "Large-model inference.",
+        },
+        {
+            "value": "A100-80GB",
+            "label": "A100 (80 GB)",
+            "blurb": "Extra headroom for long contexts.",
+        },
         {"value": "H100", "label": "H100 (80 GB)", "blurb": "Top-tier. Premium $/hr."},
     ]
 
@@ -181,7 +200,11 @@ async def get_serving_app(model_id: str):
     """
     from services.volume import read_volume_file_async
 
-    m = await deploy_svc.get_model(model_id) if hasattr(deploy_svc, "get_model") else None
+    m = (
+        await deploy_svc.get_model(model_id)
+        if hasattr(deploy_svc, "get_model")
+        else None
+    )
     # Fall back to direct DB lookup if the deploy module doesn't
     # re-export get_model — keeps the route loosely coupled.
     if m is None:

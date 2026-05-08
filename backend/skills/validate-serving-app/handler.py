@@ -45,9 +45,11 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
                     {
                         "type": "text",
                         "text": (
-                            ("✅ Validation passed. Safe to deploy.\n\n"
-                             if ok
-                             else "❌ Validation failed. Fix the issues below before deploy.\n\n")
+                            (
+                                "✅ Validation passed. Safe to deploy.\n\n"
+                                if ok
+                                else "❌ Validation failed. Fix the issues below before deploy.\n\n"
+                            )
                             + json.dumps(
                                 {
                                     "ok": ok,
@@ -70,7 +72,9 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
             output_text = f"validate-serving-app failed: {e}"
             is_error = True
             response = {
-                "content": [{"type": "text", "text": f"validate-serving-app failed: {e}"}],
+                "content": [
+                    {"type": "text", "text": f"validate-serving-app failed: {e}"}
+                ],
                 "is_error": True,
             }
         except Exception as e:
@@ -78,7 +82,9 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
             output_text = f"validate-serving-app error: {e}"
             is_error = True
             response = {
-                "content": [{"type": "text", "text": f"validate-serving-app error: {e}"}],
+                "content": [
+                    {"type": "text", "text": f"validate-serving-app error: {e}"}
+                ],
                 "is_error": True,
             }
 

@@ -182,11 +182,11 @@ def _serving_app_code(
         else ""
     )
     auth_check = (
-        '''
+        """
         expected_key = os.environ.get("API_KEY", "")
         if not expected_key or x_api_key != expected_key:
             raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
-'''
+"""
         if api_secret_name
         else ""
     )
@@ -209,13 +209,14 @@ def _serving_app_code(
     if feature_columns:
         # Stable, alphabetised order — easier to scan in Swagger.
         sample_record = {c: 0 for c in feature_columns}
-        feature_list_md = (
-            ", ".join(f"`{c}`" for c in feature_columns[:30])
-            + (" …" if len(feature_columns) > 30 else "")
+        feature_list_md = ", ".join(f"`{c}`" for c in feature_columns[:30]) + (
+            " …" if len(feature_columns) > 30 else ""
         )
     else:
         sample_record = {"feature_a": 0.0, "feature_b": 0.0}
-        feature_list_md = "(unknown — register the training dataset's metadata to populate this)"
+        feature_list_md = (
+            "(unknown — register the training dataset's metadata to populate this)"
+        )
     sample_response_predictions = "[0]"
     sample_record_repr = repr(sample_record)
 
@@ -240,7 +241,11 @@ def _serving_app_code(
     #   .pt/.pth  — PyTorch state dict
     #   .safetensors — Hugging Face
     # so the container would crash on enter and the endpoint hung.
-    ext = container_artifact_path.rsplit(".", 1)[-1].lower() if "." in container_artifact_path else ""
+    ext = (
+        container_artifact_path.rsplit(".", 1)[-1].lower()
+        if "." in container_artifact_path
+        else ""
+    )
     fw = (framework or "").lower()
     # Each loader_block lives inside `try:` block of `def load(self)`,
     # which is at 12-space indentation in the rendered file. The first
@@ -252,41 +257,41 @@ def _serving_app_code(
     IND_NESTED = IND + "    "  # 16 spaces (one level deeper)
     if fw == "xgboost" and ext in ("json", "ubj", "bin"):
         loader_block = (
-            f'import xgboost as xgb\n'
-            f'{IND}booster = xgb.Booster()\n'
-            f'{IND}booster.load_model(ARTIFACT_PATH)\n'
-            f'{IND}self._model = booster\n'
-            f'{IND}self._feature_cols = FEATURE_COLUMNS'
+            f"import xgboost as xgb\n"
+            f"{IND}booster = xgb.Booster()\n"
+            f"{IND}booster.load_model(ARTIFACT_PATH)\n"
+            f"{IND}self._model = booster\n"
+            f"{IND}self._feature_cols = FEATURE_COLUMNS"
         )
     elif fw in ("lightgbm", "lgbm") and ext in ("txt", "model"):
         loader_block = (
-            f'import lightgbm as lgb\n'
-            f'{IND}self._model = lgb.Booster(model_file=ARTIFACT_PATH)\n'
-            f'{IND}self._feature_cols = FEATURE_COLUMNS'
+            f"import lightgbm as lgb\n"
+            f"{IND}self._model = lgb.Booster(model_file=ARTIFACT_PATH)\n"
+            f"{IND}self._feature_cols = FEATURE_COLUMNS"
         )
     elif ext == "joblib":
         loader_block = (
-            f'import joblib\n'
-            f'{IND}blob = joblib.load(ARTIFACT_PATH)\n'
+            f"import joblib\n"
+            f"{IND}blob = joblib.load(ARTIFACT_PATH)\n"
             f'{IND}if isinstance(blob, dict) and "model" in blob:\n'
             f'{IND_NESTED}self._model = blob["model"]\n'
             f'{IND_NESTED}self._feature_cols = blob.get("feature_cols") or FEATURE_COLUMNS\n'
-            f'{IND}else:\n'
-            f'{IND_NESTED}self._model = blob\n'
-            f'{IND_NESTED}self._feature_cols = FEATURE_COLUMNS'
+            f"{IND}else:\n"
+            f"{IND_NESTED}self._model = blob\n"
+            f"{IND_NESTED}self._feature_cols = FEATURE_COLUMNS"
         )
     else:
         # Default: pickle (the .pkl/.pickle case).
         loader_block = (
-            f'import pickle\n'
+            f"import pickle\n"
             f'{IND}with open(ARTIFACT_PATH, "rb") as f:\n'
-            f'{IND_NESTED}blob = pickle.load(f)\n'
+            f"{IND_NESTED}blob = pickle.load(f)\n"
             f'{IND}if isinstance(blob, dict) and "model" in blob:\n'
             f'{IND_NESTED}self._model = blob["model"]\n'
             f'{IND_NESTED}self._feature_cols = blob.get("feature_cols") or FEATURE_COLUMNS\n'
-            f'{IND}else:\n'
-            f'{IND_NESTED}self._model = blob\n'
-            f'{IND_NESTED}self._feature_cols = FEATURE_COLUMNS'
+            f"{IND}else:\n"
+            f"{IND_NESTED}self._model = blob\n"
+            f"{IND_NESTED}self._feature_cols = FEATURE_COLUMNS"
         )
 
     # Triple-brace for f-string vs Python source dict literals.
@@ -610,15 +615,8 @@ async def deploy_model(
         # when compute matched, which masked regenerated apps and let
         # the UI keep showing a stale URL after the agent edited the
         # serving file. Old live rows are marked `superseded` further
-        # down so the catalog only shows one live row per model.
-        existing = (
-            await db.execute(
-                select(Deployment).where(
-                    Deployment.model_id == model_id,
-                    Deployment.status == "live",
-                )
-            )
-        ).scalar_one_or_none()
+        # down so the catalog only shows one live row per model — that
+        # SELECT happens inside the second async-session block below.
 
     # Ensure the model has an API key + the Modal secret exists. The
     # key is generated once per model and reused across redeploys
@@ -692,13 +690,17 @@ async def deploy_model(
         # old row's URL may not even point at the latest container.
         if status == "live":
             sup = (
-                await db.execute(
-                    select(Deployment).where(
-                        Deployment.model_id == model_id,
-                        Deployment.status == "live",
+                (
+                    await db.execute(
+                        select(Deployment).where(
+                            Deployment.model_id == model_id,
+                            Deployment.status == "live",
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             for s in sup:
                 s.status = "superseded"
                 s.updated_at = datetime.now(timezone.utc).isoformat()
@@ -768,9 +770,7 @@ async def _ensure_modal_secret(secret_name: str, value: str) -> None:
     out_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=30)
     if proc.returncode != 0:
         out = out_bytes.decode("utf-8", errors="replace")
-        raise ValueError(
-            f"modal secret create exited {proc.returncode}: {out[-500:]}"
-        )
+        raise ValueError(f"modal secret create exited {proc.returncode}: {out[-500:]}")
 
 
 async def _run_modal_deploy(serving_app_path: str, app_name: str) -> str:
@@ -952,7 +952,9 @@ async def validate_serving_app(model_id: str) -> dict:
                         pip_args.append(a.value)
 
     if not artifact_path_in_app:
-        warnings.append("Could not find an ARTIFACT_PATH literal — heavy customisation; skipping artifact check.")
+        warnings.append(
+            "Could not find an ARTIFACT_PATH literal — heavy customisation; skipping artifact check."
+        )
     else:
         # Strip the in-container `/data/` prefix to get the volume path.
         volume_path = artifact_path_in_app
@@ -1081,7 +1083,9 @@ async def stop_deployment(deployment_id: str) -> dict:
             try:
                 await _run_modal_app_stop(modal_app)
             except Exception as e:
-                logger.warning("[deploy] modal app stop failed for %s: %s", modal_app, e)
+                logger.warning(
+                    "[deploy] modal app stop failed for %s: %s", modal_app, e
+                )
                 row.error = f"modal app stop failed: {e}"
 
         row.status = "stopped"
@@ -1112,5 +1116,3 @@ async def _run_modal_app_stop(app_name: str) -> None:
     if proc.returncode != 0:
         out = out_bytes.decode("utf-8", errors="replace")
         raise RuntimeError(f"modal app stop exited {proc.returncode}: {out[-500:]}")
-
-

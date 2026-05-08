@@ -109,7 +109,9 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
             output_text = f"register-raw-dataset failed: {e}"
             is_error = True
             response = {
-                "content": [{"type": "text", "text": f"register-raw-dataset failed: {e}"}],
+                "content": [
+                    {"type": "text", "text": f"register-raw-dataset failed: {e}"}
+                ],
                 "is_error": True,
             }
         except Exception as e:
@@ -117,7 +119,9 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
             output_text = f"register-raw-dataset error: {e}"
             is_error = True
             response = {
-                "content": [{"type": "text", "text": f"register-raw-dataset error: {e}"}],
+                "content": [
+                    {"type": "text", "text": f"register-raw-dataset error: {e}"}
+                ],
                 "is_error": True,
             }
 
