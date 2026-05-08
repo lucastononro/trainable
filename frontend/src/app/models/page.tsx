@@ -20,6 +20,7 @@ import {
   RefreshCcw,
   Eye,
   EyeOff,
+  Search,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -472,6 +473,7 @@ export default function ModelsPage() {
   const [rotating, setRotating] = useState<string | null>(null);
   const [computeOptions, setComputeOptions] = useState<ComputeOption[]>([]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const [query, setQuery] = useState('');
 
   const refresh = async () => {
     setLoading(true);
@@ -540,18 +542,39 @@ export default function ModelsPage() {
     }
   };
 
+  // Search filter (name / description / framework / project name).
+  // Applied before grouping so a hit pulls a project's whole header
+  // along with the matching row(s).
+  const q = query.trim().toLowerCase();
+  const filteredModels = useMemo(() => {
+    if (!q) return models;
+    return models.filter((m) => {
+      const hay = [
+        m.name,
+        m.description,
+        m.framework,
+        m.project_name,
+        `v${m.version}`,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [models, q]);
+
   // Group models by project. Projects with no models are dropped — the
   // sidebar already lists them, the catalog only cares about projects
   // that have something to show.
   const grouped = useMemo(() => {
     const by: Record<string, RegisteredModel[]> = {};
-    for (const m of models) {
+    for (const m of filteredModels) {
       (by[m.project_id] ||= []).push(m);
     }
     return projects
       .filter((p) => by[p.id])
       .map((p) => ({ project: p, models: by[p.id] }));
-  }, [models, projects]);
+  }, [filteredModels, projects]);
 
   return (
     <div className="h-screen flex bg-black text-gray-200" id="main-content">
@@ -561,10 +584,21 @@ export default function ModelsPage() {
           <Box className="w-4 h-4 text-blue-400" />
           <h1 className="text-sm font-semibold text-white">Model registry</h1>
           <span className="text-[11px] text-gray-500">
-            {models.length} model{models.length === 1 ? '' : 's'} across {grouped.length}{' '}
+            {filteredModels.length}/{models.length} model
+            {models.length === 1 ? '' : 's'} across {grouped.length}{' '}
             project{grouped.length === 1 ? '' : 's'}
           </span>
           <div className="flex-1" />
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search models…"
+              className="text-xs h-7 w-56 pl-7 pr-2 rounded-md bg-white/[0.04] border border-white/[0.06] text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500/40"
+            />
+          </div>
           <button
             onClick={refresh}
             disabled={loading}

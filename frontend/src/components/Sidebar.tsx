@@ -428,6 +428,21 @@ export default function Sidebar() {
     return map;
   }, [filteredExperiments]);
 
+  // Project filter: when search is active, hide projects that don't
+  // match the query AND don't contain a matching experiment. Without
+  // this the sidebar showed every project even when searching for
+  // something only present in one — defeating the search.
+  const filteredProjects = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q && !activeTag) return projects;
+    return projects.filter((p) => {
+      if (q && p.name.toLowerCase().includes(q)) return true;
+      // Project has a hit experiment in the post-filter map.
+      const hits = experimentsByProject.get(p.id);
+      return Boolean(hits && hits.length > 0);
+    });
+  }, [projects, searchQuery, activeTag, experimentsByProject]);
+
   const allTags = useMemo(() => {
     const seen = new Map<string, number>();
     for (const exp of experiments) {
@@ -686,7 +701,7 @@ export default function Sidebar() {
             <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-600" />
             <input
               type="text"
-              placeholder="Search chats…"
+              placeholder="Search projects + chats…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full text-xs bg-white/[0.04] border border-white/[0.06] rounded-md pl-7 pr-7 py-1.5 text-gray-300 placeholder-gray-600 focus:outline-none focus:border-white/[0.15]"
@@ -732,7 +747,12 @@ export default function Sidebar() {
                 <p className="text-[10px] text-gray-700 mt-1">Click the folder button to start</p>
               </div>
             )}
-            {projects.map((project) => {
+            {projects.length > 0 && filteredProjects.length === 0 && (
+              <div className="px-3 py-6 text-center">
+                <p className="text-[11px] text-gray-600">No matches for &ldquo;{searchQuery}&rdquo;</p>
+              </div>
+            )}
+            {filteredProjects.map((project) => {
               const projectExperiments = experimentsByProject.get(project.id) ?? [];
               const isExpanded = expandedProjectIds.has(project.id);
               const isActiveProject = project.id === activeProjectId;

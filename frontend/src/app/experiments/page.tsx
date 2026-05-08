@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Box, Database, FlaskConical, Folder, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowRight, Box, Database, FlaskConical, Folder, Loader2, RefreshCw, Search } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
@@ -59,6 +59,7 @@ export default function ExperimentsListPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(false);
+  const [query, setQuery] = useState('');
 
   const fetchExperiments = useCallback(async () => {
     setLoading(true);
@@ -123,10 +124,30 @@ export default function ExperimentsListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows.map((r) => r.id).join(',')]);
 
+  // Apply the search filter before bucketing — q matches name,
+  // hypothesis, dataset name, or model name (case-insensitive
+  // substring). Empty string is the default (no filter).
+  const q = query.trim().toLowerCase();
+  const filteredRows = q
+    ? rows.filter((r) => {
+        const haystack = [
+          r.name,
+          r.hypothesis,
+          r.state,
+          r.datasetName,
+          r.modelName,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(q);
+      })
+    : rows;
+
   // Bucket by project, preserving the project order from useApp().
   const grouped = (() => {
     const byProject = new Map<string, RowDetail[]>();
-    for (const r of rows) {
+    for (const r of filteredRows) {
       if (!byProject.has(r.project_id)) byProject.set(r.project_id, []);
       byProject.get(r.project_id)!.push(r);
     }
@@ -161,6 +182,16 @@ export default function ExperimentsListPage() {
           <h1 className="text-sm font-semibold text-white">Experiments</h1>
           {hydrating ? <Loader2 className="w-3 h-3 text-gray-500 animate-spin" /> : null}
           <div className="flex-1" />
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search experiments…"
+              className="text-xs h-7 w-56 pl-7 pr-2 rounded-md bg-white/[0.04] border border-white/[0.06] text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-amber-500/40"
+            />
+          </div>
           <button
             onClick={fetchExperiments}
             disabled={loading}
