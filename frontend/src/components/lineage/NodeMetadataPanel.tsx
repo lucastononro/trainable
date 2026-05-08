@@ -195,7 +195,10 @@ export default function NodeMetadataPanel({ node, data, onClose }: Props) {
                             >
                               {role}
                             </span>
-                            <span className="text-[11px] text-gray-400 truncate" title={datasetName}>
+                            <span
+                              className="text-[11px] text-gray-400 truncate"
+                              title={datasetName}
+                            >
                               {datasetName}
                             </span>
                           </div>

@@ -81,7 +81,9 @@ export default function ModelNode({ data }: NodeProps) {
             const label = headline(ref?.metrics);
             return (
               <div key={role} className="flex items-center gap-1.5">
-                <span className={`uppercase tracking-wide text-[9px] font-medium ${SPLIT_TINT[role] || 'opacity-60'}`}>
+                <span
+                  className={`uppercase tracking-wide text-[9px] font-medium ${SPLIT_TINT[role] || 'opacity-60'}`}
+                >
                   {role}
                 </span>
                 <span className="opacity-80">

@@ -751,7 +751,9 @@ export default function Sidebar() {
             )}
             {projects.length > 0 && filteredProjects.length === 0 && (
               <div className="px-3 py-6 text-center">
-                <p className="text-[11px] text-gray-600">No matches for &ldquo;{searchQuery}&rdquo;</p>
+                <p className="text-[11px] text-gray-600">
+                  No matches for &ldquo;{searchQuery}&rdquo;
+                </p>
               </div>
             )}
             {filteredProjects.map((project) => {

@@ -124,12 +124,10 @@ export const api = {
     }),
 
   // Model registry
-  listAllModels: () =>
-    fetchJSON<import('./types').AllModelsResponse>(`/registry/models`),
+  listAllModels: () => fetchJSON<import('./types').AllModelsResponse>(`/registry/models`),
   listProjectModels: (projectId: string) =>
     fetchJSON<RegisteredModel[]>(`/projects/${projectId}/models`),
-  getModel: (modelId: string) =>
-    fetchJSON<RegisteredModel>(`/models/${modelId}`),
+  getModel: (modelId: string) => fetchJSON<RegisteredModel>(`/models/${modelId}`),
   // Returns the absolute backend URL — the browser hits it as a normal
   // GET so the Content-Disposition header drives a download. We keep
   // this as a URL-builder rather than a fetch so the user clicks a real
@@ -141,10 +139,10 @@ export const api = {
   // Save user edits to the serving app. Backend ast.parses before
   // writing so we never persist syntactically-broken files.
   putServingApp: (modelId: string, code: string) =>
-    fetchJSON<{ ok: boolean; path: string; size: number }>(
-      `/models/${modelId}/serving-app`,
-      { method: 'PUT', body: JSON.stringify({ code }) },
-    ),
+    fetchJSON<{ ok: boolean; path: string; size: number }>(`/models/${modelId}/serving-app`, {
+      method: 'PUT',
+      body: JSON.stringify({ code }),
+    }),
   promoteSession: (sessionId: string, name?: string) =>
     fetchJSON<RegisteredModel>(`/sessions/${sessionId}/promote`, {
       method: 'POST',

@@ -14,7 +14,16 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowRight, Box, Database, FlaskConical, Folder, Loader2, RefreshCw, Search } from 'lucide-react';
+import {
+  ArrowRight,
+  Box,
+  Database,
+  FlaskConical,
+  Folder,
+  Loader2,
+  RefreshCw,
+  Search,
+} from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
@@ -130,13 +139,7 @@ export default function ExperimentsListPage() {
   const q = query.trim().toLowerCase();
   const filteredRows = q
     ? rows.filter((r) => {
-        const haystack = [
-          r.name,
-          r.hypothesis,
-          r.state,
-          r.datasetName,
-          r.modelName,
-        ]
+        const haystack = [r.name, r.hypothesis, r.state, r.datasetName, r.modelName]
           .filter(Boolean)
           .join(' ')
           .toLowerCase();

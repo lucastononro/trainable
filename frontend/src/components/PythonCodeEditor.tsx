@@ -33,10 +33,7 @@ export default function PythonCodeEditor({
   disabled = false,
 }: Props) {
   return (
-    <div
-      className="rounded-md bg-black/40 overflow-auto"
-      style={{ minHeight }}
-    >
+    <div className="rounded-md bg-black/40 overflow-auto" style={{ minHeight }}>
       <Editor
         value={value}
         onValueChange={(code) => !disabled && onChange(code)}

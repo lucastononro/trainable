@@ -119,9 +119,7 @@ function layout(payload: LineageGraphPayload): {
           ? '#7dd3fc'
           : (ROLE_COLORS[primaryRole ?? ''] ?? '#7dd3fc')
         : '#7dd3fc';
-    const label = isMultiRole
-      ? roles.map((r) => r.toUpperCase()).join(' / ')
-      : primaryRole;
+    const label = isMultiRole ? roles.map((r) => r.toUpperCase()).join(' / ') : primaryRole;
     return {
       id: e.id,
       source: e.source,
