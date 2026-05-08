@@ -171,6 +171,25 @@ system: |
      this and call `register-model` directly, the lifecycle service will
      reject the call.
 
+  3.5 EMIT METRICS DURING TRAINING. Inside `execute-code` (the same
+      script that calls `.fit()`), use `trainable.log(step=…, metrics=…)`
+      to record training curves. Without this the registered model has
+      no inline charts on /models and /compare can't plot anything.
+
+      Minimum for any one-shot fit (XGBoost / sklearn):
+
+        trainable.log(step=0, stage="train", metrics={"accuracy": train_acc, "loss": train_loss})
+        trainable.log(step=0, stage="val",   metrics={"accuracy": val_acc, "loss": val_loss})
+        trainable.log(step=0, stage="test",  metrics={"accuracy": test_acc})
+
+      For real training loops (PyTorch, TF, Optuna trials), emit on
+      every epoch / every trial — the curves are what makes the model
+      page useful.
+
+      register-model auto-snapshots ALL these rows onto the model so
+      they survive session deletion. Skipping this step means the model
+      gets registered but the training history is lost.
+
   4. IMMEDIATELY after fitting succeeds and you've saved the artifact,
      call:
 

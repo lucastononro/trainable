@@ -322,6 +322,7 @@ def _run_migrations(connection):
             ("description", "TEXT"),
             ("hyperparams", "JSON"),
             ("dataset_refs", "JSON"),
+            ("metrics_history", "JSON"),
         ]:
             if col_name not in mcols:
                 connection.execute(

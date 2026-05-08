@@ -124,8 +124,17 @@ export const api = {
     }),
 
   // Model registry
+  listAllModels: () =>
+    fetchJSON<import('./types').AllModelsResponse>(`/registry/models`),
   listProjectModels: (projectId: string) =>
     fetchJSON<RegisteredModel[]>(`/projects/${projectId}/models`),
+  getModel: (modelId: string) =>
+    fetchJSON<RegisteredModel>(`/models/${modelId}`),
+  // Returns the absolute backend URL — the browser hits it as a normal
+  // GET so the Content-Disposition header drives a download. We keep
+  // this as a URL-builder rather than a fetch so the user clicks a real
+  // link and the browser handles the streaming.
+  modelDownloadUrl: (modelId: string) => `${API_BASE}/models/${modelId}/download`,
   promoteSession: (sessionId: string, name?: string) =>
     fetchJSON<RegisteredModel>(`/sessions/${sessionId}/promote`, {
       method: 'POST',

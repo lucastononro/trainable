@@ -43,6 +43,41 @@ preparation work. The references on the model row fix this:
 - Anyone auditing the run can answer "what data did this train on, and
   what did it score on each split?" by clicking the model node.
 
+## Logging metrics during training (READ THIS — IMPORTANT)
+
+`register-model` automatically **snapshots** every `Metric` row from
+the session and freezes it onto the model row as `metrics_history`.
+That snapshot is what powers the inline training-curve chart on
+`/models` AFTER the session is gone.
+
+So before you call register-model, make sure your fitting loop has
+been emitting metrics. The snapshot is only useful if there's
+something to capture. Inside `execute-code`, do something like:
+
+```python
+import trainable
+# during your loop / after each epoch
+trainable.log(step=epoch, metrics={
+    "train_loss": train_loss, "val_loss": val_loss,
+    "train_accuracy": train_acc, "val_accuracy": val_acc,
+})
+# after fit() — final per-split numbers
+trainable.log(step=0, metrics={"test_accuracy": test_acc, "test_f1": test_f1}, stage="test")
+```
+
+Even for one-shot fits (XGBoost, sklearn) where there's no real
+"epoch", emit at minimum:
+
+- `step=0, stage="train", metrics={…}` — final train metrics
+- `step=0, stage="val",   metrics={…}` — final val metrics (if held out)
+- `step=0, stage="test",  metrics={…}` — final test metrics
+
+Without these, the model card on /models has no chart to draw and
+the comparison tools on /compare get nothing to plot. The user
+explicitly wants every model in the registry to carry its training
+curves; an empty `metrics_history` is a regression even if the model
+itself is fine.
+
 ## Inputs
 
 - `experiment_id` (required): from `create-experiment` / `start-training`.

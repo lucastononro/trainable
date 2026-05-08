@@ -323,15 +323,31 @@ export interface SkillCatalogEntry {
 export interface RegisteredModel {
   id: string;
   project_id: string;
+  experiment_id?: string | null;
   name: string;
   version: number;
   source_session_id: string;
   artifact_uri: string;
   artifact_size_bytes: number;
   metrics_summary: Record<string, number>;
+  description?: string;
+  hyperparams?: Record<string, unknown>;
+  // Per-split dataset references — same shape as on the lineage node.
+  dataset_refs?: Record<string, ModelDatasetRef>;
+  // Frozen Metric rows from the training session, snapshotted at
+  // register-model time so the curves survive session deletion.
+  metrics_history?: MetricPoint[];
   framework: string | null;
   status: string;
   created_at: string;
+  // Cross-project listing endpoint adds the project's display name on
+  // each row so the catalog page doesn't need a second join client-side.
+  project_name?: string;
+}
+
+export interface AllModelsResponse {
+  projects: { id: string; name: string }[];
+  models: RegisteredModel[];
 }
 
 export interface DeploymentRow {

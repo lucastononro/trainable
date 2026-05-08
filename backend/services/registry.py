@@ -353,6 +353,38 @@ async def register_model_declared(
                 "metrics": sm.get(role) or {},
             }
 
+        # Snapshot the session's Metric rows so the model's training
+        # curves survive session deletion. Without this, the inline
+        # charts on /models would silently disappear once a session is
+        # cleaned up. We freeze the (step, name, value, stage, run_tag)
+        # tuples; the source-of-truth Metric rows remain queryable for
+        # the live metrics canvas as long as the session exists.
+        from models import Metric as _Metric
+
+        metrics_history: list[dict] = []
+        if sid:
+            rows = (
+                (
+                    await db.execute(
+                        select(_Metric)
+                        .where(_Metric.session_id == sid)
+                        .order_by(_Metric.id.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            metrics_history = [
+                {
+                    "step": r.step,
+                    "name": r.name,
+                    "value": r.value,
+                    "stage": r.stage,
+                    "run_tag": r.run_tag,
+                }
+                for r in rows
+            ]
+
         # Compute next version per (project_id, name).
         latest_version = (
             await db.execute(
@@ -405,6 +437,7 @@ async def register_model_declared(
             description=description.strip(),
             hyperparams=hyperparams or {},
             dataset_refs=dataset_refs,
+            metrics_history=metrics_history,
             framework=framework,
             status="ready",
         )

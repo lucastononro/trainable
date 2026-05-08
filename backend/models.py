@@ -552,6 +552,12 @@ class RegisteredModel(Base):
     # graph is "Raw → Processed → Model" rather than collapsing every
     # experiment input into a direct line into the model.
     dataset_refs = Column(JSON, default=dict)
+    # Snapshot of the session's Metric rows at register-model time —
+    # frozen here so the model's training curves survive even after the
+    # session is deleted. List of {step, name, value, stage, run_tag}.
+    # Rendered in the /models page as inline charts so the user can
+    # compare runs without spelunking back to the original session.
+    metrics_history = Column(JSON, default=list)
     framework = Column(String(50), nullable=True)
     status = Column(String(20), default="ready")
     created_at = Column(String, default=lambda: utcnow().isoformat())
@@ -573,6 +579,7 @@ class RegisteredModel(Base):
             "description": self.description or "",
             "hyperparams": self.hyperparams or {},
             "dataset_refs": self.dataset_refs or {},
+            "metrics_history": self.metrics_history or [],
             "framework": self.framework,
             "status": self.status,
             "created_at": self.created_at,
