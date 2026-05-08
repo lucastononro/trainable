@@ -173,6 +173,77 @@ async def deploy_compute_options():
     ]
 
 
+@router.get("/models/{model_id}/serving-app")
+async def get_serving_app(model_id: str):
+    """Return the current source of the model's Modal serving app
+    (`app.py`). Used by the /models inspect/edit panel so the user can
+    audit and customize what the Deploy button will ship.
+    """
+    from services.volume import read_volume_file_async
+
+    m = await deploy_svc.get_model(model_id) if hasattr(deploy_svc, "get_model") else None
+    # Fall back to direct DB lookup if the deploy module doesn't
+    # re-export get_model — keeps the route loosely coupled.
+    if m is None:
+        from services.registry import get_model
+
+        m = await get_model(model_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Model not found")
+    if not m.get("serving_app_path"):
+        raise HTTPException(
+            status_code=404,
+            detail="No serving app yet. Ask an agent to run create-serving-app first.",
+        )
+    try:
+        data = await read_volume_file_async(m["serving_app_path"])
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"serving_app_path is set ({m['serving_app_path']}) but the file is "
+                "missing on the volume — re-run create-serving-app."
+            ),
+        )
+    return {"path": m["serving_app_path"], "code": data.decode("utf-8")}
+
+
+class ServingAppUpdate(BaseModel):
+    code: str
+
+
+@router.put("/models/{model_id}/serving-app")
+async def put_serving_app(model_id: str, body: ServingAppUpdate):
+    """Save user edits to the model's serving app.py. The file is the
+    source of truth for `modal deploy`, so this is what the Deploy
+    button will ship next.
+    """
+    import ast
+
+    from services.registry import get_model
+    from services.volume import write_to_volume
+
+    m = await get_model(model_id)
+    if not m:
+        raise HTTPException(status_code=404, detail="Model not found")
+    if not m.get("serving_app_path"):
+        raise HTTPException(
+            status_code=400,
+            detail="Model has no serving_app_path; create one with create-serving-app first.",
+        )
+    # Catch obvious syntax errors before we let the user click Deploy
+    # and watch Modal reject the file.
+    try:
+        ast.parse(body.code)
+    except SyntaxError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Refusing to save: SyntaxError on line {e.lineno}: {e.msg}",
+        )
+    await write_to_volume(body.code, m["serving_app_path"])
+    return {"ok": True, "path": m["serving_app_path"], "size": len(body.code)}
+
+
 @router.post("/models/{model_id}/rotate-key")
 async def rotate_model_key(model_id: str):
     """Regenerate the X-API-Key for a model + replace the Modal secret.

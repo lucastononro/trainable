@@ -135,6 +135,16 @@ export const api = {
   // this as a URL-builder rather than a fetch so the user clicks a real
   // link and the browser handles the streaming.
   modelDownloadUrl: (modelId: string) => `${API_BASE}/models/${modelId}/download`,
+  // Read the Modal serving app source the next deploy will ship.
+  getServingApp: (modelId: string) =>
+    fetchJSON<{ path: string; code: string }>(`/models/${modelId}/serving-app`),
+  // Save user edits to the serving app. Backend ast.parses before
+  // writing so we never persist syntactically-broken files.
+  putServingApp: (modelId: string, code: string) =>
+    fetchJSON<{ ok: boolean; path: string; size: number }>(
+      `/models/${modelId}/serving-app`,
+      { method: 'PUT', body: JSON.stringify({ code }) },
+    ),
   promoteSession: (sessionId: string, name?: string) =>
     fetchJSON<RegisteredModel>(`/sessions/${sessionId}/promote`, {
       method: 'POST',

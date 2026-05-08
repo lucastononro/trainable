@@ -422,7 +422,15 @@ async def register_model_declared(
                 e,
             )
             # Fall back to the original path so the row isn't useless.
+            # Normalize: strip a leading `/data/` prefix if the agent
+            # supplied a sandbox-mount path. The container also mounts
+            # the volume at `/data`, so leaving the prefix in place
+            # produces `/data/data/...` after the deploy codegen
+            # prepends its own `/data/`. Volume paths are stored as
+            # `/sessions/...` or `/projects/...`.
             artifact_uri = path
+            if artifact_uri.startswith("/data/"):
+                artifact_uri = artifact_uri[len("/data") :]
 
         row = RegisteredModel(
             id=str(uuid.uuid4()),

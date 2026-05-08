@@ -21,6 +21,8 @@ import {
   Eye,
   EyeOff,
   Search,
+  Save,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -154,6 +156,44 @@ function ModelCard({
   const [keyCopied, setKeyCopied] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
+  // Inspect/edit panel state for the serving app.py.
+  const [appOpen, setAppOpen] = useState(false);
+  const [appCode, setAppCode] = useState<string | null>(null);
+  const [appOriginal, setAppOriginal] = useState<string | null>(null);
+  const [appLoading, setAppLoading] = useState(false);
+  const [appSaveError, setAppSaveError] = useState<string | null>(null);
+  const [appSaving, setAppSaving] = useState(false);
+
+  const openAppPanel = async () => {
+    setAppOpen(true);
+    if (appCode === null) {
+      setAppLoading(true);
+      try {
+        const { code } = await api.getServingApp(m.id);
+        setAppCode(code);
+        setAppOriginal(code);
+      } catch (e) {
+        setAppCode(`# Failed to load: ${(e as Error).message}`);
+      } finally {
+        setAppLoading(false);
+      }
+    }
+  };
+
+  const saveAppCode = async () => {
+    if (appCode === null) return;
+    setAppSaving(true);
+    setAppSaveError(null);
+    try {
+      await api.putServingApp(m.id, appCode);
+      setAppOriginal(appCode);
+    } catch (e) {
+      setAppSaveError((e as Error).message);
+    } finally {
+      setAppSaving(false);
+    }
+  };
+  const appDirty = appCode !== null && appCode !== appOriginal;
   // Default to CPU when there's no live deployment to inherit from;
   // otherwise pre-select whatever compute was last shipped so the
   // user's "redeploy" stays on the same target unless they change it.
@@ -262,6 +302,16 @@ function ModelCard({
             <Download className="w-3 h-3" />
             Download
           </a>
+          {hasServingApp ? (
+            <button
+              onClick={openAppPanel}
+              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-gray-300"
+              title="Inspect or edit the Modal serving app.py — saves redeploy with your changes"
+            >
+              <FileCode className="w-3 h-3" />
+              app.py
+            </button>
+          ) : null}
           {!live ? (
             hasServingApp ? (
               <div className="inline-flex items-center gap-1.5">
@@ -442,6 +492,57 @@ function ModelCard({
         </div>
       ) : null}
 
+      {appOpen ? (
+        <div className="mt-3 rounded-lg border border-white/[0.06] bg-black/40 overflow-hidden">
+          <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.05] text-[11px] text-gray-400">
+            <FileCode className="w-3.5 h-3.5 text-emerald-400" />
+            <span className="font-mono">{m.serving_app_path}</span>
+            {appDirty ? (
+              <span className="text-amber-400">● unsaved</span>
+            ) : null}
+            <div className="flex-1" />
+            <button
+              onClick={saveAppCode}
+              disabled={!appDirty || appSaving || appLoading}
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 disabled:opacity-40"
+              title="Save edits to the volume. Click Deploy or Redeploy after to ship them."
+            >
+              <Save className="w-3 h-3" />
+              {appSaving ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              onClick={() => {
+                setAppOpen(false);
+                setAppSaveError(null);
+              }}
+              className="inline-flex items-center justify-center w-6 h-6 rounded text-gray-500 hover:bg-white/[0.06]"
+              title="Close"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {appSaveError ? (
+            <div className="px-3 py-1.5 text-[11px] text-rose-300 border-b border-rose-500/20 bg-rose-500/5">
+              {appSaveError}
+            </div>
+          ) : null}
+          {appLoading ? (
+            <div className="px-3 py-6 text-center text-[11px] text-gray-500">Loading…</div>
+          ) : (
+            <textarea
+              value={appCode ?? ''}
+              onChange={(e) => setAppCode(e.target.value)}
+              spellCheck={false}
+              className="w-full h-80 px-3 py-2 bg-transparent font-mono text-[11px] text-gray-200 leading-snug resize-y focus:outline-none"
+            />
+          )}
+          <div className="px-3 py-1.5 border-t border-white/[0.05] text-[10px] text-gray-500">
+            After saving, click <span className="text-emerald-300">Deploy</span> /{' '}
+            <span className="text-emerald-300">Redeploy</span> to ship the new app.py to Modal.
+            Backend rejects syntactically-broken saves.
+          </div>
+        </div>
+      ) : null}
       {hasCurves ? (
         <div className="mt-3">
           <button

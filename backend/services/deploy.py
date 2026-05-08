@@ -156,19 +156,25 @@ def _serving_app_code(
         if api_secret_name
         else ""
     )
+    # HTTPException is always needed (endpoint raises 500 on
+    # model_load_failed). Header only when auth is wired.
     auth_imports = (
-        "from fastapi import Header, HTTPException\n" if api_secret_name else ""
+        "from fastapi import Header, HTTPException\n"
+        if api_secret_name
+        else "from fastapi import HTTPException\n"
     )
+    # The endpoint signature lives at 8-space indent (inside a class
+    # method); auth_check goes inside the method body at 8 spaces too.
     auth_param = (
-        ',\n    x_api_key: str | None = Header(default=None, alias="X-API-Key")'
+        ',\n        x_api_key: str | None = Header(default=None, alias="X-API-Key")'
         if api_secret_name
         else ""
     )
     auth_check = (
         '''
-    expected_key = os.environ.get("API_KEY", "")
-    if not expected_key or x_api_key != expected_key:
-        raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
+        expected_key = os.environ.get("API_KEY", "")
+        if not expected_key or x_api_key != expected_key:
+            raise HTTPException(status_code=401, detail="Invalid or missing X-API-Key")
 '''
         if api_secret_name
         else ""
@@ -182,6 +188,76 @@ def _serving_app_code(
         if api_secret_name
         else ""
     )
+
+    # Resolve the in-container artifact path. The Modal volume is mounted
+    # at /data, so volume-relative paths like `/projects/.../model.pkl`
+    # become `/data/projects/.../model.pkl` inside the container. But the
+    # agent sometimes supplies an already-/data-prefixed path (sandbox
+    # mounts the same volume at /data, so a write to
+    # `/data/sessions/x/y.pkl` produces an artifact_uri that already has
+    # the prefix). Strip the leading `/data/` if present so we don't end
+    # up at `/data/data/sessions/...` which doesn't exist and causes
+    # @modal.enter to FileNotFoundError-loop forever.
+    container_artifact_path = artifact_uri
+    if container_artifact_path.startswith("/data/"):
+        container_artifact_path = container_artifact_path[len("/data") :]
+    container_artifact_path = "/data" + container_artifact_path
+
+    # Pick a loader by file extension + framework. The previous codegen
+    # always used pickle which silently fails on:
+    #   .json     — XGBoost / lightgbm native format
+    #   .ubj      — XGBoost binary
+    #   .pt/.pth  — PyTorch state dict
+    #   .safetensors — Hugging Face
+    # so the container would crash on enter and the endpoint hung.
+    ext = container_artifact_path.rsplit(".", 1)[-1].lower() if "." in container_artifact_path else ""
+    fw = (framework or "").lower()
+    # Each loader_block lives inside `try:` block of `def load(self)`,
+    # which is at 12-space indentation in the rendered file. The first
+    # line is interpolated directly at column 12, so subsequent lines
+    # MUST start with 12 spaces (= `IND`). Getting this wrong yields
+    # an IndentationError that crashes the container — use IND
+    # consistently below.
+    IND = "            "  # 12 spaces (try body)
+    IND_NESTED = IND + "    "  # 16 spaces (one level deeper)
+    if fw == "xgboost" and ext in ("json", "ubj", "bin"):
+        loader_block = (
+            f'import xgboost as xgb\n'
+            f'{IND}booster = xgb.Booster()\n'
+            f'{IND}booster.load_model(ARTIFACT_PATH)\n'
+            f'{IND}self._model = booster\n'
+            f'{IND}self._feature_cols = FEATURE_COLUMNS'
+        )
+    elif fw in ("lightgbm", "lgbm") and ext in ("txt", "model"):
+        loader_block = (
+            f'import lightgbm as lgb\n'
+            f'{IND}self._model = lgb.Booster(model_file=ARTIFACT_PATH)\n'
+            f'{IND}self._feature_cols = FEATURE_COLUMNS'
+        )
+    elif ext == "joblib":
+        loader_block = (
+            f'import joblib\n'
+            f'{IND}blob = joblib.load(ARTIFACT_PATH)\n'
+            f'{IND}if isinstance(blob, dict) and "model" in blob:\n'
+            f'{IND_NESTED}self._model = blob["model"]\n'
+            f'{IND_NESTED}self._feature_cols = blob.get("feature_cols") or FEATURE_COLUMNS\n'
+            f'{IND}else:\n'
+            f'{IND_NESTED}self._model = blob\n'
+            f'{IND_NESTED}self._feature_cols = FEATURE_COLUMNS'
+        )
+    else:
+        # Default: pickle (the .pkl/.pickle case).
+        loader_block = (
+            f'import pickle\n'
+            f'{IND}with open(ARTIFACT_PATH, "rb") as f:\n'
+            f'{IND_NESTED}blob = pickle.load(f)\n'
+            f'{IND}if isinstance(blob, dict) and "model" in blob:\n'
+            f'{IND_NESTED}self._model = blob["model"]\n'
+            f'{IND_NESTED}self._feature_cols = blob.get("feature_cols") or FEATURE_COLUMNS\n'
+            f'{IND}else:\n'
+            f'{IND_NESTED}self._model = blob\n'
+            f'{IND_NESTED}self._feature_cols = FEATURE_COLUMNS'
+        )
 
     # Triple-brace for f-string vs Python source dict literals.
     return f'''"""Modal serving app for {model_name} v{model_version}.
@@ -212,7 +288,7 @@ image = (
 # artifacts. We mount it at /data so the artifact path resolves.
 volume = modal.Volume.from_name({volume_name!r}, create_if_missing=False)
 
-ARTIFACT_PATH = "/data{artifact_uri}"
+ARTIFACT_PATH = {container_artifact_path!r}
 FEATURE_COLUMNS = {feature_cols_repr}
 TARGET_COLUMN = {target_repr}
 
@@ -223,60 +299,73 @@ TARGET_COLUMN = {target_repr}
 {gpu_line}{secrets_kwarg}    scaledown_window=120,
 )
 class Model:
+    # `_load_error` is set when @modal.enter fails so subsequent
+    # predict() calls return a 500 with the reason instead of hanging
+    # the container in a `@modal.enter`-loop. Without this, a typo in
+    # ARTIFACT_PATH or a missing dep would make the endpoint silently
+    # hang on every request — which is what the user hit before.
+    _load_error: str | None = None
+
     @modal.enter()
     def load(self):
-        import pickle
+        try:
+            {loader_block}
+        except Exception as e:  # pragma: no cover — runs in the Modal container
+            self._load_error = f"{{type(e).__name__}}: {{e}} (artifact={{ARTIFACT_PATH}})"
+            self._model = None
+            self._feature_cols = None
+            print("[serving] @modal.enter load failed:", self._load_error)
 
-        with open(ARTIFACT_PATH, "rb") as f:
-            blob = pickle.load(f)
-        if isinstance(blob, dict) and "model" in blob:
-            self._model = blob["model"]
-            self._feature_cols = blob.get("feature_cols") or FEATURE_COLUMNS
-        else:
-            self._model = blob
-            self._feature_cols = FEATURE_COLUMNS
+    # The HTTP endpoint lives directly on the class (single container,
+    # single boot). The previous codegen used `@app.cls` + a separate
+    # `@app.function` that called `model.predict.remote()` — that
+    # required two containers to start in series and routinely tripped
+    # Modal's 30s "shutting down" grace period, leaving curl hanging.
+    @modal.fastapi_endpoint(method="POST", docs=True)
+    def {fn_name.replace("-", "_")}(
+        self,
+        request: dict{auth_param},
+    ):
+        """Predict on a batch of records.
 
-    @modal.method()
-    def predict(self, records):
+        Body:   {{"records": [{{"feature_a": 1.0, ...}}, ...]}}
+        Returns: {{"predictions": [...], "model": "...", "version": ...}}
+        """{auth_check}
+        if self._load_error or self._model is None:
+            raise HTTPException(
+                status_code=500,
+                detail=self._load_error or "model failed to load",
+            )
+        records = request.get("records", [])
+        if not records:
+            return {{"predictions": [], "model": {model_name!r}, "version": {model_version}, "error": "no records"}}
+
         import pandas as pd
 
         if isinstance(records, dict):
             records = [records]
         df = pd.DataFrame(records)
         if self._feature_cols:
-            # Project to the trained feature order; ignore unknown keys.
             df = df[[c for c in self._feature_cols if c in df.columns]]
-        preds = self._model.predict(df)
-        return [p.item() if hasattr(p, "item") else p for p in preds]
-
-
-_model = Model()
-
-
-@app.function(
-    image=image,
-    volumes={{"/data": volume}},
-{secrets_kwarg})
-@modal.fastapi_endpoint(method="POST", docs=True)
-def {fn_name.replace("-", "_")}(
-    request: dict{auth_param},
-):
-    """Predict on a batch of records.
-
-    Body:
-      {{"records": [{{"feature_a": 1.0, "feature_b": 2.0}}, ...]}}
-
-    Returns:
-      {{"predictions": [...], "model": "...", "version": ...}}
-    """{auth_check}
-    records = request.get("records", [])
-    if not records:
-        return {{"predictions": [], "model": {model_name!r}, "version": {model_version}, "error": "no records"}}
-    return {{
-        "predictions": _model.predict.remote(records),
-        "model": {model_name!r},
-        "version": {model_version},
-    }}
+        # XGBoost low-level Booster + LightGBM Booster need DMatrix /
+        # raw matrix, not a DataFrame. Sklearn / xgb.XGBClassifier /
+        # other "high-level" estimators accept the DataFrame directly.
+        # Sniff the type at predict time so the same code path works
+        # for any framework.
+        try:
+            import xgboost as _xgb  # noqa: F401
+            if isinstance(self._model, _xgb.Booster):
+                input_obj = _xgb.DMatrix(df)
+            else:
+                input_obj = df
+        except Exception:
+            input_obj = df
+        preds = self._model.predict(input_obj)
+        return {{
+            "predictions": [p.item() if hasattr(p, "item") else p for p in preds],
+            "model": {model_name!r},
+            "version": {model_version},
+        }}
 '''
 
 
@@ -445,9 +534,12 @@ async def deploy_model(
         app_name = _modal_app_name(model.project_id)
         fn_name = _modal_function_name(model.name, model.version)
 
-        # Idempotency: if a deployment already exists in 'live' state
-        # with the SAME compute target, return it. A different compute
-        # is treated as an explicit upgrade — proceed to redeploy.
+        # We always proceed to a fresh `modal deploy` so the URL
+        # reflects the current app.py. Previous code short-circuited
+        # when compute matched, which masked regenerated apps and let
+        # the UI keep showing a stale URL after the agent edited the
+        # serving file. Old live rows are marked `superseded` further
+        # down so the catalog only shows one live row per model.
         existing = (
             await db.execute(
                 select(Deployment).where(
@@ -456,8 +548,6 @@ async def deploy_model(
                 )
             )
         ).scalar_one_or_none()
-        if existing and (existing.compute or "cpu") == compute_norm:
-            return existing.to_dict()
 
     # Ensure the model has an API key + the Modal secret exists. The
     # key is generated once per model and reused across redeploys
@@ -526,8 +616,10 @@ async def deploy_model(
             url = _build_endpoint_url(app_name, fn_name)
 
         # Mark any prior live deployment as superseded so the UI doesn't
-        # show two "live" rows for the same model.
-        if existing and (existing.compute or "cpu") != compute_norm:
+        # show two "live" rows for the same model. Always do this on
+        # successful redeploy — Modal rolls the underlying app, so the
+        # old row's URL may not even point at the latest container.
+        if status == "live":
             sup = (
                 await db.execute(
                     select(Deployment).where(
