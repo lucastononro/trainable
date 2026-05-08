@@ -12,6 +12,10 @@ import {
   FolderOpen,
   ChevronRight,
   ChevronDown,
+  FileCode,
+  Lock,
+  BookOpen,
+  Power,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -119,12 +123,16 @@ function ModelCard({
   m,
   deployments,
   onDeploy,
+  onStop,
   deploying,
+  stopping,
 }: {
   m: RegisteredModel;
   deployments: DeploymentRow[];
   onDeploy: (modelId: string) => void;
+  onStop: (deploymentId: string) => void;
   deploying: boolean;
+  stopping: boolean;
 }) {
   const [copied, setCopied] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
@@ -133,9 +141,17 @@ function ModelCard({
   const refs = m.dataset_refs || {};
   const splits = Object.keys(refs);
   const hasCurves = (m.metrics_history?.length ?? 0) > 0;
+  const hasServingApp = Boolean(m.serving_app_path);
+  // Modal endpoints expose Swagger UI at <url>/docs when the app uses
+  // `@modal.fastapi_endpoint(docs=True)` — our serving-app generator
+  // always sets that flag, so we can link straight to it.
+  const docsUrl = live?.endpoint_url ? `${live.endpoint_url}/docs` : null;
 
   const copyCurl = async (url: string) => {
-    const curl = `curl -X POST '${url}/predict' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"records": [{"feature_a": 1.0, "feature_b": 2.0}]}'`;
+    // Modal's @modal.fastapi_endpoint serves the predict function at
+    // the root URL — no /predict suffix, unlike a typical FastAPI
+    // mount. The previous template included one and produced 404s.
+    const curl = `curl -X POST '${url}' \\\n  -H 'Content-Type: application/json' \\\n  -d '{"records": [{"feature_a": 1.0, "feature_b": 2.0}]}'`;
     await navigator.clipboard.writeText(curl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -217,23 +233,56 @@ function ModelCard({
             Download
           </a>
           {!live ? (
-            <button
-              onClick={() => onDeploy(m.id)}
-              disabled={deploying}
-              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 disabled:opacity-50"
-            >
-              <Rocket className="w-3 h-3" />
-              {deploying ? 'Deploying…' : 'Deploy'}
-            </button>
+            hasServingApp ? (
+              <button
+                onClick={() => onDeploy(m.id)}
+                disabled={deploying}
+                className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 disabled:opacity-50"
+              >
+                <Rocket className="w-3 h-3" />
+                {deploying ? 'Deploying…' : 'Deploy'}
+              </button>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-white/[0.03] text-gray-500 cursor-not-allowed"
+                title="Ask an agent to run create-serving-app for this model first."
+              >
+                <Lock className="w-3 h-3" />
+                Deploy
+              </span>
+            )
           ) : (
-            <button
-              onClick={() => copyCurl(live.endpoint_url ?? '')}
-              className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300"
-              title={live.endpoint_url ?? 'no url'}
-            >
-              {copied ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-              {copied ? 'Copied' : 'Copy cURL'}
-            </button>
+            <>
+              {docsUrl ? (
+                <a
+                  href={docsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-gray-200"
+                  title="Open auto-generated Swagger UI"
+                >
+                  <BookOpen className="w-3 h-3" />
+                  Docs
+                </a>
+              ) : null}
+              <button
+                onClick={() => copyCurl(live.endpoint_url ?? '')}
+                className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300"
+                title={live.endpoint_url ?? 'no url'}
+              >
+                {copied ? <CheckCircle2 className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                {copied ? 'Copied' : 'Copy cURL'}
+              </button>
+              <button
+                onClick={() => onStop(live.id)}
+                disabled={stopping}
+                className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 disabled:opacity-50"
+                title="Stop the Modal app and mark this deployment offline"
+              >
+                <Power className="w-3 h-3" />
+                {stopping ? 'Stopping…' : 'Stop'}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -246,6 +295,18 @@ function ModelCard({
       {failed ? (
         <div className="mt-2 text-[11px] text-red-300">
           Last deploy failed: {failed.error ?? 'unknown error'}
+        </div>
+      ) : null}
+      {!hasServingApp ? (
+        <div className="mt-3 flex items-start gap-2 px-3 py-2 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] text-amber-200/80">
+          <FileCode className="w-3.5 h-3.5 mt-0.5 shrink-0 text-amber-300" />
+          <div>
+            No Modal serving app yet for this model. Open the chat and ask the
+            agent to <span className="font-mono">create-serving-app</span> for{' '}
+            <span className="font-mono">{m.name} v{m.version}</span> — that
+            writes <span className="font-mono">app.py</span> next to the
+            artifact and unlocks Deploy.
+          </div>
         </div>
       ) : null}
 
@@ -276,6 +337,7 @@ export default function ModelsPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [deploying, setDeploying] = useState<string | null>(null);
+  const [stopping, setStopping] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
   const refresh = async () => {
@@ -311,6 +373,18 @@ export default function ModelsPage() {
       setError((e as Error).message);
     } finally {
       setDeploying(null);
+    }
+  };
+
+  const onStop = async (deploymentId: string) => {
+    setStopping(deploymentId);
+    try {
+      await api.stopDeployment(deploymentId);
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setStopping(null);
     }
   };
 
@@ -391,15 +465,21 @@ export default function ModelsPage() {
                 </button>
                 {!isCollapsed ? (
                   <div className="space-y-3">
-                    {pm.map((m) => (
-                      <ModelCard
-                        key={m.id}
-                        m={m}
-                        deployments={deployments[m.id] || []}
-                        onDeploy={onDeploy}
-                        deploying={deploying === m.id}
-                      />
-                    ))}
+                    {pm.map((m) => {
+                      const deps = deployments[m.id] || [];
+                      const live = deps.find((d) => d.status === 'live');
+                      return (
+                        <ModelCard
+                          key={m.id}
+                          m={m}
+                          deployments={deps}
+                          onDeploy={onDeploy}
+                          onStop={onStop}
+                          deploying={deploying === m.id}
+                          stopping={live ? stopping === live.id : false}
+                        />
+                      );
+                    })}
                   </div>
                 ) : null}
               </section>

@@ -1,0 +1,7 @@
+type: object
+properties:
+  model_id:
+    type: string
+    description: id of the RegisteredModel to wrap. Must be a model that already has dataset_refs set (i.e. went through register-model with a training_dataset_id).
+required:
+  - model_id

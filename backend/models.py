@@ -558,6 +558,12 @@ class RegisteredModel(Base):
     # Rendered in the /models page as inline charts so the user can
     # compare runs without spelunking back to the original session.
     metrics_history = Column(JSON, default=list)
+    # Volume path to the Modal serving app (Python file with @app.cls /
+    # @modal.fastapi_endpoint). Written by the `create-serving-app`
+    # skill. Until this is set, the Deploy button on /models is
+    # disabled because there's nothing to ship — an artifact pickle by
+    # itself isn't a deployable thing on Modal.
+    serving_app_path = Column(String(512), nullable=True)
     framework = Column(String(50), nullable=True)
     status = Column(String(20), default="ready")
     created_at = Column(String, default=lambda: utcnow().isoformat())
@@ -580,6 +586,7 @@ class RegisteredModel(Base):
             "hyperparams": self.hyperparams or {},
             "dataset_refs": self.dataset_refs or {},
             "metrics_history": self.metrics_history or [],
+            "serving_app_path": self.serving_app_path,
             "framework": self.framework,
             "status": self.status,
             "created_at": self.created_at,

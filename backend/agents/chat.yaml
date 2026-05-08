@@ -27,6 +27,7 @@ skills:
   - name: register-dataset
   - name: start-training
   - name: register-model
+  - name: create-serving-app
 
 subagents:
   - orchestrator
@@ -35,6 +36,7 @@ subagents:
   - feature_eng
   - trainer
   - reviewer
+  - deploy
 
 opener: "Hello! I'm your ML assistant. How can I help you today?"
 

@@ -26,6 +26,7 @@ skills:
   - name: register-dataset
   - name: start-training
   - name: register-model
+  - name: create-serving-app
 
 subagents:
   - eda
@@ -33,6 +34,7 @@ subagents:
   - feature_eng
   - trainer
   - reviewer
+  - deploy
 
 opener: "I'll analyze your request and plan the best approach."
 

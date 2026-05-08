@@ -62,7 +62,13 @@ def test_deploy_app_naming_idempotent():
     a = _modal_app_name(project_id)
     b = _modal_app_name(project_id)
     assert a == b
-    assert "serving" in a
+    # App names use "srv" (short) so the full Modal URL
+    # `<workspace>--<app>--<fn>.modal.run` stays under the 63-char
+    # subdomain limit and Modal doesn't truncate + hash the label.
+    assert "srv" in a
+    # And it must include some identifying chunk of the project id —
+    # the first 12 hex chars of the leading uuid segment.
+    assert "abc" in a
 
     fn1 = _modal_function_name("Customer Churn", 3)
     assert fn1 == "customer-churn-v3"

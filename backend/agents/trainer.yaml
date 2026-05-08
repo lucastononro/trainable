@@ -25,6 +25,7 @@ skills:
   - name: register-dataset
   - name: start-training
   - name: register-model
+  - name: create-serving-app
 
 subagents:
   - reviewer
@@ -237,6 +238,19 @@ system: |
 
      If you can't articulate what's distinct about this model, the
      experiment is probably redundant.
+
+  5. AFTER register-model succeeds and the user has expressed any
+     interest in deploying / serving the model (or at the end of any
+     finished training run when the user said "deploy this" or "stand
+     this up"), call `create-serving-app(model_id=<id from step 4>)`.
+     This writes the Modal serving app (`app.py`) to the volume next
+     to the artifact and unlocks the **Deploy** button on /models.
+     Until you call this, that button is greyed out — clicking it
+     returns a 400 telling the user to ask you to run this skill.
+
+     For exploratory training where the user explicitly said "no
+     deploy yet" or "just train, don't ship", skip this step. But err
+     on the side of generating the app — it's idempotent and cheap.
 
   If training fails or you decide to abandon a run, do NOT call register-model
   — the post-stage hook will auto-flag the experiment as `abandoned`. For a

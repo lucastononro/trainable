@@ -148,6 +148,11 @@ export const api = {
     fetchJSON<DeploymentRow>(`/models/${modelId}/deploy`, { method: 'POST' }),
   modelDeployments: (modelId: string) =>
     fetchJSON<DeploymentRow[]>(`/models/${modelId}/deployments`),
+  // Mark a live deployment as stopped. Backend keeps the row for audit
+  // history and stops the Modal app via `modal app stop` if the CLI
+  // is configured.
+  stopDeployment: (deploymentId: string) =>
+    fetchJSON<DeploymentRow>(`/deployments/${deploymentId}`, { method: 'DELETE' }),
 
   // Snapshots
   takeSnapshot: (sessionId: string) =>

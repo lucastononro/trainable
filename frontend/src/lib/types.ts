@@ -337,6 +337,10 @@ export interface RegisteredModel {
   // Frozen Metric rows from the training session, snapshotted at
   // register-model time so the curves survive session deletion.
   metrics_history?: MetricPoint[];
+  // Volume path to the Modal serving app (Python file). When null, the
+  // Deploy button on /models is disabled — there's nothing to ship.
+  // Set by `create-serving-app`.
+  serving_app_path?: string | null;
   framework: string | null;
   status: string;
   created_at: string;
