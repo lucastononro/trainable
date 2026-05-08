@@ -768,7 +768,7 @@ export default function HomePage() {
       source.onerror = () => setSseConnected(false);
       sseRef.current = source;
     },
-    [addItem],
+    [addItem, openCanvas],
   );
 
   // ---------------------------------------------------------------------------
@@ -1177,7 +1177,7 @@ export default function HomePage() {
       cancelled = true;
       sseRef.current?.close();
     };
-  }, [activeExperimentId, activeSessionId, connectSSE, addItem, resetSessionState]);
+  }, [activeExperimentId, activeSessionId, connectSSE, addItem, resetSessionState, openCanvas]);
 
   // ---------------------------------------------------------------------------
   // Send pending message once SSE is connected (after auto-create)
@@ -1624,6 +1624,7 @@ export default function HomePage() {
               {/* Logo + title */}
               <div className="text-center space-y-3">
                 <div className="flex items-center justify-center gap-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src="/logo-brain-transparent.png" alt="Trainable" className="h-10 w-auto" />
                 </div>
                 <h1 className="text-2xl font-semibold text-white">
@@ -2174,6 +2175,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
           <div className="p-4 text-sm text-red-400">{error}</div>
         ) : isImage ? (
           <div className="p-6 flex items-center justify-center bg-black">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={`${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(filePath)}`}
               alt={fileName}
@@ -2221,6 +2223,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
                     imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(dir + '/' + imgSrc)}`;
                   }
                   return (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={imgSrc}
                       alt={alt || ''}
@@ -2625,6 +2628,7 @@ function WorkspaceSidebar({
                         imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
                       }
                       return (
+                        // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={imgSrc}
                           alt={alt || ''}

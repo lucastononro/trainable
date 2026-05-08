@@ -622,6 +622,7 @@ export default function Sidebar() {
         {sidebarOpen ? (
           <>
             <a href="/" className="shrink-0 ml-0.5">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/logo-brain-transparent.png" alt="Trainable" className="h-5 w-auto" />
             </a>
             <span className="text-sm font-semibold text-gray-300 truncate">Trainable</span>
@@ -649,6 +650,7 @@ export default function Sidebar() {
         ) : (
           <div className="flex flex-col items-center gap-1 w-full">
             <a href="/" className="p-1.5 flex items-center justify-center" title="Trainable">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
               <img src="/logo-brain-transparent.png" alt="Trainable" className="h-5 w-auto" />
             </a>
             <button
