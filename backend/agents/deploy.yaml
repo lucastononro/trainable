@@ -71,6 +71,88 @@ system: |
   | "Add a /health route" | Add a second `@app.function @modal.fastapi_endpoint(method="GET")` |
   | "Stream large responses" | Return `StreamingResponse` from FastAPI |
 
+  ## API contract — make Swagger USEFUL (READ THIS)
+
+  The user evaluates the deployment on `<url>/docs`. If the only
+  schema they see is `request: dict` with no field hints, the
+  endpoint is unusable in practice — they have to read the source
+  code to figure out what to send. **Your job is to make /docs
+  self-explanatory.**
+
+  The scaffold from `create-serving-app` already gives you a base:
+  `PredictRequest(records: list[dict])` with an example body
+  pre-populated from the trained feature columns. That's a B+, not
+  an A. Upgrade it when the model warrants it:
+
+  ### Upgrade 1 — typed records (per-feature schema)
+
+  When you know the dtypes (read them from the training parquet via
+  `read-session-file` and a tiny pandas script), replace the open
+  `dict` with a typed Pydantic record:
+
+  ```python
+  from pydantic import BaseModel, Field
+
+  class PassengerRecord(BaseModel):
+      Pclass: int = Field(..., ge=1, le=3, description="Ticket class (1-3)")
+      Sex: int = Field(..., ge=0, le=1, description="0=female, 1=male")
+      Age: float = Field(..., ge=0, le=120)
+      Fare: float = Field(..., ge=0)
+      # ... one Field() per trained column
+
+  class PredictRequest(BaseModel):
+      records: list[PassengerRecord] = Field(
+          ...,
+          description="Batch of passengers. Schema must match training.",
+          examples=[[{"Pclass": 1, "Sex": 0, "Age": 35.0, "Fare": 71.28}]],
+      )
+  ```
+
+  Swagger now shows the user every field with its bounds, types, and
+  inline description. FastAPI returns 422 with a clear error if a
+  request is missing a key or has the wrong type — which means
+  downstream clients get a good error message, not a silent miss.
+
+  ### Upgrade 2 — `examples=` on every Field
+
+  Pydantic v2 `Field(..., examples=[...])` populates Swagger's
+  Try-It-Out panel with realistic values, NOT zeros. Pull those from
+  EDA: median of train, a representative row, or pick a real one.
+  This is the difference between "user clicks Execute and gets a
+  sensible answer" vs "user clicks Execute and gets a 500 because all
+  zeros isn't a valid input".
+
+  ### Upgrade 3 — task-specific response
+
+  The default `PredictResponse(predictions: list)` is generic. For:
+  - **Binary classification**: add `probabilities: list[float]` if
+    the model exposes `predict_proba`. The user can pick a threshold.
+  - **Multi-class**: rename `predictions` → `class_label` and add
+    `class_probabilities: list[dict[str, float]]`.
+  - **Regression**: rename `predictions` → `predicted_value` so the
+    semantic is obvious in /docs.
+
+  ### Upgrade 4 — endpoint description
+
+  The function docstring becomes the Swagger summary. Replace the
+  generic boilerplate with model-specific context:
+  - What does this model predict? ("survival probability for Titanic
+    passengers" beats "predict on a batch of records")
+  - What are the headline test metrics? ("Test AUC 0.84" gives the
+    user calibration for the predictions they're getting)
+  - Any known input quirks? ("Sex must be 0/1, not 'male'/'female' —
+    the model trained on the encoded version")
+
+  ### Heuristic: when to skip the upgrade
+
+  If the model has 30+ features (typical for tabular ML), don't
+  enumerate every one in a typed Pydantic record — the file becomes
+  huge and the user can't read it. Instead: keep `records: list[dict]`,
+  but make the `examples=` block exhaustive, listing every feature
+  with a realistic value. Swagger renders the example, the user
+  copies it, edits the values they care about. That's the right
+  tradeoff for wide tabular models.
+
   ## Standard flow
 
   1. The parent agent passed a `model_id` in your task input. Confirm

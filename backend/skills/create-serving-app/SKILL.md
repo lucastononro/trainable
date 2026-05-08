@@ -23,6 +23,43 @@ The generated app:
 - Pulls `feature_columns` + `target_column` from the training
   DatasetVersion's metadata so the endpoint projects incoming JSON to
   the right column order.
+- **Ships a typed Pydantic contract.** The endpoint takes
+  `body: PredictRequest -> PredictResponse` (not raw `dict`), and
+  Swagger renders a real schema with the model's trained feature
+  columns pre-filled in the Try-It-Out panel as a working example.
+  The user can hit Execute without guessing the input shape.
+
+## What the user sees on Swagger
+
+After deploy, browse to `<endpoint_url>/docs`. They see:
+
+1. The endpoint route + the `X-API-Key` header field (when auth is on).
+2. **Request body schema** — `PredictRequest.records: list[dict]`
+   with an example pre-populated using the actual feature column names
+   from training. Swagger renders the example as the default body in
+   the Try-It-Out panel. The user fills in real values, clicks
+   Execute, sees the response.
+3. **Response schema** — `PredictResponse.predictions: list`,
+   `model: str`, `version: int`. Each field has a description.
+
+If you want a tighter contract — typed-per-feature instead of a
+single `dict` — edit the generated `app.py` directly. Common
+upgrades:
+
+```python
+class PassengerRecord(BaseModel):
+    Pclass: int = Field(..., ge=1, le=3)
+    Sex: int = Field(..., ge=0, le=1, description="0=female, 1=male")
+    Age: float = Field(..., ge=0, le=120)
+    # ...
+
+class PredictRequest(BaseModel):
+    records: list[PassengerRecord]
+```
+
+That gives Swagger a per-field schema with bounds + descriptions and
+returns 422 on bad input automatically — a much more usable contract
+for downstream callers.
 
 ## Inputs
 

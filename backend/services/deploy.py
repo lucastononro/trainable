@@ -157,11 +157,15 @@ def _serving_app_code(
         else ""
     )
     # HTTPException is always needed (endpoint raises 500 on
-    # model_load_failed). Header only when auth is wired.
+    # model_load_failed). Header only when auth is wired. Pydantic
+    # request/response models give Swagger a real schema to render
+    # instead of `dict` — they live in every generated app.
     auth_imports = (
         "from fastapi import Header, HTTPException\n"
+        "from pydantic import BaseModel, Field\n"
         if api_secret_name
         else "from fastapi import HTTPException\n"
+        "from pydantic import BaseModel, Field\n"
     )
     # The endpoint signature lives at 8-space indent (inside a class
     # method); auth_check goes inside the method body at 8 spaces too.
@@ -188,6 +192,25 @@ def _serving_app_code(
         if api_secret_name
         else ""
     )
+
+    # Build a sample record from the model's feature columns so the
+    # `request` body in Swagger isn't `dict` with no schema. Without
+    # dtypes we can't perfectly type each field, so we emit
+    # `dict[str, float | int | None]` and attach a JSON example with
+    # zero values for every trained feature. The user can hand-edit the
+    # generated app.py to tighten dtypes / add bounds if they want.
+    if feature_columns:
+        # Stable, alphabetised order — easier to scan in Swagger.
+        sample_record = {c: 0 for c in feature_columns}
+        feature_list_md = (
+            ", ".join(f"`{c}`" for c in feature_columns[:30])
+            + (" …" if len(feature_columns) > 30 else "")
+        )
+    else:
+        sample_record = {"feature_a": 0.0, "feature_b": 0.0}
+        feature_list_md = "(unknown — register the training dataset's metadata to populate this)"
+    sample_response_predictions = "[0]"
+    sample_record_repr = repr(sample_record)
 
     # Resolve the in-container artifact path. The Modal volume is mounted
     # at /data, so volume-relative paths like `/projects/.../model.pkl`
@@ -293,6 +316,35 @@ FEATURE_COLUMNS = {feature_cols_repr}
 TARGET_COLUMN = {target_repr}
 
 
+# -----------------------------------------------------------------------------
+# Request / response contract — what Swagger renders at /docs.
+# Each "record" is a dict of trained feature values. We don't store
+# per-feature dtypes, so the type is `dict[str, float | int | None]` —
+# tighten by hand in this file if you want stricter validation.
+# Trained feature columns: {feature_list_md}
+# -----------------------------------------------------------------------------
+class PredictRequest(BaseModel):
+    records: list[dict] = Field(
+        ...,
+        description=(
+            "Batch of records to predict on. Each record is a dict whose "
+            "keys are the trained feature columns (see schema example). "
+            "Unknown keys are dropped; missing keys are treated as 0."
+        ),
+        examples=[[{sample_record_repr}]],
+    )
+
+
+class PredictResponse(BaseModel):
+    predictions: list = Field(
+        ...,
+        description="One element per input record. Class label for classifiers, regressed value for regressors.",
+        examples=[{sample_response_predictions}],
+    )
+    model: str = Field({model_name!r}, description="Model name.")
+    version: int = Field({model_version}, description="Model version.")
+
+
 @app.cls(
     image=image,
     volumes={{"/data": volume}},
@@ -324,21 +376,33 @@ class Model:
     @modal.fastapi_endpoint(method="POST", docs=True)
     def {fn_name.replace("-", "_")}(
         self,
-        request: dict{auth_param},
-    ):
-        """Predict on a batch of records.
+        body: PredictRequest{auth_param},
+    ) -> PredictResponse:
+        """Run inference on a batch of records.
 
-        Body:   {{"records": [{{"feature_a": 1.0, ...}}, ...]}}
-        Returns: {{"predictions": [...], "model": "...", "version": ...}}
+        **Authentication.** Send your `X-API-Key` header on every
+        request. Get it from the model card on `/models` (Show Key →
+        Copy).
+
+        **Body.** A JSON object with a `records` list. Each record is a
+        dict whose keys are the model's trained feature columns. The
+        Swagger Try-It-Out panel above is pre-filled with the right
+        feature names + zero values — edit those values, click Execute.
+
+        **Response.** A list of predictions (one per record) plus the
+        model identity. For classifiers this is a class label; for
+        regressors a numeric value.
+
+        Trained feature columns ({len(feature_columns) if feature_columns else "?"}): {feature_list_md}.
         """{auth_check}
         if self._load_error or self._model is None:
             raise HTTPException(
                 status_code=500,
                 detail=self._load_error or "model failed to load",
             )
-        records = request.get("records", [])
+        records = body.records
         if not records:
-            return {{"predictions": [], "model": {model_name!r}, "version": {model_version}, "error": "no records"}}
+            raise HTTPException(status_code=400, detail="`records` is empty.")
 
         import pandas as pd
 
@@ -361,11 +425,11 @@ class Model:
         except Exception:
             input_obj = df
         preds = self._model.predict(input_obj)
-        return {{
-            "predictions": [p.item() if hasattr(p, "item") else p for p in preds],
-            "model": {model_name!r},
-            "version": {model_version},
-        }}
+        return PredictResponse(
+            predictions=[p.item() if hasattr(p, "item") else p for p in preds],
+            model={model_name!r},
+            version={model_version},
+        )
 '''
 
 
