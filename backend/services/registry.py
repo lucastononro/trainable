@@ -218,14 +218,27 @@ async def register_model_declared(
     framework: str,
     metrics: dict,
     description: str,
+    training_dataset_id: int,
+    validation_dataset_id: int | None = None,
+    test_dataset_id: int | None = None,
+    split_metrics: dict | None = None,
     hyperparams: dict | None = None,
     name: str | None = None,
 ) -> dict[str, Any]:
     """Agent-declared registration: the agent calls register-model with
     an explicit artifact path + metrics. No volume walk, no extension
     sniffing. Marks the parent experiment as `trained` and emits SSE.
+
+    Mandatory `training_dataset_id` (DatasetVersion.id) carries the data
+    provenance into the registry — every model row directly answers the
+    "what did this train on?" question instead of relying on the
+    experiment_datasets join (which can include both raw + processed and
+    confuse the lineage canvas). Optional `validation_dataset_id` /
+    `test_dataset_id` add the eval split refs; `split_metrics` is an
+    optional dict like {"train": {…}, "val": {…}, "test": {…}} so the
+    user can see metrics next to each split in the UI.
     """
-    from models import Experiment, ExperimentState
+    from models import DatasetVersion, Experiment, ExperimentState
 
     if not description.strip():
         raise ValueError("description is required for register-model")
@@ -233,6 +246,12 @@ async def register_model_declared(
         raise ValueError("path is required for register-model")
     if not isinstance(metrics, dict):
         raise ValueError("metrics must be a dict (e.g. {'accuracy': 0.91})")
+    if not training_dataset_id:
+        raise ValueError(
+            "training_dataset_id is required — pass the dataset_version_id "
+            "of the processed dataset you fit on. Without this, the "
+            "lineage canvas can't tell what data the model saw."
+        )
 
     async with async_session() as db:
         exp = (
@@ -242,7 +261,97 @@ async def register_model_declared(
             raise ValueError(f"Experiment {experiment_id} not found")
         project_id = exp.project_id
         sid = exp.session_id
+        if not sid:
+            # Fall back to the legacy direction: a session may point at
+            # this experiment via Session.experiment_id even when the
+            # new Experiment.session_id was never wired (the legacy
+            # POST /api/experiments creates the pair this way). Pick
+            # the earliest session if there are multiple.
+            from models import Session as _S
+
+            sid = (
+                await db.execute(
+                    select(_S.id)
+                    .where(_S.experiment_id == experiment_id)
+                    .order_by(_S.created_at.asc())
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
         model_name = (name or exp.name or "model").strip() or "model"
+
+        # Validate the dataset references exist + belong to this project.
+        # Reject raw datasets for the training slot — the user wants the
+        # graph to read Raw → Processed → Model, so processed data is the
+        # canonical training input.
+        ref_ids = [training_dataset_id]
+        if validation_dataset_id:
+            ref_ids.append(validation_dataset_id)
+        if test_dataset_id:
+            ref_ids.append(test_dataset_id)
+        ref_rows = (
+            (
+                await db.execute(
+                    select(DatasetVersion).where(DatasetVersion.id.in_(ref_ids))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        ref_by_id = {r.id: r for r in ref_rows}
+        for rid in ref_ids:
+            if rid not in ref_by_id:
+                raise ValueError(
+                    f"dataset_version_id {rid} not found — call list-project-datasets"
+                    " first to get the correct id."
+                )
+            if ref_by_id[rid].project_id != project_id:
+                raise ValueError(
+                    f"dataset_version_id {rid} belongs to a different project."
+                )
+        train_dv = ref_by_id[training_dataset_id]
+        if train_dv.kind == "raw":
+            raise ValueError(
+                f"training_dataset_id {training_dataset_id} is a RAW dataset "
+                f"({train_dv.name!r}). Run register-dataset first to declare "
+                "the processed version, then pass that id here."
+            )
+        # Build the dataset_refs payload that's stored on the model row.
+        # Each split_metrics entry becomes a ref. Splits whose dataset_id
+        # was supplied get pinned to that DatasetVersion; the common
+        # "one parquet with internal train/val/test split" case falls
+        # back to `training_dataset_id` so val/test metrics still
+        # surface in the UI without forcing the agent to fabricate
+        # separate dataset rows.
+        sm = split_metrics if isinstance(split_metrics, dict) else {}
+        explicit_ids: dict[str, int | None] = {
+            "train": training_dataset_id,
+            "val": validation_dataset_id,
+            "test": test_dataset_id,
+        }
+        dataset_refs: dict[str, dict] = {}
+        # Always emit the "train" entry — it's the canonical edge into
+        # the model and the call required training_dataset_id.
+        dataset_refs["train"] = {
+            "dataset_id": training_dataset_id,
+            "metrics": sm.get("train") or {},
+        }
+        # Then any other split metrics, falling back to training_dataset_id.
+        for role, m_metrics in sm.items():
+            if role == "train":
+                continue
+            dv_id = explicit_ids.get(role) or training_dataset_id
+            dataset_refs[role] = {
+                "dataset_id": dv_id,
+                "metrics": m_metrics or {},
+            }
+        # And any explicit dataset ids that weren't already covered.
+        for role, dv_id in explicit_ids.items():
+            if role == "train" or not dv_id or role in dataset_refs:
+                continue
+            dataset_refs[role] = {
+                "dataset_id": dv_id,
+                "metrics": sm.get(role) or {},
+            }
 
         # Compute next version per (project_id, name).
         latest_version = (
@@ -295,6 +404,7 @@ async def register_model_declared(
             metrics_summary=metrics,
             description=description.strip(),
             hyperparams=hyperparams or {},
+            dataset_refs=dataset_refs,
             framework=framework,
             status="ready",
         )

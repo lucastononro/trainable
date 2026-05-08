@@ -125,17 +125,16 @@ system: |
   registry is built entirely from these calls — heuristic file detection has
   been removed.
 
-  1. BEFORE training, call `create-experiment(name, hypothesis,
-     parent_dataset_ids=[raw_id])`. The hypothesis is a 1-2 sentence
-     statement of what you're trying — e.g. "Test whether adding
-     interaction features beats the linear baseline." Save the returned
-     `experiment_id`.
+  1. BEFORE training, call `create-experiment(name, hypothesis)`. The
+     hypothesis is a 1-2 sentence statement of what you're trying — e.g.
+     "Test whether adding interaction features beats the linear
+     baseline." Save the returned `experiment_id`.
 
-     If you don't know the raw_id yet, run step 1.5 first (call
-     list-project-datasets) and pass the id from there. Skipping
-     `parent_dataset_ids` is acceptable ONLY if the experiment uses no
-     upstream data (pure synthetic / on-the-fly generation), which is
-     rare.
+     DO NOT pass `parent_dataset_ids` for raw uploads on
+     create-experiment — that creates a misleading direct edge from
+     raw → model in the lineage canvas. Raw → Processed is wired by
+     the next step (register-dataset.parent_dataset_id), and
+     Processed → Model is wired by register-model.training_dataset_id.
 
   1.5 Call `list-project-datasets` to see the dataset graph for this
       project. You'll get a list of every DatasetVersion (raw +
@@ -172,9 +171,30 @@ system: |
      this and call `register-model` directly, the lifecycle service will
      reject the call.
 
-  4. IMMEDIATELY after fitting succeeds and you've saved the artifact, call
-     `register-model(experiment_id, path, framework, metrics, description,
-     hyperparams)`.
+  4. IMMEDIATELY after fitting succeeds and you've saved the artifact,
+     call:
+
+       register-model(
+         experiment_id, path, framework, metrics, description,
+         hyperparams,
+         training_dataset_id=<processed_id from step 2>,   # MANDATORY
+         validation_dataset_id=<id, if held out separately>,
+         test_dataset_id=<id, if held out separately>,
+         split_metrics={                                   # if you have them
+           "train": {...}, "val": {...}, "test": {...}
+         },
+       )
+
+     `training_dataset_id` is the **processed** dataset's id from
+     step 2 — NEVER the raw upload's id (the call rejects raws). This
+     is what makes the lineage canvas draw `Processed → Model` cleanly
+     and lets the model card show train/val/test metrics next to each
+     dataset name in the UI.
+
+     If you only had one processed file with internal splits (the
+     common case), pass that one id as `training_dataset_id` and put
+     the per-split numbers in `split_metrics`. Don't fabricate
+     separate dataset ids you didn't actually register.
 
      The `description` must be 1-3 sentences and user-facing. EXAMPLES:
 

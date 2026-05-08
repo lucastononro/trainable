@@ -33,7 +33,7 @@ async def test_session_lineage_endpoint(client):
         name="iris.csv",
     )
     exp = await create_experiment_declared(session_id=sid, name="exp", hypothesis="t")
-    await register_dataset_declared(
+    proc = await register_dataset_declared(
         experiment_id=exp["id"],
         path="/sessions/x/data/train.parquet",
         name="train",
@@ -49,6 +49,7 @@ async def test_session_lineage_endpoint(client):
         framework="xgb",
         metrics={"accuracy": 0.9},
         description="m",
+        training_dataset_id=proc["id"],
     )
 
     resp = await client.get(f"/api/sessions/{sid}/lineage")

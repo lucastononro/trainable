@@ -434,6 +434,11 @@ export interface LineageExperimentNode extends LineageNodeBase {
   completed_at: string | null;
 }
 
+export interface ModelDatasetRef {
+  dataset_id: number;
+  metrics: Record<string, number>;
+}
+
 export interface LineageModelNode extends LineageNodeBase {
   type: 'model';
   model_id: string;
@@ -441,6 +446,10 @@ export interface LineageModelNode extends LineageNodeBase {
   framework: string;
   metrics_summary: Record<string, number>;
   hyperparams: Record<string, unknown>;
+  // Per-split dataset references — key is the split role ("train" |
+  // "val" | "test" | …). Drives the per-split metrics block in
+  // ModelNode and the role-coloured edges in the canvas.
+  dataset_refs: Record<string, ModelDatasetRef>;
   version: number;
 }
 
@@ -450,13 +459,18 @@ export interface LineageEdge {
   id: string;
   source: string;
   target: string;
-  kind: 'derives_from' | 'feeds' | 'produces';
+  kind: 'derives_from' | 'feeds' | 'produces' | 'trained_into';
+  role?: 'train' | 'val' | 'test' | 'legacy' | string;
 }
 
 export interface LineageGraph {
   nodes: LineageNode[];
   edges: LineageEdge[];
 }
+
+// Alias for clarity at call-sites — the full {nodes, edges} payload
+// the backend returns from /api/projects/{id}/lineage etc.
+export type LineagePayload = LineageGraph;
 
 // Project-level dataset detail (with kind/description/parent_id from the
 // agent-declared schema flip).

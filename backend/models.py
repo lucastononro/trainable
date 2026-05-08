@@ -542,6 +542,16 @@ class RegisteredModel(Base):
     metrics_summary = Column(JSON, default=dict)
     description = Column(Text, default="")
     hyperparams = Column(JSON, default=dict)
+    # Per-split dataset references with the metrics that go with each
+    # split. Keys are split roles ("train", "val", "test", "holdout",
+    # "calibration", …); values are {"dataset_id": int, "metrics":
+    # {…}}. Mandatory at register-model time so a future reader can
+    # always answer "what data did this model see, and what scores did
+    # it get on which split?" The lineage canvas uses this — NOT the
+    # experiment_datasets join — to draw model←dataset edges, so the
+    # graph is "Raw → Processed → Model" rather than collapsing every
+    # experiment input into a direct line into the model.
+    dataset_refs = Column(JSON, default=dict)
     framework = Column(String(50), nullable=True)
     status = Column(String(20), default="ready")
     created_at = Column(String, default=lambda: utcnow().isoformat())
@@ -562,6 +572,7 @@ class RegisteredModel(Base):
             "metrics_summary": self.metrics_summary or {},
             "description": self.description or "",
             "hyperparams": self.hyperparams or {},
+            "dataset_refs": self.dataset_refs or {},
             "framework": self.framework,
             "status": self.status,
             "created_at": self.created_at,

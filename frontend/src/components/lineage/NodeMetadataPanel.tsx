@@ -8,10 +8,13 @@
 
 import { X } from 'lucide-react';
 
-import type { LineageNode } from '@/lib/types';
+import type { LineageNode, LineagePayload } from '@/lib/types';
 
 interface Props {
   node: LineageNode | null;
+  // Full graph payload — needed so the model panel can resolve
+  // `dataset_id` references back to dataset names without a refetch.
+  data?: LineagePayload | null;
   onClose: () => void;
 }
 
@@ -36,8 +39,11 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-export default function NodeMetadataPanel({ node, onClose }: Props) {
+export default function NodeMetadataPanel({ node, data, onClose }: Props) {
   if (!node) return null;
+  // Stable empty fallback so the dataset-name lookup below doesn't have
+  // to null-check `data` everywhere.
+  const graph: LineagePayload = data ?? { nodes: [], edges: [] };
 
   const headerColor =
     node.type === 'dataset'
@@ -159,9 +165,64 @@ export default function NodeMetadataPanel({ node, onClose }: Props) {
             </h3>
             <Row label="Framework" value={node.framework || '—'} />
             <Row label="Version" value={`v${node.version}`} />
+            {Object.keys(node.dataset_refs || {}).length ? (
+              <Row
+                label="Per-split metrics"
+                value={
+                  <div className="space-y-1.5">
+                    {Object.entries(node.dataset_refs).map(([role, ref]) => {
+                      const datasetNode = (graph.nodes || []).find(
+                        (n) => n.type === 'dataset' && n.id === `dataset:${ref.dataset_id}`,
+                      );
+                      const datasetName =
+                        (datasetNode?.name as string | undefined) ?? `dataset:${ref.dataset_id}`;
+                      return (
+                        <div
+                          key={role}
+                          className="rounded border border-surface-border bg-black/30 p-2"
+                        >
+                          <div className="flex items-baseline justify-between mb-1">
+                            <span
+                              className={`text-[10px] font-medium uppercase tracking-wide ${
+                                role === 'train'
+                                  ? 'text-emerald-400'
+                                  : role === 'val' || role === 'validation'
+                                    ? 'text-sky-400'
+                                    : role === 'test'
+                                      ? 'text-amber-400'
+                                      : 'text-gray-400'
+                              }`}
+                            >
+                              {role}
+                            </span>
+                            <span className="text-[11px] text-gray-400 truncate" title={datasetName}>
+                              {datasetName}
+                            </span>
+                          </div>
+                          {Object.keys(ref.metrics || {}).length ? (
+                            <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs text-gray-300">
+                              {Object.entries(ref.metrics).map(([k, v]) => (
+                                <div key={k} className="flex justify-between">
+                                  <span className="text-gray-500">{k}</span>
+                                  <span className="font-mono">{Number(v).toFixed(3)}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <div className="text-[11px] text-gray-500 italic">
+                              no metrics recorded for this split
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                }
+              />
+            ) : null}
             {Object.keys(node.metrics_summary || {}).length ? (
               <Row
-                label="Metrics"
+                label="Headline metrics"
                 value={
                   <pre className="font-mono text-xs whitespace-pre-wrap bg-black/40 border border-surface-border rounded p-2 text-gray-300">
                     {JSON.stringify(node.metrics_summary, null, 2)}

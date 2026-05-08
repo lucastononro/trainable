@@ -298,10 +298,30 @@ def _run_migrations(connection):
 
     if insp.has_table("registered_models"):
         mcols = [c["name"] for c in insp.get_columns("registered_models")]
+        # Loosen source_session_id NOT NULL on Postgres so the new
+        # agent-declared register-model path can write rows when the
+        # experiment was created via the legacy upload route (which sets
+        # Session.experiment_id, not Experiment.session_id, leaving the
+        # session-back-reference indirect). Models can resolve the
+        # session via the experiment regardless.
+        if connection.dialect.name == "postgresql":
+            try:
+                connection.execute(
+                    text(
+                        "ALTER TABLE registered_models "
+                        "ALTER COLUMN source_session_id DROP NOT NULL"
+                    )
+                )
+            except Exception as e:
+                logger.debug(
+                    "[DB] registered_models.source_session_id nullability already loosened: %s",
+                    e,
+                )
         for col_name, col_def in [
             ("experiment_id", "VARCHAR(36)"),
             ("description", "TEXT"),
             ("hyperparams", "JSON"),
+            ("dataset_refs", "JSON"),
         ]:
             if col_name not in mcols:
                 connection.execute(

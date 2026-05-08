@@ -55,6 +55,11 @@ def _model_node(m: RegisteredModel) -> dict[str, Any]:
         "framework": m.framework or "",
         "metrics_summary": m.metrics_summary or {},
         "hyperparams": m.hyperparams or {},
+        # Per-split dataset references (train/val/test → {dataset_id, metrics}).
+        # The frontend ModelNode renders the per-split metrics block and the
+        # canvas draws role-coloured edges back to each referenced dataset
+        # — so users can see exactly what data each metric came from.
+        "dataset_refs": m.dataset_refs or {},
         "version": m.version,
         "created_at": m.created_at,
     }
@@ -117,7 +122,15 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
             .all()
         )
 
+        # Roots for the parent-id walk: the union of every input the
+        # experiments reference (so detached processed datasets still
+        # show up) AND every dataset directly referenced by a model's
+        # dataset_refs (the new canonical source of model edges).
         leaf_dataset_ids = {link.dataset_version_id for link in links}
+        for m in models:
+            for ref in (m.dataset_refs or {}).values():
+                if isinstance(ref, dict) and ref.get("dataset_id"):
+                    leaf_dataset_ids.add(int(ref["dataset_id"]))
         datasets = await _collect_dataset_chain(db, leaf_dataset_ids)
 
     # Build node + edge lists. Nodes are deduped by id.
@@ -153,10 +166,33 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
                 }
             )
 
-    # Direct dataset → model edges via ExperimentDataset(role='input').
-    # If experiment X has model M and input datasets D1, D2 then we emit
-    # M←D1 and M←D2. Without the experiment node in between, the graph
-    # reads as "this model came from this data."
+    # Direct dataset → model edges come from the model's dataset_refs
+    # (the train/val/test references the agent supplied at register-model
+    # time). This is intentionally NOT the union of experiment inputs —
+    # that would re-introduce the "raw → model" edge people don't want
+    # in the canvas. The line should read Raw → Processed → Model, with
+    # the model carrying its own per-split provenance.
+    for m in models:
+        refs = m.dataset_refs or {}
+        for role, ref in refs.items():
+            if not isinstance(ref, dict):
+                continue
+            dv_id = ref.get("dataset_id")
+            if not dv_id:
+                continue
+            edges.append(
+                {
+                    "id": f"e_dv{dv_id}_to_model_{m.id}_{role}",
+                    "source": f"dataset:{dv_id}",
+                    "target": f"model:{m.id}",
+                    "kind": "trained_into",
+                    "role": role,
+                    "experiment_id": m.experiment_id,
+                }
+            )
+    # Legacy fallback: if a model has NO dataset_refs (e.g. legacy rows
+    # registered before this field existed) fall back to its experiment's
+    # input links so the canvas still shows *something*.
     inputs_per_experiment: dict[str, list[int]] = {}
     for link in links:
         if link.role != "input":
@@ -165,13 +201,16 @@ async def _build_for_experiments(experiment_ids: list[str]) -> dict[str, Any]:
             link.dataset_version_id
         )
     for m in models:
+        if m.dataset_refs:
+            continue
         for dv_id in inputs_per_experiment.get(m.experiment_id, []):
             edges.append(
                 {
-                    "id": f"e_dv{dv_id}_to_model_{m.id}",
+                    "id": f"e_dv{dv_id}_to_model_{m.id}_legacy",
                     "source": f"dataset:{dv_id}",
                     "target": f"model:{m.id}",
                     "kind": "trained_into",
+                    "role": "legacy",
                     "experiment_id": m.experiment_id,
                 }
             )

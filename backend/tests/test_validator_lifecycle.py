@@ -46,8 +46,29 @@ async def test_validate_train_flags_training_state_with_no_register_model():
 
 @pytest.mark.asyncio
 async def test_validate_train_passes_when_model_registered():
-    _, sid = await _seed()
+    pid, sid = await _seed()
     exp = await create_experiment_declared(session_id=sid, name="ok", hypothesis="t")
+    # Seed a processed dataset so register-model has a valid training_dataset_id.
+    from datetime import datetime, timezone
+    from models import DatasetVersion
+
+    async with async_session() as db:
+        dv = DatasetVersion(
+            project_id=pid,
+            kind="processed",
+            name="proc",
+            description="seeded",
+            hash="p" * 64,
+            path="/p/proc.parquet",
+            size_bytes=64,
+            source_experiment_id=exp["id"],
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        db.add(dv)
+        await db.commit()
+        await db.refresh(dv)
+        proc_id = dv.id
+
     await transition_state(experiment_id=exp["id"], new_state="training")
     await register_model_declared(
         experiment_id=exp["id"],
@@ -55,6 +76,7 @@ async def test_validate_train_passes_when_model_registered():
         framework="xgb",
         metrics={"accuracy": 0.9},
         description="test",
+        training_dataset_id=proc_id,
     )
 
     res = await validate_train_output(sid, exp["id"])

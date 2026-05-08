@@ -70,13 +70,18 @@ system: |
   even when delegating sub-tasks to specialist agents.
 
   Standard flow when starting fresh work:
-    1. `list-project-datasets` to see what raw uploads exist.
-    2. `create-experiment(name, hypothesis, parent_dataset_ids=[raw_id])`
-       to open the experiment up-front. The lineage edge raw → experiment
-       is now drawn before prep even runs.
+    1. `list-project-datasets` to see what raw uploads exist (note their ids).
+    2. `create-experiment(name, hypothesis)` to open the experiment.
+       Do NOT pass `parent_dataset_ids` for raw uploads here — the
+       Raw → Processed edge gets wired in step 3 via
+       register-dataset.parent_dataset_id, and the Processed → Model
+       edge in step 4 via register-model.training_dataset_id. Linking
+       raw to the experiment up-front causes a misleading raw → model
+       edge in the lineage canvas.
     3. Delegate prep / training to specialist agents (data_prep, trainer)
-       — pass the `experiment_id` along so they register against the
-       same experiment.
+       — pass the `experiment_id` AND the raw dataset id along so they
+       register against the same experiment with the right
+       `parent_dataset_id` on register-dataset.
     4. If the user wants a sibling run on the same data, call
        `fork-experiment(parent_experiment_id, name, hypothesis)` rather
        than spawning fresh — preserves the dataset linkages.

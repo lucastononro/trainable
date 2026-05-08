@@ -42,6 +42,33 @@ async def _seed_project_session() -> tuple[str, str]:
     return pid, sid
 
 
+async def _seed_processed_dataset(
+    project_id: str, experiment_id: str, *, name: str = "proc", _hash: str | None = None
+) -> int:
+    """Insert a kind='processed' DatasetVersion the test can pass to
+    register_model_declared as training_dataset_id. Returns its id."""
+    from datetime import datetime, timezone
+
+    from models import DatasetVersion
+
+    async with async_session() as db:
+        dv = DatasetVersion(
+            project_id=project_id,
+            kind="processed",
+            name=name,
+            description="seeded by test helper",
+            hash=_hash or ("p" * 64),
+            path=f"/p/{name}.parquet",
+            size_bytes=128,
+            source_experiment_id=experiment_id,
+            created_at=datetime.now(timezone.utc).isoformat(),
+        )
+        db.add(dv)
+        await db.commit()
+        await db.refresh(dv)
+        return dv.id
+
+
 @pytest.mark.asyncio
 async def test_create_experiment_attaches_to_session():
     pid, sid = await _seed_project_session()
@@ -201,11 +228,12 @@ async def test_transition_state_rejects_illegal():
 
 @pytest.mark.asyncio
 async def test_register_model_transitions_state_and_creates_row():
-    _, sid = await _seed_project_session()
+    pid, sid = await _seed_project_session()
     exp = await create_experiment_declared(
         session_id=sid, name="exp", hypothesis="test"
     )
     eid = exp["id"]
+    train_id = await _seed_processed_dataset(pid, eid)
 
     # The agent declares the lifecycle
     await transition_state(experiment_id=eid, new_state="training")
@@ -218,12 +246,20 @@ async def test_register_model_transitions_state_and_creates_row():
         framework="xgboost",
         metrics={"accuracy": 0.91},
         description="XGBoost depth=8",
+        training_dataset_id=train_id,
+        split_metrics={"train": {"accuracy": 0.99}},
         hyperparams={"max_depth": 8},
     )
     assert out["experiment_id"] == eid
     assert out["version"] == 1
     assert out["description"] == "XGBoost depth=8"
     assert out["metrics_summary"]["accuracy"] == 0.91
+    # Per-split refs: only the splits whose dataset id was supplied are
+    # recorded. Here we only passed training_dataset_id, so only the
+    # "train" entry exists — and it carries the per-split metrics.
+    assert out["dataset_refs"]["train"]["dataset_id"] == train_id
+    assert out["dataset_refs"]["train"]["metrics"]["accuracy"] == 0.99
+    assert "test" not in out["dataset_refs"]
 
     async with async_session() as db:
         e = (
@@ -235,9 +271,11 @@ async def test_register_model_transitions_state_and_creates_row():
 
 @pytest.mark.asyncio
 async def test_register_model_increments_version():
-    _, sid = await _seed_project_session()
+    pid, sid = await _seed_project_session()
     e1 = await create_experiment_declared(session_id=sid, name="exp", hypothesis="t")
     e2 = await create_experiment_declared(session_id=sid, name="exp", hypothesis="t")
+    train1 = await _seed_processed_dataset(pid, e1["id"], name="proc1", _hash="a" * 64)
+    train2 = await _seed_processed_dataset(pid, e2["id"], name="proc2", _hash="b" * 64)
     await transition_state(experiment_id=e1["id"], new_state="training")
     await transition_state(experiment_id=e2["id"], new_state="training")
 
@@ -248,6 +286,7 @@ async def test_register_model_increments_version():
         metrics={"accuracy": 0.9},
         description="run 1",
         name="iris_xgb",
+        training_dataset_id=train1,
     )
     m2 = await register_model_declared(
         experiment_id=e2["id"],
@@ -256,6 +295,7 @@ async def test_register_model_increments_version():
         metrics={"accuracy": 0.91},
         description="run 2",
         name="iris_xgb",
+        training_dataset_id=train2,
     )
     assert m1["version"] == 1
     assert m2["version"] == 2
@@ -384,6 +424,7 @@ async def test_session_lineage_returns_subgraph():
         framework="xgb",
         metrics={"accuracy": 0.9},
         description="iris model",
+        training_dataset_id=proc["id"],
     )
 
     g = await build_session_lineage(sid)
@@ -405,6 +446,35 @@ async def test_session_lineage_returns_subgraph():
         e["source"] == f"dataset:{raw['id']}" and e["target"] == f"dataset:{proc['id']}"
         for e in g["edges"]
     )
+
+    # Regression: NO direct raw → model edge. Even though the experiment
+    # was created without explicit parent_dataset_ids, the lineage
+    # builder must read model edges from `dataset_refs` (the agent-
+    # supplied training_dataset_id) so the canvas reads exactly
+    # Raw → Processed → Model. A direct raw→model line indicates
+    # we're back to the bug where both raw and processed get linked
+    # to the model via experiment_datasets.
+    model_node_ids = [n["id"] for n in g["nodes"] if n["type"] == "model"]
+    assert model_node_ids, "test should produce a model node"
+    raw_to_model = [
+        e
+        for e in g["edges"]
+        if e["source"] == f"dataset:{raw['id']}" and e["target"] in model_node_ids
+    ]
+    assert raw_to_model == [], (
+        f"raw → model edge leaked through: {raw_to_model}. "
+        "Lineage must use RegisteredModel.dataset_refs, not the union "
+        "of experiment.dataset_links, to draw model edges."
+    )
+
+    # And the processed → model edge MUST be there with role='train'.
+    proc_to_model = [
+        e
+        for e in g["edges"]
+        if e["source"] == f"dataset:{proc['id']}" and e["target"] in model_node_ids
+    ]
+    assert proc_to_model, "processed → model edge missing"
+    assert proc_to_model[0].get("role") == "train"
 
 
 @pytest.mark.asyncio

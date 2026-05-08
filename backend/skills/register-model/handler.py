@@ -45,6 +45,15 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
         is_error = False
         response: dict
 
+        def _opt_int(key: str) -> int | None:
+            v = args.get(key)
+            if v in (None, "", 0):
+                return None
+            try:
+                return int(v)
+            except (TypeError, ValueError):
+                return None
+
         try:
             row = await register_model_declared(
                 experiment_id=str(args.get("experiment_id") or "").strip(),
@@ -52,6 +61,10 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
                 framework=str(args.get("framework") or "").strip(),
                 metrics=args.get("metrics") or {},
                 description=str(args.get("description") or "").strip(),
+                training_dataset_id=int(args.get("training_dataset_id") or 0),
+                validation_dataset_id=_opt_int("validation_dataset_id"),
+                test_dataset_id=_opt_int("test_dataset_id"),
+                split_metrics=args.get("split_metrics") or None,
                 hyperparams=args.get("hyperparams") or None,
                 name=args.get("name"),
             )
@@ -62,6 +75,7 @@ def create_handler(*, session_id: str = "", publish_fn=None, **_):
                 "version": row["version"],
                 "artifact_uri": row["artifact_uri"],
                 "metrics": row["metrics_summary"],
+                "dataset_refs": row.get("dataset_refs") or {},
             }
             output_text = (
                 f"Registered {row['name']} v{row['version']} "

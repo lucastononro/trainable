@@ -81,7 +81,9 @@ export default function ProjectLineagePage() {
           </div>
         </main>
 
-        {selected ? <NodeMetadataPanel node={selected} onClose={() => setSelected(null)} /> : null}
+        {selected ? (
+          <NodeMetadataPanel node={selected} data={data} onClose={() => setSelected(null)} />
+        ) : null}
       </div>
     </div>
   );

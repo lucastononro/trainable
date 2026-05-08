@@ -2655,7 +2655,11 @@ function WorkspaceSidebar({
                 onNodeClick={(n) => setLineageNode(n)}
               />
               {lineageNode ? (
-                <NodeMetadataPanel node={lineageNode} onClose={() => setLineageNode(null)} />
+                <NodeMetadataPanel
+                  node={lineageNode}
+                  data={lineageData}
+                  onClose={() => setLineageNode(null)}
+                />
               ) : null}
             </div>
           ) : (

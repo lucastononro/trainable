@@ -333,7 +333,9 @@ export default function ExperimentDetailPage() {
           ) : null}
         </main>
 
-        {selected ? <NodeMetadataPanel node={selected} onClose={() => setSelected(null)} /> : null}
+        {selected ? (
+          <NodeMetadataPanel node={selected} data={lineage} onClose={() => setSelected(null)} />
+        ) : null}
       </div>
     </div>
   );

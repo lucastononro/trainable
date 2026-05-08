@@ -89,22 +89,46 @@ function layout(payload: LineageGraphPayload): {
     } as unknown as Node;
   });
 
-  const edges: Edge[] = payload.edges.map((e) => ({
-    id: e.id,
-    source: e.source,
-    target: e.target,
-    type: 'smoothstep',
-    animated: e.kind === 'feeds',
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      width: 16,
-      height: 16,
-      // Soft sky on the dark surface; bright enough to read against
-      // bg-surface but not glaring. Matches the lineage palette.
-      color: '#7dd3fc',
-    },
-    style: { stroke: '#7dd3fc', strokeWidth: 1.6 },
-  }));
+  // Edge colour by role: train=emerald, val=sky, test=amber, anything
+  // else falls back to the neutral sky used for derives_from. The label
+  // shows the role so the canvas reads "test", "val", "train" without
+  // having to click into the model card.
+  const ROLE_COLORS: Record<string, string> = {
+    train: '#34d399',
+    val: '#7dd3fc',
+    validation: '#7dd3fc',
+    test: '#fbbf24',
+  };
+  const edges: Edge[] = payload.edges.map((e) => {
+    const role = e.role && e.role !== 'legacy' ? e.role : undefined;
+    const color =
+      e.kind === 'trained_into' && role ? (ROLE_COLORS[role] ?? '#7dd3fc') : '#7dd3fc';
+    return {
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      type: 'smoothstep',
+      animated: e.kind === 'feeds',
+      label: role,
+      labelStyle: {
+        fill: color,
+        fontSize: 10,
+        fontWeight: 600,
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+      },
+      labelBgStyle: { fill: '#0b1220', fillOpacity: 0.85 },
+      labelBgPadding: [4, 2] as [number, number],
+      labelBgBorderRadius: 4,
+      markerEnd: {
+        type: MarkerType.ArrowClosed,
+        width: 16,
+        height: 16,
+        color,
+      },
+      style: { stroke: color, strokeWidth: 1.6 },
+    };
+  });
 
   return { nodes: positioned, edges };
 }
