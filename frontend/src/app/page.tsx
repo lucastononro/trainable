@@ -12,6 +12,10 @@ import {
   Draft,
   LineageGraph as LineageGraphPayload,
   LineageNode,
+  Task,
+  TaskCreatePayload,
+  TaskUpdatePayload,
+  TaskEventData,
 } from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
 import {
@@ -63,6 +67,7 @@ import Sidebar from '@/components/Sidebar';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import CostBadge, { UsageTotals } from '@/components/CostBadge';
+import InlineTasks from '@/components/InlineTasks';
 import type { UsageEvent } from '@/lib/types';
 
 const ZERO_USAGE: UsageTotals = {
@@ -201,6 +206,7 @@ export default function HomePage() {
   const [loading, setLoading] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
   const [experimentName, setExperimentName] = useState('');
+  const [tasks, setTasks] = useState<Task[]>([]);
 
   // Workspace state
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -760,6 +766,28 @@ export default function HomePage() {
               }
               break;
             }
+            // Tasks live to-do list — agent calls (add/update) and user
+            // REST CRUD both publish these events. Upsert by id; preserve
+            // ordering by creation time.
+            case 'task_created':
+            case 'task_updated': {
+              const t = data as TaskEventData;
+              setTasks((prev) => {
+                const idx = prev.findIndex((x) => x.id === t.id);
+                if (idx >= 0) {
+                  const next = [...prev];
+                  next[idx] = t;
+                  return next;
+                }
+                return [...prev, t];
+              });
+              break;
+            }
+            case 'task_deleted': {
+              const id = data.id as number;
+              setTasks((prev) => prev.filter((x) => x.id !== id));
+              break;
+            }
           }
         } catch {
           /* ignore parse errors */
@@ -804,6 +832,7 @@ export default function HomePage() {
     activeAgentsRef.current = [];
     setUsageTotals(ZERO_USAGE);
     setRecentUsage([]);
+    setTasks([]);
   }, []);
 
   // ---------------------------------------------------------------------------
@@ -1152,6 +1181,14 @@ export default function HomePage() {
           })
           .catch((e) => console.error('Failed to load historical metrics', e));
 
+        // Load existing tasks for this session
+        api
+          .getTasks(sid)
+          .then((rows) => {
+            if (!cancelled) setTasks(rows);
+          })
+          .catch((e) => console.error('Failed to load tasks', e));
+
         // Set running state from session. `state` in the DB is only a stage
         // marker (e.g. "eda_done"), so the definitive "is this session still
         // working right now?" answer comes from the backend's in-memory task
@@ -1263,6 +1300,45 @@ export default function HomePage() {
       addItem({ type: 'error', content: `Failed to stop: ${e.message}` });
     }
   };
+
+  // Tasks card — user-side CRUD. Optimistic on the wire isn't needed:
+  // the backend publishes task_created/task_updated/task_deleted SSE
+  // for both REST and skill paths, and the SSE handler upserts by id.
+  const handleTaskCreate = useCallback(
+    async (body: TaskCreatePayload) => {
+      if (!activeSessionId) return;
+      try {
+        await api.createTask(activeSessionId, body);
+      } catch (e: any) {
+        addItem({ type: 'error', content: `Failed to create task: ${e.message}` });
+      }
+    },
+    [activeSessionId, addItem],
+  );
+
+  const handleTaskUpdate = useCallback(
+    async (id: number, body: TaskUpdatePayload) => {
+      if (!activeSessionId) return;
+      try {
+        await api.updateTask(activeSessionId, id, body);
+      } catch (e: any) {
+        addItem({ type: 'error', content: `Failed to update task: ${e.message}` });
+      }
+    },
+    [activeSessionId, addItem],
+  );
+
+  const handleTaskDelete = useCallback(
+    async (id: number) => {
+      if (!activeSessionId) return;
+      try {
+        await api.deleteTask(activeSessionId, id);
+      } catch (e: any) {
+        addItem({ type: 'error', content: `Failed to delete task: ${e.message}` });
+      }
+    },
+    [activeSessionId, addItem],
+  );
 
   const handleSend = async () => {
     // If there are attached files, use the attach-and-send flow
@@ -1788,6 +1864,16 @@ export default function HomePage() {
                   <div
                     className={`mx-auto w-full space-y-4 ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}
                   >
+                    {/* Live to-do list — sits at the top of the chat so the
+                        user can watch the agent's plan unfold. Component
+                        renders nothing when there are no tasks. */}
+                    <InlineTasks
+                      tasks={tasks}
+                      onCreate={handleTaskCreate}
+                      onUpdate={handleTaskUpdate}
+                      onDelete={handleTaskDelete}
+                    />
+
                     {renderGroupedChatItems(chatItems, streamingItemIdRef.current, activeSessionId)}
 
                     {isRunning &&
