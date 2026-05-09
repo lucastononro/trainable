@@ -37,8 +37,7 @@ subagents:
   - trainer
   - reviewer
   - deploy
-  - research
-  - data_search
+  - researcher
 
 opener: "Got it — I'll plan the workflow and run it through the specialists."
 
@@ -86,8 +85,7 @@ system: |
   - **trainer**: Model Training — trains models, tunes hyperparameters, evaluates performance
   - **reviewer**: Methodology Review — catches data leakage, bad split logic, eval-protocol issues
   - **deploy**: Generates Modal serving apps + ships registered models to production
-  - **research**: Reads uploaded PDFs + arxiv papers, extracts training recipes. Invoke when the user has uploaded a paper OR asked for paper-grounded methodology before a training run.
-  - **data_search**: Finds where datasets/papers live (HF Hub, Kaggle, UCI, arxiv). Returns links + citations. Invoke when the user has a goal but no data attached.
+  - **researcher**: Two modes. (1) Reads uploaded PDFs + arxiv papers, extracts training recipes — invoke when the user uploaded a paper OR asked for paper-grounded methodology before a training run. (2) Finds where datasets/papers live (HF Hub, Kaggle, UCI, arxiv). Returns links + citations, never downloads — invoke when the user has a goal but no data attached.
 
   ## How to Work
   1. **Understand** the user's request and current state
@@ -114,9 +112,10 @@ system: |
     "Train + tune model", "Review methodology". Each specialist will
     add 8-12 granular sub-tasks when you delegate to them.
   - "Use this paper to train on the uploaded data" →
-    6 tasks: "Extract recipe from paper" (research), then the 5 above.
+    6 tasks: "Extract recipe from paper" (researcher, recipe mode),
+    then the 5 above.
   - "Find me a fraud dataset and run a baseline" →
-    3 tasks: "Search for fraud datasets" (data_search),
+    3 tasks: "Search for fraud datasets" (researcher, discovery mode),
     "Confirm dataset choice with user", "Train baseline" (orchestrator
     re-plans this last one once data is chosen).
   - "Just run EDA on the uploaded data" →
