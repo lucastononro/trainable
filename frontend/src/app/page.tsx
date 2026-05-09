@@ -488,10 +488,7 @@ export default function HomePage() {
             case 'report_ready':
               setCanvasContent(data.content);
               setCanvasTitle(`${(data.stage || 'EDA').toUpperCase()} Report`);
-              // Don't auto-open canvas — only file_created should do that.
-              // The header report button stays available; the report tab will
-              // also be picked by the canvas-opened picker if/when the user
-              // opens the canvas later.
+              openCanvas();
               break;
             case 'files_ready': {
               const stage = (data.stage as string) || '';
@@ -571,9 +568,7 @@ export default function HomePage() {
               }
               if (newPoints.length > 0) {
                 setMetricPoints((prev) => {
-                  // No openCanvas() here — only file_created should auto-open.
-                  // If files are landing alongside metrics, the picker will see
-                  // the non-empty metricPoints and pick the Metrics tab.
+                  if (prev.length === 0) openCanvas();
                   return [...prev, ...newPoints];
                 });
               }
@@ -584,9 +579,7 @@ export default function HomePage() {
               if (!metricKeysRef.current.has(key)) {
                 metricKeysRef.current.add(key);
                 setMetricPoints((prev) => {
-                  // No openCanvas() here — only file_created should auto-open.
-                  // If files are landing alongside metrics, the picker will see
-                  // the non-empty metricPoints and pick the Metrics tab.
+                  if (prev.length === 0) openCanvas();
                   return [
                     ...prev,
                     {
@@ -766,9 +759,7 @@ export default function HomePage() {
             case 'notebook.created': {
               const path = data.notebook_path as string | undefined;
               if (path) {
-                // file_created will fire alongside this and open the canvas.
-                // Just request the notebook be focused so the picker / open
-                // handler lands on it instead of some other workspace file.
+                openCanvas();
                 window.dispatchEvent(new CustomEvent('trainable:open-file', { detail: { path } }));
               }
               break;
