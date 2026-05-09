@@ -139,7 +139,8 @@ interface ChatItem {
     | 'subagent_start'
     | 'subagent_end'
     | 'clarification'
-    | 'agent_tool';
+    | 'agent_tool'
+    | 'tasks_anchor';
   content: string;
   meta?: any;
   timestamp: number;
@@ -781,6 +782,23 @@ export default function HomePage() {
                 }
                 return [...prev, t];
               });
+              // Drop a tasks_anchor into the chat at this point so the
+              // user sees the live list inline at the moment the agent
+              // touches it. Dedupe consecutive anchors so a burst of
+              // back-to-back add/update calls produces ONE card, not N.
+              setChatItems((prev) => {
+                const last = prev[prev.length - 1];
+                if (last && last.type === 'tasks_anchor') return prev;
+                return [
+                  ...prev,
+                  {
+                    id: `tasks-${Date.now()}-${Math.random()}`,
+                    type: 'tasks_anchor',
+                    content: 'tasks',
+                    timestamp: Date.now(),
+                  },
+                ];
+              });
               break;
             }
             case 'task_deleted': {
@@ -1181,11 +1199,31 @@ export default function HomePage() {
           })
           .catch((e) => console.error('Failed to load historical metrics', e));
 
-        // Load existing tasks for this session
+        // Load existing tasks for this session. If any are present,
+        // append a tasks_anchor at the bottom of the restored chat so
+        // the user sees the live card on reload — anchors aren't
+        // persisted in the message log, so without this the card
+        // would only appear on the next live add/update.
         api
           .getTasks(sid)
           .then((rows) => {
-            if (!cancelled) setTasks(rows);
+            if (cancelled) return;
+            setTasks(rows);
+            if (rows.length > 0) {
+              setChatItems((prev) => {
+                const last = prev[prev.length - 1];
+                if (last && last.type === 'tasks_anchor') return prev;
+                return [
+                  ...prev,
+                  {
+                    id: `tasks-restore-${Date.now()}`,
+                    type: 'tasks_anchor',
+                    content: 'tasks',
+                    timestamp: Date.now(),
+                  },
+                ];
+              });
+            }
           })
           .catch((e) => console.error('Failed to load tasks', e));
 
@@ -3328,15 +3366,6 @@ function isToolItem(item: ChatItem) {
   return item.type === 'tool_start' || item.type === 'tool_end' || item.type === 'code_output';
 }
 
-// A tool item targeting the `tasks` skill is special-cased in the chat
-// stream: we render the LIVE InlineTasks card at the anchor instead of
-// the generic CollapsibleToolCard. tool_end for `tasks` is folded into
-// the tool_start's anchor so we don't render the same card twice in a
-// row when add/update completes.
-function isTasksToolItem(item: ChatItem) {
-  return (item.type === 'tool_start' || item.type === 'tool_end') && item.content === 'tasks';
-}
-
 interface TasksContext {
   tasks: Task[];
   onCreate: (body: TaskCreatePayload) => Promise<void> | void;
@@ -3356,11 +3385,12 @@ function renderGroupedChatItems(
   while (i < items.length) {
     const cur = items[i];
 
-    // tasks-skill tool calls render the live InlineTasks card inline.
-    // We anchor on tool_start; the matching tool_end for the same tool
-    // is dropped (it would just re-render the same live card).
-    if (isTasksToolItem(cur)) {
-      if (cur.type === 'tool_start' && tasksCtx) {
+    // A tasks_anchor renders the LIVE tasks card inline at this point in
+    // the chat stream. The card always reads from `tasksCtx.tasks`, so
+    // every anchor reflects the current global state — when a task
+    // status changes, every previously-rendered card updates too.
+    if (cur.type === 'tasks_anchor') {
+      if (tasksCtx) {
         result.push(
           <InlineTasks
             key={`tasks-${cur.id}`}
@@ -3376,15 +3406,12 @@ function renderGroupedChatItems(
     }
 
     if (isToolItem(cur)) {
-      // Collect consecutive non-tasks tool items into a group
       const group: ChatItem[] = [];
-      while (i < items.length && isToolItem(items[i]) && !isTasksToolItem(items[i])) {
+      while (i < items.length && isToolItem(items[i])) {
         group.push(items[i]);
         i++;
       }
-      if (group.length > 0) {
-        result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
-      }
+      result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
     } else {
       result.push(renderChatItem(cur, streamingItemId, sessionId));
       i++;
