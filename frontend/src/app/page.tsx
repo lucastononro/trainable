@@ -2384,6 +2384,50 @@ const FileViewer = memo(function FileViewer({
 });
 
 // ---------------------------------------------------------------------------
+// ReportMarkdown -- the canvas report tab body. Memoized so parent renders
+// triggered by chat / SSE / task ticks don't re-parse the markdown tree.
+// ---------------------------------------------------------------------------
+
+const ReportMarkdown = memo(function ReportMarkdown({
+  content,
+  sessionId,
+}: {
+  content: string;
+  sessionId: string;
+}) {
+  // Stable `components` map: only rebuilt when sessionId changes (effectively
+  // never within a session). Without useMemo the inline `img` lambda would
+  // be a fresh ref each render and ReactMarkdown would re-key its tree.
+  const components = useMemo(
+    () => ({
+      img: ({ src, alt }: { src?: string; alt?: string }) => {
+        let imgSrc = src || '';
+        if (imgSrc.startsWith('/data/')) {
+          imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+        } else if (imgSrc && !imgSrc.startsWith('http')) {
+          const workspace = `/sessions/${sessionId}/eda`;
+          imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
+        }
+        return (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={imgSrc} alt={alt || ''} className="max-w-full rounded-lg shadow-md my-4" />
+        );
+      },
+    }),
+    [sessionId],
+  );
+  return (
+    <div className="h-full overflow-y-auto p-6 bg-black">
+      <div className="markdown-content">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          {content}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
 // Workspace Panel -- github.dev-style: tree sidebar + tabbed editor
 // ---------------------------------------------------------------------------
 
@@ -2787,34 +2831,7 @@ function WorkspaceSidebar({
                 {tab.type === 'file' ? (
                   <FileViewer filePath={tab.id} sessionId={sessionId} />
                 ) : tab.type === 'report' ? (
-                  <div className="h-full overflow-y-auto p-6 bg-black">
-                    <div className="markdown-content">
-                      <ReactMarkdown
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          img: ({ src, alt }) => {
-                            let imgSrc = src || '';
-                            if (imgSrc.startsWith('/data/')) {
-                              imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
-                            } else if (imgSrc && !imgSrc.startsWith('http')) {
-                              const workspace = `/sessions/${sessionId}/eda`;
-                              imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
-                            }
-                            return (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img
-                                src={imgSrc}
-                                alt={alt || ''}
-                                className="max-w-full rounded-lg shadow-md my-4"
-                              />
-                            );
-                          },
-                        }}
-                      >
-                        {canvasContent}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
+                  <ReportMarkdown content={canvasContent || ''} sessionId={sessionId} />
                 ) : tab.type === 'metrics' ? (
                   <div className="h-full overflow-hidden bg-black">
                     <MetricsTab
