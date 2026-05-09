@@ -2948,7 +2948,9 @@ function WorkspaceSidebar({
           {(!activeTab || (activeTab.type === 'report' && !canvasContent)) && (
             <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-black">
               <Code2 className="w-8 h-8 mb-2 text-gray-700" />
-              <p className="text-xs">Workspace is empty — files will appear here as the agent works.</p>
+              <p className="text-xs">
+                Workspace is empty — files will appear here as the agent works.
+              </p>
             </div>
           )}
         </div>
