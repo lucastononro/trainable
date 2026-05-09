@@ -273,7 +273,9 @@ def _format_compute_env(sandbox_config: dict) -> str:
         "configured at the project level — pick the right one when you call",
         "the skill:",
         "",
-        _profile_line("default profile (`heavy=False`, the default)", default_profile, 600),
+        _profile_line(
+            "default profile (`heavy=False`, the default)", default_profile, 600
+        ),
         _profile_line("training profile (`heavy=True`)", training_profile, 1800),
         "",
         "Dimension your code to fit:",
