@@ -516,6 +516,12 @@ export default function HomePage() {
                 }
                 return merged;
               });
+              // Same auto-open contract as file_created — some agent stages
+              // emit only the batch (files_ready) at end-of-stage without
+              // per-file file_created events, so we open here too. openCanvas
+              // is idempotent (no-op if already open) and the picker only
+              // runs when no tab is active.
+              if (newFiles.length > 0) openCanvas();
               break;
             }
             case 'file_created': {
