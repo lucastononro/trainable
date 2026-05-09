@@ -14,7 +14,7 @@
  * reference screenshot the user supplied.
  */
 
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import dagre from '@dagrejs/dagre';
 import {
   Background,
@@ -152,7 +152,7 @@ function layout(payload: LineageGraphPayload): {
   return { nodes: positioned, edges };
 }
 
-export default function LineageGraph({ data, loading = false, onNodeClick, height = 600 }: Props) {
+function LineageGraphImpl({ data, loading = false, onNodeClick, height = 600 }: Props) {
   const { nodes, edges } = useMemo(() => {
     if (!data) return { nodes: [], edges: [] };
     return layout(data);
@@ -207,3 +207,10 @@ export default function LineageGraph({ data, loading = false, onNodeClick, heigh
     </div>
   );
 }
+
+// memo: with persistent tab mounting, the lineage tab stays in the React tree
+// while the user is on a different tab. Skipping reconciliation when the
+// graph payload + handlers are stable avoids re-running the dagre layout
+// on every parent re-render (chat / SSE / task ticks).
+const LineageGraph = memo(LineageGraphImpl);
+export default LineageGraph;

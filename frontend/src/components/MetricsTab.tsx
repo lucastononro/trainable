@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useCallback } from 'react';
+import { memo, useMemo, useState, useCallback } from 'react';
 import {
   LineChart,
   Line,
@@ -153,7 +153,7 @@ function ChartTooltip({ active, payload, label }: any) {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function MetricsTab({ metricPoints, chartConfig, state }: MetricsTabProps) {
+function MetricsTabImpl({ metricPoints, chartConfig, state }: MetricsTabProps) {
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
   const [summaryCollapsed, setSummaryCollapsed] = useState(false);
 
@@ -529,6 +529,13 @@ export default function MetricsTab({ metricPoints, chartConfig, state }: Metrics
     </div>
   );
 }
+
+// memo: parent re-renders on every chat / SSE / task update, but our props
+// (metricPoints, chartConfig, state) only change when new metrics arrive or
+// the session transitions. Skipping reconciliation when refs are stable
+// avoids re-running the chart memos + Recharts ResponsiveContainer measure.
+const MetricsTab = memo(MetricsTabImpl);
+export default MetricsTab;
 
 // ---------------------------------------------------------------------------
 // Chart renderer

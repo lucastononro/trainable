@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import { memo, useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
 import {
@@ -2244,7 +2244,13 @@ function FileTreeRow({
 // FileViewer -- displays file content based on type
 // ---------------------------------------------------------------------------
 
-function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: string }) {
+const FileViewer = memo(function FileViewer({
+  filePath,
+  sessionId,
+}: {
+  filePath: string;
+  sessionId: string;
+}) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -2375,7 +2381,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
       </div>
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Workspace Panel -- github.dev-style: tree sidebar + tabbed editor
@@ -2443,6 +2449,11 @@ function WorkspaceSidebar({
   const [lineageData, setLineageData] = useState<LineageGraphPayload | null>(null);
   const [lineageLoading, setLineageLoading] = useState(false);
   const [lineageNode, setLineageNode] = useState<LineageNode | null>(null);
+
+  // Stable handlers so memoized children (LineageGraph, NodeMetadataPanel)
+  // don't bail out of memo every time the parent re-renders.
+  const handleLineageNodeClick = useCallback((n: LineageNode) => setLineageNode(n), []);
+  const handleLineageNodeClose = useCallback(() => setLineageNode(null), []);
 
   // Listen for "open metrics tab" event from header button
   useEffect(() => {
@@ -2818,13 +2829,13 @@ function WorkspaceSidebar({
                       data={lineageData}
                       loading={lineageLoading}
                       height="100%"
-                      onNodeClick={(n) => setLineageNode(n)}
+                      onNodeClick={handleLineageNodeClick}
                     />
                     {lineageNode ? (
                       <NodeMetadataPanel
                         node={lineageNode}
                         data={lineageData}
-                        onClose={() => setLineageNode(null)}
+                        onClose={handleLineageNodeClose}
                       />
                     ) : null}
                   </div>
