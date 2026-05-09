@@ -642,7 +642,7 @@ function ConfigView({ onBack }: { onBack: () => void }) {
   );
 }
 
-export function StatusIcon({ status, color }: { status: string; color: string }) {
+function StatusIcon({ status, color }: { status: string; color: string }) {
   const c = getColors(color);
   if (status === 'running') {
     return <Loader2 className={`w-3 h-3 ${c.text} animate-spin shrink-0`} />;

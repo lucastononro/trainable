@@ -61,22 +61,6 @@ class ClarificationReply(BaseModel):
     answer: str = Field(..., max_length=_CLARIFICATION_MAX)
 
 
-class TaskCreate(BaseModel):
-    subject: str = Field(..., min_length=1, max_length=_NAME_MAX)
-    short_description: str = Field(default="", max_length=_DESC_MAX)
-    description: str = Field(default="", max_length=_DESC_MAX)
-    active_form: Optional[str] = Field(default=None, max_length=_NAME_MAX)
-    status: Literal["pending", "in_progress", "completed"] = "pending"
-
-
-class TaskUpdate(BaseModel):
-    subject: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX)
-    short_description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
-    description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
-    active_form: Optional[str] = Field(default=None, max_length=_NAME_MAX)
-    status: Optional[Literal["pending", "in_progress", "completed"]] = None
-
-
 class ProjectCreate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)

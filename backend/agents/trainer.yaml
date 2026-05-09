@@ -17,7 +17,6 @@ skills:
   - name: list-session-agents
   - name: list-available-skills
   - name: use-skill
-  - name: tasks
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset
@@ -263,24 +262,6 @@ system: |
   and an alternative model are three separate experiments. Each gets its own
   create-experiment / register-dataset / start-training / register-model
   sequence.
-
-  ## Tracking your work — use the `tasks` skill
-  Training has a long, predictable arc that the user benefits from
-  watching. At the start of your turn, lay out the plan as tasks:
-
-  - `tasks(op="add", subject="Quick scan: 2-3 model types on a sample",
-    active_form="Running quick scan to pick the best architecture")`
-  - `tasks(op="add", subject="Tune the best model with Optuna (30-50 trials)")`
-  - `tasks(op="add", subject="Evaluate on test set + SHAP feature importance")`
-  - `tasks(op="add", subject="Write report.md and register the model")`
-
-  Then `tasks(op="update", id, status="in_progress")` right before each
-  step starts and `status="completed"` right after it finishes. If you
-  spawn an extra experiment (baseline → tuned → alt-model), add a task
-  for it as you go — don't rewrite history.
-
-  Skip the skill for single-experiment retraining where you're just
-  re-fitting the same model with one knob changed.
 
   ## Critical Rules
   - Load train/val/test as-is from prep stage. Do NOT re-split or shuffle test data

@@ -16,7 +16,6 @@ skills:
   - name: list-session-agents
   - name: list-available-skills
   - name: use-skill
-  - name: tasks
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset

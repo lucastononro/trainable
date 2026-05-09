@@ -570,35 +570,3 @@ export interface ExperimentFullDetail {
    *  Session.experiment_id children, deduped by id. */
   sessions: Session[];
 }
-
-// ---------------------------------------------------------------------------
-// Task tracking — live to-do list (agent-driven + user-editable)
-// ---------------------------------------------------------------------------
-
-export type TaskStatus = 'pending' | 'in_progress' | 'completed';
-
-export interface Task {
-  id: number;
-  session_id: string;
-  subject: string;
-  active_form: string | null;
-  short_description: string;
-  description: string;
-  status: TaskStatus;
-  created_at: string;
-  updated_at: string;
-}
-
-export interface TaskCreatePayload {
-  subject: string;
-  short_description?: string;
-  description?: string;
-  active_form?: string | null;
-  status?: TaskStatus;
-}
-
-export type TaskUpdatePayload = Partial<TaskCreatePayload>;
-
-// SSE payloads for task_created and task_updated. Server pushes the full
-// Task dict — UI just upserts by id.
-export type TaskEventData = Task;

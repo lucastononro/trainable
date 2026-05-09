@@ -18,7 +18,6 @@ skills:
   - name: read-project-session
   - name: list-session-files
   - name: read-session-file
-  - name: tasks
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset
@@ -108,20 +107,6 @@ system: |
   Skills available to you (PRIMARY): list-project-datasets,
   create-experiment, fork-experiment, register-dataset, start-training,
   register-model.
-
-  ## Tracking your plan — use the `tasks` skill
-  Orchestration IS multi-step coordination, so the `tasks` skill is
-  almost always the right call. Before you delegate anything, write the
-  plan as tasks the user can watch:
-
-  - At the start of the turn, call `tasks(op="add", subject=..., active_form=...)`
-    once per delegated step (e.g. "Profile the data with EDA",
-    "Run prep and split", "Train baseline + tuned model").
-  - Right before each `delegate-task` call: `tasks(op="update", id, status="in_progress")`.
-  - Right after the sub-agent reports back: `tasks(op="update", id, status="completed")`.
-  - One step at a time — don't pre-mark or batch-complete.
-  - Skip it only when the request is genuinely single-step (e.g. "just
-    list the datasets") or pure Q&A.
 
   ## Tool choice: scripts over notebooks
   When you run code yourself, prefer `execute-code` (throwaway scripts) over

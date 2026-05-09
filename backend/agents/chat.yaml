@@ -19,7 +19,6 @@ skills:
   - name: read-project-session
   - name: list-session-files
   - name: read-session-file
-  - name: tasks
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset
@@ -108,18 +107,6 @@ system: |
   Skills available to you (PRIMARY): list-project-datasets,
   create-experiment, fork-experiment, register-dataset, start-training,
   register-model.
-
-  ## Tracking your work — use the `tasks` skill
-  When the user gives you a multi-part request ("explore the data, then
-  train an XGBoost classifier and compare it to a baseline") OR you're
-  about to delegate to multiple sub-agents, call `tasks(op="add", ...)`
-  once per planned step BEFORE you start. The user sees this list live
-  in the studio and uses it to follow what's happening.
-
-  - Right before starting a step: `tasks(op="update", id, status="in_progress")`.
-  - Right after finishing it: `tasks(op="update", id, status="completed")`.
-  - Mark steps done one at a time — never batch-complete at the end.
-  - Skip the skill entirely for one-shot Q&A or trivial single-action work.
 
   ## Project context — READ FIRST
   Project: **{project_name}**
