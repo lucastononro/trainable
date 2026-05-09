@@ -165,15 +165,19 @@ async def _load_conversation_history(session_id: str) -> list[dict]:
     return messages
 
 
-async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
-    """Return (project_id, project_name, project_files_listing) for an experiment.
+async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict]:
+    """Return (project_id, project_name, project_files_listing, sandbox_config).
 
     project_files_listing is a multi-line string describing all files currently
     present under /projects/{project_id}/datasets/. If the project has no data,
     returns the placeholder "(no data uploaded yet)".
+
+    sandbox_config is the project's per-profile compute settings (default and
+    training profiles, each with optional gpu + timeout). Empty dict if unset.
     """
     project_id = ""
     project_name = ""
+    sandbox_config: dict = {}
     try:
         async with async_session() as db:
             result = await db.execute(
@@ -188,6 +192,7 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
                 project = proj_result.scalar_one_or_none()
                 if project:
                     project_name = project.name
+                    sandbox_config = project.sandbox_config or {}
     except Exception as e:
         logger.warning("Failed to load project for experiment %s: %s", experiment_id, e)
 
@@ -237,7 +242,59 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
                 + "/datasets/` directly)"
             )
 
-    return project_id, project_name, files_listing
+    return project_id, project_name, files_listing, sandbox_config
+
+
+def _format_compute_env(sandbox_config: dict) -> str:
+    """Render the project's per-profile sandbox config as a prompt block the
+    agent can read before deciding how to dimension execute-code calls.
+
+    Mirrors the runtime fallback in services/sandbox.py:
+      gpu = profile.get("gpu") or None              → CPU only
+      timeout = profile.get("timeout") or settings.sandbox_timeout  (default 600)
+    """
+    fallback_timeout = settings.sandbox_timeout
+
+    def _profile_line(label: str, profile: dict | None, default_to_used: int) -> str:
+        p = profile or {}
+        gpu = p.get("gpu")
+        timeout = p.get("timeout") or fallback_timeout
+        gpu_part = f"GPU={gpu}" if gpu else "CPU only (no GPU)"
+        timeout_part = f"timeout={timeout}s ({timeout // 60}m{timeout % 60:02d}s)"
+        return f"  - **{label}**: {gpu_part}, {timeout_part}"
+
+    default_profile = sandbox_config.get("default")
+    training_profile = sandbox_config.get("training")
+
+    lines = [
+        "## Compute environment for `execute-code`",
+        "",
+        "Your sandbox is provisioned per call by Modal. Two profiles are",
+        "configured at the project level — pick the right one when you call",
+        "the skill:",
+        "",
+        _profile_line(
+            "default profile (`heavy=False`, the default)", default_profile, 600
+        ),
+        _profile_line("training profile (`heavy=True`)", training_profile, 1800),
+        "",
+        "Dimension your code to fit:",
+        "- **Timeout is per call**, not per session. If a single fit / sweep",
+        "  would exceed it, split the work across multiple calls (one fold,",
+        "  one trial, one epoch chunk per call) and persist intermediate",
+        "  state to the session workspace between calls.",
+        "- **No GPU configured for a profile** → don't import torch.cuda or",
+        "  rely on `device='cuda'`. Stay on CPU-friendly libraries (xgboost,",
+        "  lightgbm, sklearn) or use small models.",
+        "- **GPU configured** → free to use torch / GPU-accelerated paths.",
+        "  Match batch size and model size to the GPU's memory class.",
+        "- Use `heavy=True` when calling `execute-code` for any work that",
+        "  needs the training profile (long-running fit, hyperparameter sweep,",
+        "  GPU-bound code). The default profile is for inspection / quick checks.",
+        "- The user can change these settings live in the Project Settings",
+        "  modal — your next call will pick up the new values automatically.",
+    ]
+    return "\n".join(lines)
 
 
 async def _load_prev_context(session_id: str, stage: str) -> str:
@@ -912,9 +969,12 @@ async def run_agent(
 
     try:
         prev_context = await _load_prev_context(session_id, stage)
-        project_id, project_name, project_files = await _load_project_context(
-            experiment_id
-        )
+        (
+            project_id,
+            project_name,
+            project_files,
+            sandbox_config,
+        ) = await _load_project_context(experiment_id)
 
         system_prompt = render_agent_system_prompt(
             agent_type,
@@ -941,6 +1001,13 @@ async def run_agent(
             "inspect_agent_context, each block carries its created_at so you can tell what "
             "is recent vs. stale relative to the time above."
         )
+
+        # Per-project compute env (GPU + timeout per profile) so the agent can
+        # dimension execute-code calls — split long fits, skip CUDA on CPU
+        # profiles, use heavy=True for the training profile, etc. Only useful
+        # for agents that can actually call execute-code; others ignore it.
+        if "execute-code" in get_agent_skills(agent_type):
+            system_prompt += "\n\n" + _format_compute_env(sandbox_config)
 
         if user_prompt:
             prompt = _apply_mentions(user_prompt, mentions)

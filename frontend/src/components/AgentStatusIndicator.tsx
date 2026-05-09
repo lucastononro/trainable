@@ -60,6 +60,12 @@ const AGENT_META: Record<string, { label: string; color: string; description: st
     color: 'emerald',
     description: 'Generates Modal serving apps + ships models to production',
   },
+  researcher: {
+    label: 'Researcher Agent',
+    color: 'teal',
+    description:
+      'Two modes: extract training recipes from PDFs/arxiv, or find datasets & papers (links only — never downloads)',
+  },
 };
 
 // Order matches the natural ML pipeline so the picker reads
@@ -69,6 +75,7 @@ const AGENT_META: Record<string, { label: string; color: string; description: st
 const ALL_AGENT_TYPES = [
   'chat',
   'orchestrator',
+  'researcher',
   'eda',
   'data_prep',
   'feature_eng',

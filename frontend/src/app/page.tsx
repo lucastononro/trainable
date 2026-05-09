@@ -2251,6 +2251,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
 
   const fileName = filePath.split('/').pop() || '';
   const isImage = /\.(png|jpg|jpeg|svg|gif)$/i.test(fileName);
+  const isPdf = fileName.toLowerCase().endsWith('.pdf');
   const isPython = fileName.endsWith('.py');
   const isMarkdown = fileName.endsWith('.md');
   const isJSON = fileName.endsWith('.json');
@@ -2266,7 +2267,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
   }, [filePath, isNotebook]);
 
   useEffect(() => {
-    if (isImage || isBinary || isNotebook) {
+    if (isImage || isPdf || isBinary || isNotebook) {
       setLoading(false);
       return;
     }
@@ -2282,7 +2283,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
         setError(err.message);
         setLoading(false);
       });
-  }, [filePath, isImage, isBinary, isNotebook]);
+  }, [filePath, isImage, isPdf, isBinary, isNotebook]);
 
   if (isNotebook && notebookName) {
     return <Notebook sessionId={sessionId} notebookName={notebookName} variant="inline" />;
@@ -2306,6 +2307,12 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
               className="max-w-full max-h-[60vh] rounded-lg"
             />
           </div>
+        ) : isPdf ? (
+          <iframe
+            src={`${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(filePath)}#view=FitH`}
+            title={fileName}
+            className="w-full h-full min-h-[80vh] bg-white border-0"
+          />
         ) : isBinary ? (
           <div className="flex flex-col items-center justify-center h-32 text-gray-500">
             <Cpu className="w-8 h-8 mb-2" />
