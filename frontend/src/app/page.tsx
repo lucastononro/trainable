@@ -488,7 +488,10 @@ export default function HomePage() {
             case 'report_ready':
               setCanvasContent(data.content);
               setCanvasTitle(`${(data.stage || 'EDA').toUpperCase()} Report`);
-              openCanvas();
+              // Don't auto-open canvas — only file_created should do that.
+              // The header report button stays available; the report tab will
+              // also be picked by the canvas-opened picker if/when the user
+              // opens the canvas later.
               break;
             case 'files_ready': {
               const stage = (data.stage as string) || '';
@@ -529,6 +532,12 @@ export default function HomePage() {
                   stage,
                 ),
               );
+              // The ONLY auto-open trigger. Sending a message no longer
+              // forces the canvas open just because the agent reports back —
+              // we wait for an actual file to land. openCanvas() dispatches
+              // 'trainable:canvas-opened' which kicks the picker so the new
+              // file (or notebook / report / metrics) gets surfaced.
+              openCanvas();
               break;
             }
             case 'agent_aborted':
@@ -556,7 +565,9 @@ export default function HomePage() {
               }
               if (newPoints.length > 0) {
                 setMetricPoints((prev) => {
-                  if (prev.length === 0) openCanvas();
+                  // No openCanvas() here — only file_created should auto-open.
+                  // If files are landing alongside metrics, the picker will see
+                  // the non-empty metricPoints and pick the Metrics tab.
                   return [...prev, ...newPoints];
                 });
               }
@@ -567,7 +578,9 @@ export default function HomePage() {
               if (!metricKeysRef.current.has(key)) {
                 metricKeysRef.current.add(key);
                 setMetricPoints((prev) => {
-                  if (prev.length === 0) openCanvas();
+                  // No openCanvas() here — only file_created should auto-open.
+                  // If files are landing alongside metrics, the picker will see
+                  // the non-empty metricPoints and pick the Metrics tab.
                   return [
                     ...prev,
                     {
@@ -747,7 +760,9 @@ export default function HomePage() {
             case 'notebook.created': {
               const path = data.notebook_path as string | undefined;
               if (path) {
-                openCanvas();
+                // file_created will fire alongside this and open the canvas.
+                // Just request the notebook be focused so the picker / open
+                // handler lands on it instead of some other workspace file.
                 window.dispatchEvent(new CustomEvent('trainable:open-file', { detail: { path } }));
               }
               break;
@@ -767,7 +782,9 @@ export default function HomePage() {
                 }),
               );
               if (event.type === 'experiment_created') {
-                openCanvas();
+                // No openCanvas() — only file_created auto-opens the canvas.
+                // If the canvas is already open (e.g. files have landed), the
+                // open-lineage-tab event still switches to the lineage view.
                 window.dispatchEvent(new CustomEvent('trainable:open-lineage-tab'));
               }
               break;
