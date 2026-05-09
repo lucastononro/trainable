@@ -603,7 +603,6 @@ export type TaskUpdatePayload = Partial<TaskCreatePayload>;
 // Task dict — UI just upserts by id.
 export type TaskEventData = Task;
 
-
 // Structured search result emitted by web-search and papers-search(search)
 // alongside the markdown text output. Used by the chat to render a rich
 // ChatGPT-style source-card panel.
@@ -611,11 +610,11 @@ export interface SearchResult {
   title: string;
   url: string;
   snippet: string;
-  source?: string;          // domain like "arxiv.org" or "blog.example.com"
+  source?: string; // domain like "arxiv.org" or "blog.example.com"
   arxiv_id?: string;
   year?: string | number | null;
   citations?: number;
   authors?: string;
   primary_category?: string;
-  backend?: string;          // 'tavily' | 'brave' | 'duckduckgo' | 'arxiv' | 'semanticscholar'
+  backend?: string; // 'tavily' | 'brave' | 'duckduckgo' | 'arxiv' | 'semanticscholar'
 }

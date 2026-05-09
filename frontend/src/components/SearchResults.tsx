@@ -17,10 +17,10 @@ function FaviconBadge({ source }: { source?: string }) {
     );
   }
   const url = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(source)}&sz=32`;
-  // Plain <img> on purpose: favicons are tiny external assets and using
-  // next/image would require allowlisting the domain in next.config.
-  // eslint-disable-next-line @next/next/no-img-element
   return (
+    // Plain <img>: favicons are external assets and next/image would
+    // require allowlisting every result domain in next.config.
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={url}
       alt=""
@@ -50,15 +50,11 @@ function ResultCard({ r, index }: { r: SearchResult; index: number }) {
         {r.title}
       </div>
       {r.snippet && (
-        <div className="text-[12px] text-gray-400 line-clamp-3 leading-relaxed">
-          {r.snippet}
-        </div>
+        <div className="text-[12px] text-gray-400 line-clamp-3 leading-relaxed">{r.snippet}</div>
       )}
       {(r.arxiv_id || r.year || typeof r.citations === 'number') && (
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-gray-500 pt-0.5">
-          {r.arxiv_id && (
-            <span className="text-violet-400/80">arxiv:{r.arxiv_id}</span>
-          )}
+          {r.arxiv_id && <span className="text-violet-400/80">arxiv:{r.arxiv_id}</span>}
           {r.year != null && <span>{r.year}</span>}
           {typeof r.citations === 'number' && r.citations > 0 && (
             <span>{r.citations.toLocaleString()} cites</span>
@@ -86,7 +82,9 @@ export default function SearchResults({ query, backend, results, label }: Props)
       <div className="rounded-lg border border-white/[0.05] bg-white/[0.02] p-3 text-sm text-gray-500">
         <div className="flex items-center gap-2 mb-1 text-gray-400">
           <Search className="w-3.5 h-3.5" />
-          <span>{label || 'Searched'}: &ldquo;{query}&rdquo;</span>
+          <span>
+            {label || 'Searched'}: &ldquo;{query}&rdquo;
+          </span>
         </div>
         No results found.
       </div>

@@ -119,7 +119,9 @@ async def _s2_request(
 
 
 async def _s2_get_json(
-    client: httpx.AsyncClient, path: str, params: dict | None = None,
+    client: httpx.AsyncClient,
+    path: str,
+    params: dict | None = None,
 ) -> dict | None:
     key = _s2_cache_key(path, params)
     if key in _s2_cache:
@@ -149,6 +151,7 @@ def _strip_arxiv_id(s: str) -> str:
 
 def _arxiv_entry_to_dict(entry: ET.Element) -> dict[str, Any]:
     """Parse one <entry> from the arxiv Atom feed into a normalised dict."""
+
     def _t(tag: str) -> str:
         el = entry.find(f"a:{tag}", ATOM_NS)
         return (el.text or "").strip() if el is not None else ""
@@ -316,7 +319,12 @@ def _parse_paper_html(html: str) -> dict[str, Any]:
         section_id = num_match.group(1) if num_match else ""
 
         sections.append(
-            {"id": section_id, "title": heading_text, "level": level, "text": section_text}
+            {
+                "id": section_id,
+                "title": heading_text,
+                "level": level,
+                "text": section_text,
+            }
         )
 
     return {"title": title, "abstract": abstract, "sections": sections}
@@ -417,7 +425,9 @@ def _format_paper_detail(paper: dict, s2_data: dict | None = None) -> str:
     if keywords:
         lines.append(f"**Keywords:** {', '.join(keywords)}")
     if s2_data and s2_data.get("s2FieldsOfStudy"):
-        fields = [f["category"] for f in s2_data["s2FieldsOfStudy"] if f.get("category")]
+        fields = [
+            f["category"] for f in s2_data["s2FieldsOfStudy"] if f.get("category")
+        ]
         if fields:
             lines.append(f"**Fields:** {', '.join(fields)}")
     if s2_data and s2_data.get("venue"):
@@ -463,7 +473,10 @@ def _format_read_paper_section(section: dict, arxiv_id: str) -> str:
     lines = [f"# {section['title']}", f"https://arxiv.org/abs/{arxiv_id}\n"]
     text = section["text"]
     if len(text) > MAX_SECTION_TEXT_LEN:
-        text = text[:MAX_SECTION_TEXT_LEN] + f"\n\n... (truncated at {MAX_SECTION_TEXT_LEN} chars)"
+        text = (
+            text[:MAX_SECTION_TEXT_LEN]
+            + f"\n\n... (truncated at {MAX_SECTION_TEXT_LEN} chars)"
+        )
     lines.append(text or "(This section has no extractable text content.)")
     return "\n".join(lines)
 
@@ -478,7 +491,9 @@ def _format_datasets(datasets: list, arxiv_id: str, sort: str) -> str:
         ds_id = ds.get("id", "unknown")
         downloads = ds.get("downloads", 0)
         likes = ds.get("likes", 0)
-        desc = _truncate(_clean_description(ds.get("description") or ""), MAX_SUMMARY_LEN)
+        desc = _truncate(
+            _clean_description(ds.get("description") or ""), MAX_SUMMARY_LEN
+        )
         tags = ds.get("tags") or []
         interesting = [t for t in tags if not t.startswith(("arxiv:", "region:"))][:5]
 
@@ -497,7 +512,9 @@ def _format_datasets_compact(datasets: list) -> str:
         return "## Datasets\nNone found"
     lines = [f"## Datasets ({len(datasets)})"]
     for ds in datasets:
-        lines.append(f"- **{ds.get('id', '?')}** ({ds.get('downloads', 0):,} downloads)")
+        lines.append(
+            f"- **{ds.get('id', '?')}** ({ds.get('downloads', 0):,} downloads)"
+        )
     return "\n".join(lines)
 
 
@@ -643,12 +660,17 @@ def _format_citation_graph(
         else:
             lines.append("No citations found.")
         lines.append("")
-    lines.append("**Tip:** Use paper_details with an arxiv_id from above to dig deeper.")
+    lines.append(
+        "**Tip:** Use paper_details with an arxiv_id from above to dig deeper."
+    )
     return "\n".join(lines)
 
 
 def _format_snippets(snippets: list[dict], query: str) -> str:
-    lines = [f"# Snippet Search: '{query}'", f"Found {len(snippets)} matching passage(s)\n"]
+    lines = [
+        f"# Snippet Search: '{query}'",
+        f"Found {len(snippets)} matching passage(s)\n",
+    ]
     for i, item in enumerate(snippets, 1):
         paper = item.get("paper") or {}
         ptitle = paper.get("title") or "(untitled)"
@@ -683,14 +705,18 @@ def _arxiv_id(args: dict) -> str | None:
     return args.get("arxiv_id")
 
 
-async def _s2_bulk_search(query: str, args: dict, limit: int) -> tuple[str | None, list[dict]]:
+async def _s2_bulk_search(
+    query: str, args: dict, limit: int
+) -> tuple[str | None, list[dict]]:
     params: dict[str, Any] = {
         "query": query,
         "limit": limit,
         "fields": "title,externalIds,year,citationCount,tldr,venue,publicationDate",
     }
     if args.get("date_from") or args.get("date_to"):
-        params["publicationDateOrYear"] = f"{args.get('date_from','')}:{args.get('date_to','')}"
+        params["publicationDateOrYear"] = (
+            f"{args.get('date_from', '')}:{args.get('date_to', '')}"
+        )
     if args.get("categories"):
         params["fieldsOfStudy"] = args["categories"]
     if args.get("min_citations"):
@@ -699,7 +725,9 @@ async def _s2_bulk_search(query: str, args: dict, limit: int) -> tuple[str | Non
         params["sort"] = f"{args['sort_by']}:desc"
 
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await _s2_request(client, "GET", "/graph/v1/paper/search/bulk", params=params)
+        resp = await _s2_request(
+            client, "GET", "/graph/v1/paper/search/bulk", params=params
+        )
         if not resp or resp.status_code != 200:
             return None, []
         data = resp.json()
@@ -724,7 +752,9 @@ async def _s2_bulk_search(query: str, args: dict, limit: int) -> tuple[str | Non
         }
         for p in papers[:limit]
     ]
-    text = _format_s2_paper_list(papers[:limit], f"Papers matching '{query}' (Semantic Scholar)")
+    text = _format_s2_paper_list(
+        papers[:limit], f"Papers matching '{query}' (Semantic Scholar)"
+    )
     return text, structured
 
 
@@ -787,7 +817,8 @@ async def _op_search(args: dict, limit: int) -> dict:
         return {"text": "'query' is required for search.", "ok": False, "extra": {}}
 
     use_s2 = any(
-        args.get(k) for k in ("date_from", "date_to", "categories", "min_citations", "sort_by")
+        args.get(k)
+        for k in ("date_from", "date_to", "categories", "min_citations", "sort_by")
     )
     if use_s2:
         text, structured = await _s2_bulk_search(query, args, limit)
@@ -795,7 +826,11 @@ async def _op_search(args: dict, limit: int) -> dict:
             return {
                 "text": text,
                 "ok": True,
-                "extra": {"query": query, "backend": "semanticscholar", "results": structured},
+                "extra": {
+                    "query": query,
+                    "backend": "semanticscholar",
+                    "results": structured,
+                },
             }
         # S2 failure: fall through to arxiv with relevance sort
 
@@ -845,7 +880,9 @@ async def _op_paper_details(args: dict, limit: int) -> tuple[str, bool]:
     # written for HF Papers; we keep the same fields it reads).
     paper = {
         "id": arxiv_id,
-        "title": (ax_dict and ax_dict["title"]) or (s2 and s2.get("title")) or "(unknown)",
+        "title": (ax_dict and ax_dict["title"])
+        or (s2 and s2.get("title"))
+        or "(unknown)",
         "summary": (ax_dict and ax_dict["summary"]) or "",
         "authors": [{"name": n} for n in ((ax_dict and ax_dict["authors"]) or [])],
         "ai_summary": "",
@@ -896,9 +933,13 @@ async def _op_read_paper(args: dict, limit: int) -> tuple[str, bool]:
             text, n_pages = await asyncio.to_thread(_pdf_to_text, pdf)
             if text.strip():
                 truncated = text[:MAX_PDF_TEXT_LEN]
-                tail = "" if len(text) <= MAX_PDF_TEXT_LEN else (
-                    f"\n\n... (truncated; PDF was {n_pages} pages, "
-                    f"{len(text)} chars total — use download_pdf to save the full text)"
+                tail = (
+                    ""
+                    if len(text) <= MAX_PDF_TEXT_LEN
+                    else (
+                        f"\n\n... (truncated; PDF was {n_pages} pages, "
+                        f"{len(text)} chars total — use download_pdf to save the full text)"
+                    )
                 )
                 ax = await _arxiv_get(arxiv_id)
                 title = (ax and ax["title"]) or arxiv_id
@@ -931,7 +972,11 @@ async def _op_download_pdf(args: dict, limit: int) -> dict:
     so the agent can immediately reason over it."""
     arxiv_id = _arxiv_id(args)
     if not arxiv_id:
-        return {"text": "'arxiv_id' is required for download_pdf.", "ok": False, "extra": {}}
+        return {
+            "text": "'arxiv_id' is required for download_pdf.",
+            "ok": False,
+            "extra": {},
+        }
     arxiv_id = _strip_arxiv_id(arxiv_id)
 
     pdf = await _fetch_arxiv_pdf(arxiv_id)
@@ -961,9 +1006,13 @@ async def _op_download_pdf(args: dict, limit: int) -> dict:
             logger.warning("download_pdf save failed for %s: %s", arxiv_id, e)
 
     truncated = text[:MAX_PDF_TEXT_LEN]
-    tail = "" if len(text) <= MAX_PDF_TEXT_LEN else (
-        f"\n\n... (truncated at {MAX_PDF_TEXT_LEN} chars; "
-        f"full text is {len(text)} chars)"
+    tail = (
+        ""
+        if len(text) <= MAX_PDF_TEXT_LEN
+        else (
+            f"\n\n... (truncated at {MAX_PDF_TEXT_LEN} chars; "
+            f"full text is {len(text)} chars)"
+        )
     )
     head = [
         f"# arxiv:{arxiv_id} — extracted text",
@@ -999,9 +1048,13 @@ async def _op_citation_graph(args: dict, limit: int) -> tuple[str, bool]:
     async with httpx.AsyncClient(timeout=15) as client:
         coros = []
         if direction in ("references", "both"):
-            coros.append(_s2_get_json(client, f"/graph/v1/paper/{s2_id}/references", params))
+            coros.append(
+                _s2_get_json(client, f"/graph/v1/paper/{s2_id}/references", params)
+            )
         if direction in ("citations", "both"):
-            coros.append(_s2_get_json(client, f"/graph/v1/paper/{s2_id}/citations", params))
+            coros.append(
+                _s2_get_json(client, f"/graph/v1/paper/{s2_id}/citations", params)
+            )
         results = await asyncio.gather(*coros, return_exceptions=True)
 
         refs, cites = None, None
@@ -1015,7 +1068,9 @@ async def _op_citation_graph(args: dict, limit: int) -> tuple[str, bool]:
             cites = r.get("data", []) if isinstance(r, dict) else None
 
     if refs is None and cites is None:
-        return _err(f"Could not fetch citation data for {arxiv_id}. May not be indexed by S2.")
+        return _err(
+            f"Could not fetch citation data for {arxiv_id}. May not be indexed by S2."
+        )
     return _format_citation_graph(arxiv_id, refs, cites), True
 
 
@@ -1030,14 +1085,18 @@ async def _op_snippet_search(args: dict, limit: int) -> tuple[str, bool]:
         "fields": "title,externalIds,year,citationCount",
     }
     if args.get("date_from") or args.get("date_to"):
-        params["publicationDateOrYear"] = f"{args.get('date_from','')}:{args.get('date_to','')}"
+        params["publicationDateOrYear"] = (
+            f"{args.get('date_from', '')}:{args.get('date_to', '')}"
+        )
     if args.get("categories"):
         params["fieldsOfStudy"] = args["categories"]
     if args.get("min_citations"):
         params["minCitationCount"] = str(args["min_citations"])
 
     async with httpx.AsyncClient(timeout=15) as client:
-        resp = await _s2_request(client, "GET", "/graph/v1/snippet/search", params=params)
+        resp = await _s2_request(
+            client, "GET", "/graph/v1/snippet/search", params=params
+        )
         if not resp or resp.status_code != 200:
             return _err("Snippet search failed. Semantic Scholar may be unavailable.")
         data = resp.json()
@@ -1057,7 +1116,9 @@ async def _op_recommend(args: dict, limit: int) -> tuple[str, bool]:
     fields = "title,externalIds,year,citationCount,tldr,venue"
     async with httpx.AsyncClient(timeout=15) as client:
         if positive_ids and not arxiv_id:
-            pos = [_s2_paper_id(p.strip()) for p in positive_ids.split(",") if p.strip()]
+            pos = [
+                _s2_paper_id(p.strip()) for p in positive_ids.split(",") if p.strip()
+            ]
             neg_raw = args.get("negative_ids", "")
             neg = (
                 [_s2_paper_id(p.strip()) for p in neg_raw.split(",") if p.strip()]
@@ -1233,6 +1294,7 @@ def create_handler(session_id: str, publish_fn, **kwargs):
         the agent can re-read it later via list_session_files / read_session_file."""
         try:
             from services.volume import write_to_volume
+
             base = f"/sessions/{session_id}/papers"
             txt_path = f"{base}/{arxiv_id}.txt"
             await write_to_volume(text, txt_path)
@@ -1257,7 +1319,10 @@ def create_handler(session_id: str, publish_fn, **kwargs):
             valid = ", ".join(_OPERATIONS.keys())
             return {
                 "content": [
-                    {"type": "text", "text": f"Unknown operation '{operation}'. Valid: {valid}"}
+                    {
+                        "type": "text",
+                        "text": f"Unknown operation '{operation}'. Valid: {valid}",
+                    }
                 ],
                 "is_error": True,
             }
@@ -1272,9 +1337,17 @@ def create_handler(session_id: str, publish_fn, **kwargs):
         await publish_fn(
             session_id,
             "tool_start",
-            {"tool": "papers_search", "input": {"operation": operation, **{
-                k: v for k, v in args.items() if k != "operation" and not k.startswith("_")
-            }}},
+            {
+                "tool": "papers_search",
+                "input": {
+                    "operation": operation,
+                    **{
+                        k: v
+                        for k, v in args.items()
+                        if k != "operation" and not k.startswith("_")
+                    },
+                },
+            },
             role="tool",
         )
 
