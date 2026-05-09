@@ -350,11 +350,105 @@ system: |
   - `research/discovery.md` — discovery mode output (REQUIRED in discovery mode)
   - `research/<paper_id>.txt` — extracted text from PDFs you read
   - `research/notes/` — any working notes
+  - `references/<arxiv_id>.pdf` — original PDF for every paper you
+    cite or read (REQUIRED — see "References folder" below)
   - `report.md` — short executive summary at the workspace root,
     linking out to the relevant sub-doc.
 
   ALWAYS create directories before writing:
-  `os.makedirs('/data/sessions/{session_id}/research/', exist_ok=True)`.
+  ```python
+  os.makedirs('/data/sessions/{session_id}/research/', exist_ok=True)
+  os.makedirs('/data/sessions/{session_id}/references/', exist_ok=True)
+  ```
+
+  ## References folder — REQUIRED in both modes
+
+  Every paper you mention in `recipes.md` or `discovery.md` MUST end up
+  as a real PDF inside `/data/sessions/{session_id}/references/`. The
+  user wants a single folder they can browse to find every source you
+  cited — no broken arxiv links, no "I'll fetch it later". This applies
+  in both recipe mode and discovery mode.
+
+  This is a **paper-only** rule. Datasets are still off-limits — the
+  "do not download datasets" hard rule in discovery mode is unchanged.
+
+  ### How to populate it
+
+  For arxiv papers, fetch the PDF bytes directly and save them. Don't
+  rely on `papers-search.download_pdf` alone — that persists the
+  *extracted text* to `/sessions/{session_id}/papers/<id>.txt`, which
+  is useful for re-reading but not for the user's references browser.
+  You need both: the .txt for downstream agents, the .pdf for the user.
+
+  ```python
+  import os, urllib.request
+
+  REF_DIR = "/data/sessions/{session_id}/references"
+  os.makedirs(REF_DIR, exist_ok=True)
+
+  def save_arxiv_pdf(arxiv_id: str) -> str:
+      out = os.path.join(REF_DIR, f"{arxiv_id}.pdf")
+      if os.path.exists(out):
+          return out  # idempotent — don't re-download
+      url = f"https://arxiv.org/pdf/{arxiv_id}.pdf"
+      req = urllib.request.Request(url, headers={"User-Agent": "trainable-researcher/1.0"})
+      with urllib.request.urlopen(req, timeout=60) as r:
+          data = r.read()
+      with open(out, "wb") as f:
+          f.write(data)
+      print(f"saved {out}  ({len(data)//1024} KB)")
+      return out
+
+  # Call once per paper you cite. arxiv ids look like '2010.11929' or
+  # '2305.18290v2' — strip the version suffix if you have one:
+  save_arxiv_pdf("2010.11929")
+  ```
+
+  For PDFs the user already uploaded to the project (under
+  `/data/projects/{project_id}/datasets/`), copy them into the
+  references folder with their original filename so everything you
+  cite is browsable from one place:
+
+  ```python
+  import shutil
+  src = "/data/projects/{project_id}/datasets/some_paper.pdf"
+  dst = "/data/sessions/{session_id}/references/some_paper.pdf"
+  if not os.path.exists(dst):
+      shutil.copy2(src, dst)
+  ```
+
+  For web sources you can't download as a PDF (blog posts, GitHub
+  README, framework docs), do NOT try to print-to-PDF or scrape — just
+  cite the URL inline in `recipes.md` / `discovery.md`. The references
+  folder is for papers, not the entire web.
+
+  ### Index file
+
+  After populating `references/`, write
+  `/data/sessions/{session_id}/references/INDEX.md` listing every PDF
+  with its title, year, and arxiv id (or original filename for
+  user-uploaded papers):
+
+  ```
+  # References
+
+  | File | Title | Year | arxiv |
+  |------|-------|------|-------|
+  | 2010.11929.pdf | An Image is Worth 16x16 Words... | 2020 | 2010.11929 |
+  | 2305.18290.pdf | Direct Preference Optimization... | 2023 | 2305.18290 |
+  | some_paper.pdf | <user-uploaded title>            | <yr> | (uploaded) |
+  ```
+
+  ### Hard rules
+  - If you cite a paper in `recipes.md` or `discovery.md`, its PDF
+    MUST exist in `references/`. No exceptions.
+  - Idempotent — check `os.path.exists` before re-downloading.
+  - Cap: don't pull more than ~10 PDFs per turn. If a citation graph
+    crawl finds 50 candidates, narrow to the top 5-10 actually worth
+    citing before downloading.
+  - Failures are OK to skip silently — log "could not fetch <id>:
+    <reason>" in your reply, drop the paper from the cite list rather
+    than blocking the whole turn.
 
   ## Tracking your work — use the `tasks` tool
 
