@@ -1864,17 +1864,17 @@ export default function HomePage() {
                   <div
                     className={`mx-auto w-full space-y-4 ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}
                   >
-                    {/* Live to-do list — sits at the top of the chat so the
-                        user can watch the agent's plan unfold. Component
-                        renders nothing when there are no tasks. */}
-                    <InlineTasks
-                      tasks={tasks}
-                      onCreate={handleTaskCreate}
-                      onUpdate={handleTaskUpdate}
-                      onDelete={handleTaskDelete}
-                    />
-
-                    {renderGroupedChatItems(chatItems, streamingItemIdRef.current, activeSessionId)}
+                    {renderGroupedChatItems(
+                      chatItems,
+                      streamingItemIdRef.current,
+                      activeSessionId,
+                      {
+                        tasks,
+                        onCreate: handleTaskCreate,
+                        onUpdate: handleTaskUpdate,
+                        onDelete: handleTaskDelete,
+                      },
+                    )}
 
                     {isRunning &&
                       !streamingItemIdRef.current &&
@@ -3328,25 +3328,65 @@ function isToolItem(item: ChatItem) {
   return item.type === 'tool_start' || item.type === 'tool_end' || item.type === 'code_output';
 }
 
+// A tool item targeting the `tasks` skill is special-cased in the chat
+// stream: we render the LIVE InlineTasks card at the anchor instead of
+// the generic CollapsibleToolCard. tool_end for `tasks` is folded into
+// the tool_start's anchor so we don't render the same card twice in a
+// row when add/update completes.
+function isTasksToolItem(item: ChatItem) {
+  return (item.type === 'tool_start' || item.type === 'tool_end') && item.content === 'tasks';
+}
+
+interface TasksContext {
+  tasks: Task[];
+  onCreate: (body: TaskCreatePayload) => Promise<void> | void;
+  onUpdate: (id: number, body: TaskUpdatePayload) => Promise<void> | void;
+  onDelete: (id: number) => Promise<void> | void;
+}
+
 function renderGroupedChatItems(
   items: ChatItem[],
   streamingItemId?: string | null,
   sessionId?: string | null,
+  tasksCtx?: TasksContext,
 ) {
   const result: React.ReactNode[] = [];
   let i = 0;
 
   while (i < items.length) {
-    if (isToolItem(items[i])) {
-      // Collect consecutive tool items into a group
+    const cur = items[i];
+
+    // tasks-skill tool calls render the live InlineTasks card inline.
+    // We anchor on tool_start; the matching tool_end for the same tool
+    // is dropped (it would just re-render the same live card).
+    if (isTasksToolItem(cur)) {
+      if (cur.type === 'tool_start' && tasksCtx) {
+        result.push(
+          <InlineTasks
+            key={`tasks-${cur.id}`}
+            tasks={tasksCtx.tasks}
+            onCreate={tasksCtx.onCreate}
+            onUpdate={tasksCtx.onUpdate}
+            onDelete={tasksCtx.onDelete}
+          />,
+        );
+      }
+      i++;
+      continue;
+    }
+
+    if (isToolItem(cur)) {
+      // Collect consecutive non-tasks tool items into a group
       const group: ChatItem[] = [];
-      while (i < items.length && isToolItem(items[i])) {
+      while (i < items.length && isToolItem(items[i]) && !isTasksToolItem(items[i])) {
         group.push(items[i]);
         i++;
       }
-      result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
+      if (group.length > 0) {
+        result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
+      }
     } else {
-      result.push(renderChatItem(items[i], streamingItemId, sessionId));
+      result.push(renderChatItem(cur, streamingItemId, sessionId));
       i++;
     }
   }
