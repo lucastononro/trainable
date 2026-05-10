@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
 from db import async_session
-from models import Artifact, Message
+from models import Artifact, Message, Task
 from services.broadcaster import broadcaster
 from services.metadata_extractor import extract_and_store_metadata
 from services.s3_sync import sync_stage_to_s3
@@ -282,6 +283,36 @@ async def post_stage_hook(session_id: str, experiment_id: str, stage: str):
             logger.info("[post-stage] Auto-abandoned %d in-flight experiment(s)", n)
     except Exception as e:
         logger.error("Post-hook abandoned-experiment cleanup failed: %s", e)
+
+    # 3.6 Stale-task sweep. Agents are instructed to close every
+    # `in_progress` task before their turn ends; if they forget, the
+    # tasks card shows a permanent spinner that makes the user think
+    # work is still happening. Flip any leftover `in_progress` rows
+    # back to `pending` and emit `task_updated` so the UI updates.
+    try:
+        async with async_session() as db:
+            stmt = select(Task).where(
+                Task.session_id == session_id,
+                Task.status == "in_progress",
+            )
+            stale = (await db.execute(stmt)).scalars().all()
+            now_iso = datetime.now(timezone.utc).isoformat()
+            for t in stale:
+                t.status = "pending"
+                t.updated_at = now_iso
+            if stale:
+                await db.commit()
+                payloads = [t.to_dict() for t in stale]
+            else:
+                payloads = []
+        for payload in payloads:
+            await save_and_publish(session_id, "task_updated", payload, role="system")
+        if payloads:
+            logger.info(
+                "[post-stage] Reset %d stale in_progress task(s)", len(payloads)
+            )
+    except Exception as e:
+        logger.error("Post-hook stale-task sweep failed: %s", e)
 
     # 4. Reproducibility snapshot (after training only)
     if stage in ("train", "trainer"):

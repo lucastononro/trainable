@@ -139,8 +139,7 @@ interface ChatItem {
     | 'subagent_start'
     | 'subagent_end'
     | 'clarification'
-    | 'agent_tool'
-    | 'tasks_anchor';
+    | 'agent_tool';
   content: string;
   meta?: any;
   timestamp: number;
@@ -797,9 +796,10 @@ export default function HomePage() {
               }
               break;
             }
-            // Tasks live to-do list — agent calls (add/update) and user
-            // REST CRUD both publish these events. Upsert by id; preserve
-            // ordering by creation time.
+            // Tasks live to-do list — agent calls (add/update/delete) and
+            // user REST CRUD both publish these events. The card is rendered
+            // ONCE at the bottom of the chat (not inline per event), so we
+            // only update the tasks state here.
             case 'task_created':
             case 'task_updated': {
               const t = data as TaskEventData;
@@ -811,23 +811,6 @@ export default function HomePage() {
                   return next;
                 }
                 return [...prev, t];
-              });
-              // Drop a tasks_anchor into the chat at this point so the
-              // user sees the live list inline at the moment the agent
-              // touches it. Dedupe consecutive anchors so a burst of
-              // back-to-back add/update calls produces ONE card, not N.
-              setChatItems((prev) => {
-                const last = prev[prev.length - 1];
-                if (last && last.type === 'tasks_anchor') return prev;
-                return [
-                  ...prev,
-                  {
-                    id: `tasks-${Date.now()}-${Math.random()}`,
-                    type: 'tasks_anchor',
-                    content: 'tasks',
-                    timestamp: Date.now(),
-                  },
-                ];
               });
               break;
             }
@@ -1227,31 +1210,14 @@ export default function HomePage() {
           })
           .catch((e) => console.error('Failed to load historical metrics', e));
 
-        // Load existing tasks for this session. If any are present,
-        // append a tasks_anchor at the bottom of the restored chat so
-        // the user sees the live card on reload — anchors aren't
-        // persisted in the message log, so without this the card
-        // would only appear on the next live add/update.
+        // Load existing tasks for this session. The card is rendered
+        // at the bottom of the chat from `tasks` state, so we just
+        // hydrate it — no chat-stream entry needed.
         api
           .getTasks(sid)
           .then((rows) => {
             if (cancelled) return;
             setTasks(rows);
-            if (rows.length > 0) {
-              setChatItems((prev) => {
-                const last = prev[prev.length - 1];
-                if (last && last.type === 'tasks_anchor') return prev;
-                return [
-                  ...prev,
-                  {
-                    id: `tasks-restore-${Date.now()}`,
-                    type: 'tasks_anchor',
-                    content: 'tasks',
-                    timestamp: Date.now(),
-                  },
-                ];
-              });
-            }
           })
           .catch((e) => console.error('Failed to load tasks', e));
 
@@ -1947,16 +1913,15 @@ export default function HomePage() {
                   <div
                     className={`mx-auto w-full space-y-4 ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}
                   >
-                    {renderGroupedChatItems(
-                      chatItems,
-                      streamingItemIdRef.current,
-                      activeSessionId,
-                      {
-                        tasks,
-                        onCreate: handleTaskCreate,
-                        onUpdate: handleTaskUpdate,
-                        onDelete: handleTaskDelete,
-                      },
+                    {renderGroupedChatItems(chatItems, streamingItemIdRef.current, activeSessionId)}
+
+                    {tasks.length > 0 && (
+                      <InlineTasks
+                        tasks={tasks}
+                        onCreate={handleTaskCreate}
+                        onUpdate={handleTaskUpdate}
+                        onDelete={handleTaskDelete}
+                      />
                     )}
 
                     {isRunning &&
@@ -3580,44 +3545,16 @@ function isToolItem(item: ChatItem) {
   return item.type === 'tool_start' || item.type === 'tool_end' || item.type === 'code_output';
 }
 
-interface TasksContext {
-  tasks: Task[];
-  onCreate: (body: TaskCreatePayload) => Promise<void> | void;
-  onUpdate: (id: number, body: TaskUpdatePayload) => Promise<void> | void;
-  onDelete: (id: number) => Promise<void> | void;
-}
-
 function renderGroupedChatItems(
   items: ChatItem[],
   streamingItemId?: string | null,
   sessionId?: string | null,
-  tasksCtx?: TasksContext,
 ) {
   const result: React.ReactNode[] = [];
   let i = 0;
 
   while (i < items.length) {
     const cur = items[i];
-
-    // A tasks_anchor renders the LIVE tasks card inline at this point in
-    // the chat stream. The card always reads from `tasksCtx.tasks`, so
-    // every anchor reflects the current global state — when a task
-    // status changes, every previously-rendered card updates too.
-    if (cur.type === 'tasks_anchor') {
-      if (tasksCtx) {
-        result.push(
-          <InlineTasks
-            key={`tasks-${cur.id}`}
-            tasks={tasksCtx.tasks}
-            onCreate={tasksCtx.onCreate}
-            onUpdate={tasksCtx.onUpdate}
-            onDelete={tasksCtx.onDelete}
-          />,
-        );
-      }
-      i++;
-      continue;
-    }
 
     if (isToolItem(cur)) {
       const group: ChatItem[] = [];

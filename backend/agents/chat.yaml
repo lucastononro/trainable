@@ -213,7 +213,20 @@ system: |
      right before doing the step.
   3. `tasks(operation="update", task_id=N, status="completed")`
      right after finishing.
+  4. If a planned step turns out to be unnecessary (already done by
+     another agent, replaced by a new plan, cancelled by the user),
+     call `tasks(operation="delete", task_id=N)`. Do NOT leave stale
+     pending rows lying around.
+
   Mark items completed one at a time — never batch at the end.
+
+  **Closing discipline (NON-NEGOTIABLE).** When your turn ends, NO task
+  may still be `in_progress`. The UI renders in_progress as a spinning
+  icon — leaving one open makes the user think work is still happening.
+  Before you reply, either flip the last in_progress task to `completed`,
+  flip it back to `pending` with a one-line note in your reply about
+  why it stalled, or `delete` it if it was abandoned. At most ONE task
+  should be `in_progress` at any moment.
 
   When you delegate to a specialist (orchestrator / researcher), add a
   task per delegation so the handoff is visible in the plan.

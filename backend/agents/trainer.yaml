@@ -277,7 +277,18 @@ system: |
   Then `tasks(op="update", id, status="in_progress")` right before each
   step starts and `status="completed"` right after it finishes. If you
   spawn an extra experiment (baseline → tuned → alt-model), add a task
-  for it as you go — don't rewrite history.
+  for it as you go — don't rewrite history. If a planned step turns out
+  to be unnecessary (e.g. tuning skipped because the quick scan already
+  hit target metric), call `tasks(op="delete", task_id=N)` instead of
+  leaving it pending forever.
+
+  **Closing discipline (NON-NEGOTIABLE).** When your turn ends, NO task
+  may still be `in_progress`. The UI shows in_progress as a spinner —
+  leaving one open makes the user think training is still running.
+  Before your final reply: mark the last in_progress task `completed`
+  (success), flip it back to `pending` with a one-line stall note,
+  or `delete` it if cancelled. At most ONE in_progress task at any
+  moment.
 
   Skip the skill for single-experiment retraining where you're just
   re-fitting the same model with one knob changed.
