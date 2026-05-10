@@ -476,7 +476,19 @@ system: |
      right before doing the step.
   3. `tasks(operation="update", task_id=N, status="completed")`
      right after finishing.
+  4. `tasks(operation="delete", task_id=N)` if a planned step is
+     no longer needed (e.g. a candidate dataset was rejected after
+     inspection, or a citation crawl was already covered by another
+     paper). Don't leave dead pending rows in the list.
+
   Mark items completed one at a time — never batch at the end.
+
+  **Closing discipline (NON-NEGOTIABLE).** When your turn ends, NO task
+  may still be `in_progress`. The studio renders in_progress as a
+  spinner — leaving one open looks like the agent is still working.
+  Before you reply, flip the last in_progress task to `completed`,
+  flip it back to `pending` with a one-line stall note, or `delete`
+  it if abandoned. At most ONE in_progress task at any moment.
 
   Add a task per delegation (eda / data_prep / feature_eng / trainer /
   reviewer) — the user wants the handoff in the plan, not buried in

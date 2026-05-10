@@ -1,14 +1,15 @@
 """tasks tool — agents track multi-step work as a live checklist.
 
-Modeled on Claude Code's TaskCreate / TaskUpdate / TaskList. Three operations:
+Modeled on Claude Code's TaskCreate / TaskUpdate / TaskList. Four operations:
   - add(subject, active_form?, description?) → returns task_id
   - update(task_id, status?, subject?, active_form?, description?)
+  - delete(task_id) → permanently removes the task
   - list() → returns all tasks for the current session
 
-Each add/update emits an SSE event (`task_created` / `task_updated`) so the
-studio's Plan tab updates live. Tasks are scoped to the current session and
-persist in the `tasks` table — page reloads hydrate from REST first, then
-SSE picks up new events.
+Each mutation emits an SSE event (`task_created` / `task_updated` /
+`task_deleted`) so the studio's tasks card updates live. Tasks are scoped
+to the current session and persist in the `tasks` table — page reloads
+hydrate from REST first, then SSE picks up new events.
 """
 
 from __future__ import annotations
@@ -136,6 +137,27 @@ def create_handler(session_id: str, publish_fn, **kwargs):
                 f"Task #{payload['id']} → {payload['status']}: {payload['subject']}"
             )
 
+        if operation == "delete":
+            tid = args.get("task_id")
+            if tid is None:
+                return _err("'task_id' is required for delete")
+            try:
+                tid = int(tid)
+            except (TypeError, ValueError):
+                return _err(f"'task_id' must be an integer, got {tid!r}")
+            try:
+                async with async_session() as db:
+                    t = await db.get(Task, tid)
+                    if t is None or t.session_id != session_id:
+                        return _err(f"Task #{tid} not found in this session")
+                    await db.delete(t)
+                    await db.commit()
+            except Exception as e:
+                logger.exception("tasks.delete db error")
+                return _err(f"DB error: {e}")
+            await publish_fn(session_id, "task_deleted", {"id": tid}, role="tool")
+            return _ok(f"Task #{tid} deleted")
+
         if operation == "list":
             try:
                 async with async_session() as db:
@@ -151,7 +173,9 @@ def create_handler(session_id: str, publish_fn, **kwargs):
                 return _err(f"DB error: {e}")
             return _ok(_format_task_list(rows))
 
-        return _err(f"Unknown operation {operation!r}. Valid: add, update, list")
+        return _err(
+            f"Unknown operation {operation!r}. Valid: add, update, delete, list"
+        )
 
     return handler
 

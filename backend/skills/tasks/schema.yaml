@@ -2,7 +2,7 @@ type: object
 properties:
   operation:
     type: string
-    enum: [add, update, list]
+    enum: [add, update, list, delete]
     description: Operation to execute.
   subject:
     type: string
@@ -31,7 +31,7 @@ properties:
       understand what this task actually entails.
   task_id:
     type: integer
-    description: Required for `update`. Returned by `add`.
+    description: Required for `update` and `delete`. Returned by `add`.
   status:
     type: string
     enum: [pending, in_progress, completed]

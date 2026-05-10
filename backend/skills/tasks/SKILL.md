@@ -30,10 +30,19 @@ add / update / delete tasks themselves.
 2. Right BEFORE you start work on a step, call `update` with status="in_progress".
 3. Right AFTER you finish a step, call `update` with status="completed".
 4. Mark steps completed one at a time — never batch-complete at the end.
-5. If the plan changes, `add` new steps; don't rewrite history.
+5. If the plan changes, `add` new steps; if a planned step is no longer
+   needed (cancelled, replaced, or merged into another), call `delete` to
+   remove it. Stale `pending` rows with no plan to do them are clutter.
+6. **Never end your turn with rows still in `in_progress`.** Either close
+   them as `completed`, flip back to `pending` with a note, or `delete`
+   them. The UI shows in_progress as a spinning icon and a frozen spinner
+   makes the user think the agent is still working.
 
 ## Operations
 
 - `add` — create a new task; returns the task id (use it in subsequent `update` calls).
 - `update` — change status / subject / active_form / description.
+- `delete` — permanently remove a task by id. Use this when a planned step
+  was cancelled or replaced; do NOT use it to "close" finished work
+  (that's what `update(status="completed")` is for).
 - `list` — return the current session's full task list (rarely needed; the user already sees it).
