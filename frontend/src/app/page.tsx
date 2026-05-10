@@ -346,6 +346,41 @@ export default function HomePage() {
                 setIsRunning(false);
                 // Clear all active agents when session finishes
                 setActiveAgents([]);
+                // Defensive sweep: when the run terminates, any leftover
+                // tool_start / subagent_start chat items mean their matching
+                // *_end event was dropped (queue backpressure, handler raised
+                // before emitting it, etc.) — convert them so the cards stop
+                // spinning. Mirrors the orphan cleanup the restore-on-reload
+                // path already does for persisted history.
+                setChatItems((prev) => {
+                  let mutated = false;
+                  const next = prev.map((it) => {
+                    if (it.type === 'tool_start') {
+                      mutated = true;
+                      return { ...it, type: 'tool_end' as const };
+                    }
+                    if (it.type === 'subagent_start') {
+                      mutated = true;
+                      return { ...it, type: 'subagent_end' as const };
+                    }
+                    return it;
+                  });
+                  return mutated ? next : prev;
+                });
+                // Same for the inline tasks card: any task left in_progress
+                // when the run ended would otherwise spin forever. Flip them
+                // back to pending so the user can re-trigger or close them.
+                setTasks((prev) => {
+                  let mutated = false;
+                  const next = prev.map((t) => {
+                    if (t.status === 'in_progress') {
+                      mutated = true;
+                      return { ...t, status: 'pending' as const };
+                    }
+                    return t;
+                  });
+                  return mutated ? next : prev;
+                });
                 // Pull the now-final state into the experiments array so
                 // non-active sidebar rows reflect "done"/"failed"/"cancelled"
                 // without waiting on the user to trigger an unrelated refresh.
