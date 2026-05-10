@@ -2762,6 +2762,21 @@ function WorkspaceSidebar({
     return () => window.removeEventListener('trainable:canvas-opened', handler);
   }, [activeTabId, pickDefaultTab]);
 
+  // Cold-open race: WorkspaceSidebar only mounts when canvasOpen flips
+  // true, which happens AFTER openCanvas() dispatches 'trainable:canvas-
+  // opened'. So on the first auto-open (file_created etc.) the listener
+  // above isn't registered in time and the picker never runs. Run it
+  // once on mount too — same guard, picks the right default tab.
+  useEffect(() => {
+    if (activeTabId) return;
+    const action = pickDefaultTab();
+    action?.();
+    // Intentionally mount-only — re-running on activeTabId changes would
+    // fight the user's explicit tab choices. The window listener above
+    // handles subsequent canvas-open events.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const closeTab = useCallback((tabId: string) => {
     setOpenTabs((prev) => {
       const idx = prev.findIndex((t) => t.id === tabId);
