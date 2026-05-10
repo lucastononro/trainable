@@ -206,7 +206,13 @@ export default function HomePage() {
   const [sessionState, setSessionState] = useState('created');
   const [loading, setLoading] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
-  const [experimentName, setExperimentName] = useState('');
+  // Derive the displayed experiment name from the experiments list (single
+  // source of truth) so a rename in the sidebar updates the header without
+  // needing a session reload.
+  const experimentName = useMemo(
+    () => experiments.find((e) => e.id === activeExperimentId)?.name ?? '',
+    [experiments, activeExperimentId],
+  );
   const [tasks, setTasks] = useState<Task[]>([]);
 
   // Workspace state
@@ -859,7 +865,6 @@ export default function HomePage() {
     setMetricPoints([]);
     setChartConfig(null);
     metricKeysRef.current = new Set();
-    setExperimentName('');
     // Critical: clear per-session agent indicators. If we don't, the previous
     // session's running sub-agents leak into the new one and `agent_message`
     // events get mis-tagged with the wrong agent_type (the stale entry from
@@ -928,9 +933,8 @@ export default function HomePage() {
         });
 
       try {
-        const exp = await api.getExperiment(activeExperimentId);
+        await api.getExperiment(activeExperimentId);
         if (cancelled) return;
-        setExperimentName(exp.name);
 
         const sid = activeSessionId;
         const sessionData = await api.getSession(sid);
