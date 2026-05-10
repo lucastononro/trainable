@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 
 from services.sandbox import run_code
 from services.skills.state import (
@@ -76,6 +77,8 @@ def create_handler(
         gpu = profile.get("gpu")
         timeout = profile.get("timeout")
 
+        start = time.time()
+
         await publish_fn(
             session_id,
             "tool_start",
@@ -112,7 +115,11 @@ def create_handler(
             await publish_fn(
                 session_id,
                 "tool_end",
-                {"tool": "execute_code", "output": error_msg},
+                {
+                    "tool": "execute_code",
+                    "output": error_msg,
+                    "duration": round(time.time() - start, 1),
+                },
                 role="tool",
             )
             return {"content": [{"type": "text", "text": error_msg}], "is_error": True}
@@ -132,7 +139,11 @@ def create_handler(
         await publish_fn(
             session_id,
             "tool_end",
-            {"tool": "execute_code", "output": output[:2000]},
+            {
+                "tool": "execute_code",
+                "output": output[:2000],
+                "duration": round(time.time() - start, 1),
+            },
             role="tool",
         )
 
