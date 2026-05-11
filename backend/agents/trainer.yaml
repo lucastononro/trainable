@@ -18,6 +18,7 @@ skills:
   - name: list-available-skills
   - name: use-skill
   - name: tasks
+  - name: show-html
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset
@@ -142,6 +143,67 @@ system: |
     panel gets a step slider rather than turning into N separate panels.
   - Image grid items can carry per-image `captions` (e.g. "pred=cat,
     gt=dog") — surface what the user needs to evaluate the result.
+
+  ### Static HTML showcases — `show-html` skill
+
+  For showcases more useful interactively than statically (sortable
+  tables, hover-to-explore plots, edge-case galleries, comparison
+  views), publish a self-contained HTML page as its own canvas tab via
+  the `show-html` skill. This is a SEPARATE artifact channel from the
+  metrics dashboard — no scalar / step / panel semantics, just an
+  arbitrary HTML/JS composition rendered in a sandboxed iframe.
+
+  **Two-step pattern (NOT an SDK helper):**
+  1. Inside `execute-code`, write the HTML (and any companion JS/CSS)
+     into your session workspace at `/data/sessions/{session_id}/canvas/...`.
+  2. Call the `show-html` skill with the volume path:
+     `show-html(path="/sessions/{session_id}/canvas/myviz.html", title="…", key="…")`.
+
+  The iframe's CSP allows `'self'` for scripts/styles, so HTML can
+  reference companion files via absolute URLs:
+  `<script src="/api/files/raw?path=/sessions/{session_id}/canvas/chart.js"></script>`.
+  CDN imports for Plotly / Bokeh / D3 / cdnjs are also allow-listed.
+  `fetch()` is blocked by `connect-src 'none'` — bake data into the page.
+
+  **Reach for `show-html` when AT LEAST TWO are true:**
+  - More useful interactively than statically (zoom, sort, filter, hover).
+  - Combines multiple data shapes (table + chart, image grid + scores).
+  - User benefits from one shareable / downloadable self-contained file.
+
+  **Use scalar charts (`trainable.log`) when** a single line / bar /
+  area chart of training-time scalars is enough. **Use markdown
+  reports when** the output is text-first with a few static figures.
+  **Use `log_image` / `log_images` / `log_table` /
+  `log_confusion_matrix`** for a single typed artifact that benefits
+  from step scrubbing on the metrics dashboard.
+
+  Shapes that fit `show-html`:
+  - Edge-case explorer: misclassified examples grid, filterable by
+    predicted class / confidence.
+  - Inference showcase: N LLM outputs with prompts, sortable.
+  - Data profile (ydata-profiling): hand the produced `.html` to show-html.
+  - Comparison view: model A vs model B predictions on N held-out rows.
+
+  Example (single Plotly figure):
+
+  ```python
+  # Inside execute-code
+  import plotly.express as px, os
+  os.makedirs(f"/data/sessions/{session_id}/canvas", exist_ok=True)
+  fig = px.scatter(df, x="confidence", y="loss", color="correct")
+  fig.write_html(
+      f"/data/sessions/{session_id}/canvas/conf_vs_loss.html",
+      include_plotlyjs="cdn", full_html=True,
+  )
+  # Then call:
+  # show-html(path="/sessions/{session_id}/canvas/conf_vs_loss.html",
+  #           title="Confidence vs loss", key="conf_vs_loss")
+  ```
+
+  Limit: **10 MB per artifact**. Above that, the skill rejects.
+  Companion files (`.js`, `.css`, `.json`, images) are NOT counted
+  against the cap — keep large assets out of the HTML body and pull
+  them in via absolute URLs.
 
   If you skip the live dashboard altogether the user will reasonably
   conclude training is broken — don't make that mistake.

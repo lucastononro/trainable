@@ -15,7 +15,7 @@ from sqlalchemy.orm import selectinload
 
 from config import settings
 from db import get_db
-from models import Experiment, Message, Project
+from models import Experiment, Message, Project, RegisteredModel
 from models import Session as SessionModel
 from schemas import ExperimentUpdate
 from services.dataset_versions import list_for_project as list_dataset_versions
@@ -655,7 +655,17 @@ async def get_experiment(experiment_id: str, db: AsyncSession = Depends(get_db))
 
 @router.delete("/experiments/{experiment_id}")
 async def delete_experiment(experiment_id: str, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Experiment).where(Experiment.id == experiment_id))
+    # Eager-load registered_models → deployments so the ORM cascade can
+    # flush deletes in dependency order (mirror the project delete fix).
+    result = await db.execute(
+        select(Experiment)
+        .where(Experiment.id == experiment_id)
+        .options(
+            selectinload(Experiment.registered_models).selectinload(
+                RegisteredModel.deployments
+            ),
+        )
+    )
     experiment = result.scalar_one_or_none()
     if not experiment:
         raise HTTPException(status_code=404, detail="Experiment not found")

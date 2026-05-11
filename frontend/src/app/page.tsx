@@ -9,6 +9,7 @@ import {
   MetricPoint,
   ChartConfig,
   LogEvent,
+  HtmlArtifact,
   Mention,
   Draft,
   LineageGraph as LineageGraphPayload,
@@ -63,6 +64,8 @@ import {
   FileSearch,
   Wrench,
   GitBranch,
+  Globe,
+  ExternalLink,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Notebook from '@/components/notebook/Notebook';
@@ -236,6 +239,9 @@ export default function HomePage() {
   // dedup so backend resends + reload-hydrate don't double-render.
   const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
   const logEventKeysRef = useRef(new Set<string>());
+  // Agent-published HTML artifacts: keyed by `key` so regenerating an
+  // artifact in the same session overwrites instead of piling tabs.
+  const [htmlArtifacts, setHtmlArtifacts] = useState<Map<string, HtmlArtifact>>(() => new Map());
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const sseRef = useRef<EventSource | null>(null);
@@ -675,6 +681,34 @@ export default function HomePage() {
               });
               break;
             }
+            case 'canvas_html': {
+              // Agent published a self-contained HTML artifact. Overwrite
+              // by key so regeneration reuses the tab. Open the canvas and
+              // ask the WorkspaceSidebar to open/focus the tab.
+              const ev = data as any;
+              if (!ev || !ev.key || !ev.path) break;
+              const artifact: HtmlArtifact = {
+                key: String(ev.key),
+                title: String(ev.title || ev.key),
+                path: String(ev.path),
+                size: typeof ev.size === 'number' ? ev.size : null,
+                ts: typeof ev.ts === 'number' ? ev.ts : null,
+                step: typeof ev.step === 'number' ? ev.step : null,
+                stage: ev.stage || null,
+              };
+              setHtmlArtifacts((prev) => {
+                const next = new Map(prev);
+                next.set(artifact.key, artifact);
+                return next;
+              });
+              openCanvas();
+              window.dispatchEvent(
+                new CustomEvent('trainable:open-html-tab', {
+                  detail: { key: artifact.key, title: artifact.title },
+                }),
+              );
+              break;
+            }
             // Multi-agent events
             case 'subagent_start': {
               const agentId = data.agent_id || `${Date.now()}`;
@@ -918,6 +952,7 @@ export default function HomePage() {
     metricKeysRef.current = new Set();
     setLogEvents([]);
     logEventKeysRef.current = new Set();
+    setHtmlArtifacts(new Map());
     // Critical: clear per-session agent indicators. If we don't, the previous
     // session's running sub-agents leak into the new one and `agent_message`
     // events get mis-tagged with the wrong agent_type (the stale entry from
@@ -999,6 +1034,7 @@ export default function HomePage() {
         let restoredCanvasTitle = 'Report';
         let restoredCanvasOpen = false;
         let restoredFiles: any[] = [];
+        const restoredHtmlArtifacts = new Map<string, HtmlArtifact>();
 
         if (sessionData.messages?.length > 0) {
           // Events persisted for introspection/telemetry only — never rendered as bubbles.
@@ -1010,6 +1046,7 @@ export default function HomePage() {
             'metrics_batch',
             'chart_config',
             'log_event',
+            'canvas_html',
             'validation_result',
             's3_sync_complete',
             'metadata_ready',
@@ -1017,6 +1054,23 @@ export default function HomePage() {
 
           for (const msg of sessionData.messages) {
             const eventType = msg.metadata?.event_type as string | undefined;
+            // Capture canvas_html (persisted as system Messages) before
+            // the NON_VISIBLE skip so reload restores the canvas tabs.
+            if (eventType === 'canvas_html') {
+              const m = msg.metadata || {};
+              if (m.key && m.path) {
+                restoredHtmlArtifacts.set(String(m.key), {
+                  key: String(m.key),
+                  title: String(m.title || m.key),
+                  path: String(m.path),
+                  size: typeof m.size === 'number' ? m.size : null,
+                  ts: typeof m.ts === 'number' ? m.ts : null,
+                  step: typeof m.step === 'number' ? m.step : null,
+                  stage: (m.stage as string | null) || null,
+                });
+              }
+              continue;
+            }
             if (eventType && NON_VISIBLE_EVENTS.has(eventType)) continue;
             // Legacy seeded intro messages (pre-dated system-prompt injection) — hide.
             if (msg.metadata?.session_intro) continue;
@@ -1244,7 +1298,10 @@ export default function HomePage() {
         setChatItems(restored);
         setCanvasContent(restoredCanvasContent);
         setCanvasTitle(restoredCanvasTitle);
-        if (restoredCanvasOpen) {
+        if (restoredHtmlArtifacts.size > 0) {
+          setHtmlArtifacts(restoredHtmlArtifacts);
+        }
+        if (restoredCanvasOpen || restoredHtmlArtifacts.size > 0) {
           // Delay expand to next tick so panel ref is mounted
           setTimeout(() => openCanvas(), 0);
         }
@@ -2170,6 +2227,7 @@ export default function HomePage() {
                   metricPoints={metricPoints}
                   chartConfig={chartConfig}
                   logEvents={logEvents}
+                  htmlArtifacts={htmlArtifacts}
                   sessionState={sessionState}
                   onClose={() => workspacePanelRef.current?.collapse()}
                 />
@@ -2206,6 +2264,7 @@ export default function HomePage() {
 function getFileIconInfo(name: string): { icon: typeof FileText; color: string } {
   if (name.endsWith('.py')) return { icon: Code2, color: 'text-yellow-400' };
   if (name.endsWith('.md')) return { icon: FileText, color: 'text-blue-400' };
+  if (/\.html?$/i.test(name)) return { icon: Globe, color: 'text-fuchsia-400' };
   if (/\.(png|jpg|jpeg|svg|gif)$/i.test(name)) return { icon: Image, color: 'text-purple-400' };
   if (name.endsWith('.csv')) return { icon: Table, color: 'text-green-400' };
   if (name.endsWith('.parquet')) return { icon: Database, color: 'text-amber-400' };
@@ -2305,6 +2364,104 @@ function FileTreeRow({
 }
 
 // ---------------------------------------------------------------------------
+// HtmlPanel -- renders an agent-published HTML artifact in a sandboxed
+// iframe. Used both by the canvas_html tab type and the FileViewer .html
+// branch. The iframe deliberately omits `allow-same-origin`: scripts
+// inside still run (Plotly/D3 interactivity works), but they can't read
+// cookies, fetch the API as the user, or postMessage usefully to the
+// parent. The backend pairs this with a strict CSP on /files/raw for
+// text/html responses (no outbound connect-src; img-src/script-src
+// allow-listed).
+// ---------------------------------------------------------------------------
+
+function humanArtifactBytes(n: number | null | undefined): string | null {
+  if (n == null) return null;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const HtmlPanel = memo(function HtmlPanel({ artifact }: { artifact: HtmlArtifact | undefined }) {
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setLoadFailed(false);
+    setLoaded(false);
+  }, [artifact?.path]);
+
+  if (!artifact) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-black">
+        <Globe className="w-8 h-8 mb-2 text-gray-700" />
+        <p className="text-xs">HTML artifact not loaded yet.</p>
+      </div>
+    );
+  }
+
+  const rawUrl = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(artifact.path)}`;
+  const sizeLabel = humanArtifactBytes(artifact.size);
+
+  return (
+    <div className="h-full flex flex-col bg-black">
+      <div className="flex items-center justify-between gap-3 px-4 h-8 border-b border-white/[0.06] shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Globe className="w-3.5 h-3.5 shrink-0 text-fuchsia-400" />
+          <span className="text-[12px] text-gray-300 truncate">{artifact.title}</span>
+          {sizeLabel && <span className="text-[11px] text-gray-600 shrink-0">· {sizeLabel}</span>}
+        </div>
+        <a
+          href={rawUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-300 transition-colors shrink-0"
+          title="Open this artifact in a new tab"
+        >
+          <ExternalLink className="w-3 h-3" />
+          Open in new tab
+        </a>
+      </div>
+      <div className="flex-1 overflow-hidden relative bg-white">
+        {loadFailed ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-700 bg-black">
+            <AlertCircle className="w-7 h-7 mb-2 text-amber-500" />
+            <p className="text-sm text-gray-400">HTML artifact failed to load.</p>
+            <a
+              href={rawUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 text-[12px] text-fuchsia-400 hover:text-fuchsia-300 underline"
+            >
+              Download raw HTML
+            </a>
+          </div>
+        ) : (
+          <iframe
+            // Keys the iframe on the artifact path so regenerating an artifact
+            // with the same key forces a fresh load instead of a cached view.
+            key={artifact.path}
+            src={rawUrl}
+            sandbox="allow-scripts allow-pointer-lock allow-popups"
+            referrerPolicy="no-referrer"
+            loading="lazy"
+            style={{ colorScheme: 'dark' }}
+            className="w-full h-full bg-white border-0"
+            title={artifact.title}
+            onLoad={() => setLoaded(true)}
+            onError={() => setLoadFailed(true)}
+          />
+        )}
+        {!loaded && !loadFailed && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40">
+            <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
 // FileViewer -- displays file content based on type
 // ---------------------------------------------------------------------------
 
@@ -2326,6 +2483,7 @@ const FileViewer = memo(function FileViewer({
   const isMarkdown = fileName.endsWith('.md');
   const isJSON = fileName.endsWith('.json');
   const isNotebook = fileName.endsWith('.ipynb');
+  const isHtml = fileName.toLowerCase().endsWith('.html');
   const isBinary = /\.(pkl|joblib|parquet|h5|hdf5|pt|pth|onnx)$/i.test(fileName);
 
   // Notebook files are rendered inline by a dedicated component — skip the
@@ -2337,7 +2495,7 @@ const FileViewer = memo(function FileViewer({
   }, [filePath, isNotebook]);
 
   useEffect(() => {
-    if (isImage || isPdf || isBinary || isNotebook) {
+    if (isImage || isPdf || isBinary || isNotebook || isHtml) {
       setLoading(false);
       return;
     }
@@ -2353,10 +2511,25 @@ const FileViewer = memo(function FileViewer({
         setError(err.message);
         setLoading(false);
       });
-  }, [filePath, isImage, isPdf, isBinary, isNotebook]);
+  }, [filePath, isImage, isPdf, isBinary, isNotebook, isHtml]);
 
   if (isNotebook && notebookName) {
     return <Notebook sessionId={sessionId} notebookName={notebookName} variant="inline" />;
+  }
+
+  if (isHtml) {
+    return (
+      <HtmlPanel
+        artifact={{
+          key: filePath,
+          title: fileName,
+          path: filePath,
+          size: null,
+          ts: null,
+          step: null,
+        }}
+      />
+    );
   }
 
   return (
@@ -2500,12 +2673,15 @@ interface OpenTab {
   label: string;
   icon: typeof FileText;
   iconColor: string;
-  type: 'file' | 'report' | 'metrics' | 'lineage';
+  type: 'file' | 'report' | 'metrics' | 'lineage' | 'html';
+  /** For type='html': the artifact key (also the suffix of the tab id). */
+  htmlKey?: string;
 }
 
 const REPORT_TAB_ID = '__report__';
 const METRICS_TAB_ID = '__metrics__';
 const LINEAGE_TAB_ID = '__lineage__';
+const HTML_TAB_PREFIX = '__html__:';
 
 function WorkspaceSidebar({
   experimentId,
@@ -2517,6 +2693,7 @@ function WorkspaceSidebar({
   metricPoints,
   chartConfig,
   logEvents,
+  htmlArtifacts,
   sessionState,
   onClose,
 }: {
@@ -2529,6 +2706,7 @@ function WorkspaceSidebar({
   metricPoints: MetricPoint[];
   chartConfig: ChartConfig | null;
   logEvents: LogEvent[];
+  htmlArtifacts: Map<string, HtmlArtifact>;
   sessionState: string;
   onClose: () => void;
 }) {
@@ -2609,6 +2787,65 @@ function WorkspaceSidebar({
     window.addEventListener('trainable:open-lineage-tab', handler);
     return () => window.removeEventListener('trainable:open-lineage-tab', handler);
   }, []);
+
+  // Listen for "open html tab" — fired by the page-level canvas_html SSE
+  // handler. Opens (or focuses) the tab for that artifact key. Regenerating
+  // an artifact with the same key reuses the existing tab.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { key?: string; title?: string } | undefined;
+      const key = detail?.key;
+      if (!key) return;
+      const tabId = HTML_TAB_PREFIX + key;
+      setOpenTabs((prev) => {
+        const existing = prev.find((t) => t.id === tabId);
+        if (existing) {
+          if (detail?.title && existing.label !== detail.title) {
+            return prev.map((t) => (t.id === tabId ? { ...t, label: detail.title! } : t));
+          }
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            id: tabId,
+            label: detail?.title || key,
+            icon: Globe,
+            iconColor: 'text-fuchsia-400',
+            type: 'html',
+            htmlKey: key,
+          },
+        ];
+      });
+      setActiveTabId(tabId);
+    };
+    window.addEventListener('trainable:open-html-tab', handler as EventListener);
+    return () => window.removeEventListener('trainable:open-html-tab', handler as EventListener);
+  }, []);
+
+  // When session reload hydrates htmlArtifacts in bulk, materialize the
+  // tabs on mount (no SSE event will fire for them retroactively).
+  useEffect(() => {
+    if (htmlArtifacts.size === 0) return;
+    setOpenTabs((prev) => {
+      const present = new Set(prev.map((t) => t.id));
+      const additions: OpenTab[] = [];
+      for (const a of Array.from(htmlArtifacts.values())) {
+        const id = HTML_TAB_PREFIX + a.key;
+        if (!present.has(id)) {
+          additions.push({
+            id,
+            label: a.title || a.key,
+            icon: Globe,
+            iconColor: 'text-fuchsia-400',
+            type: 'html',
+            htmlKey: a.key,
+          });
+        }
+      }
+      return additions.length > 0 ? [...prev, ...additions] : prev;
+    });
+  }, [htmlArtifacts]);
 
   // Refetch lineage on session change or when an SSE event signals a
   // change. Keeping the fetch keyed on sessionId so reopening a closed
@@ -2778,6 +3015,23 @@ function WorkspaceSidebar({
   }, []);
 
   const pickDefaultTab = useCallback((): (() => void) | null => {
+    // Prefer the most recent HTML artifact — the agent went to the
+    // trouble of authoring a visual showcase, so surface it on auto-open.
+    if (htmlArtifacts.size > 0) {
+      let latest: HtmlArtifact | null = null;
+      for (const a of Array.from(htmlArtifacts.values())) {
+        if (!latest || (a.ts || 0) > (latest.ts || 0)) latest = a;
+      }
+      if (latest) {
+        const target = latest;
+        return () =>
+          window.dispatchEvent(
+            new CustomEvent('trainable:open-html-tab', {
+              detail: { key: target.key, title: target.title },
+            }),
+          );
+      }
+    }
     if (canvasContent) return openReportTab;
     if (metricPoints.length > 0 || logEvents.length > 0) return openMetricsTab;
     const all = flattenFilePaths(fileTree);
@@ -2790,6 +3044,7 @@ function WorkspaceSidebar({
     if (all[0]) return () => openFile(all[0]);
     return null;
   }, [
+    htmlArtifacts,
     canvasContent,
     metricPoints.length,
     logEvents.length,
@@ -3019,6 +3274,8 @@ function WorkspaceSidebar({
                       />
                     ) : null}
                   </div>
+                ) : tab.type === 'html' ? (
+                  <HtmlPanel artifact={tab.htmlKey ? htmlArtifacts.get(tab.htmlKey) : undefined} />
                 ) : null}
               </div>
             );

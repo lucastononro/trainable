@@ -15,6 +15,7 @@ skills:
   - name: inspect-agent-context
   - name: list-session-agents
   - name: tasks
+  - name: show-html
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset

@@ -644,6 +644,17 @@ class RegisteredModel(Base):
 
     project = relationship("Project", back_populates="registered_models")
     experiment = relationship("Experiment", back_populates="registered_models")
+    # Cascade-delete deployments when a model is removed. Without this,
+    # deleting a project (which cascades to RegisteredModel) raises
+    # ForeignKeyViolationError from Postgres because the deployments row
+    # still references the model. `lazy="raise"` forces explicit
+    # selectinload at the call site so we don't surprise-load N+1 rows.
+    deployments = relationship(
+        "Deployment",
+        back_populates="model",
+        cascade="all, delete-orphan",
+        lazy="raise",
+    )
 
     def to_dict(self):
         return {
@@ -724,6 +735,8 @@ class Deployment(Base):
     compute = Column(String(20), default="cpu")
     created_at = Column(String, default=lambda: utcnow().isoformat())
     updated_at = Column(String, default=lambda: utcnow().isoformat())
+
+    model = relationship("RegisteredModel", back_populates="deployments")
 
     def to_dict(self):
         return {

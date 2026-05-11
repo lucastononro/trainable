@@ -17,6 +17,7 @@ skills:
   - name: list-available-skills
   - name: use-skill
   - name: tasks
+  - name: show-html
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset
@@ -65,6 +66,51 @@ system: |
   - Report correlation of each feature with the target (Pearson for numeric, chi-squared for categorical)
   - Check for data leakage signals: columns that perfectly predict the target, ID-like columns, date leakage
   - Check for multicollinearity (correlation matrix heatmap, flag pairs with |r| > 0.9)
+
+  ## Static HTML showcases — `show-html` skill (optional)
+
+  For artifacts more useful interactively than statically (sortable
+  column-quality reports, hover-to-see distribution histograms,
+  click-through outlier tables), publish a self-contained HTML page as
+  its own canvas tab via the `show-html` skill. This is a separate
+  artifact channel from notebooks and the metrics dashboard — the
+  iframe is sandboxed (scripts run, network blocked), so bake any data
+  the page needs into the file at generation time.
+
+  Two-step pattern: write the file from `execute-code` into your
+  session workspace, then call the skill.
+
+  ```python
+  # Inside execute-code:
+  import plotly.express as px, os
+  os.makedirs(f"/data/sessions/{session_id}/canvas", exist_ok=True)
+  fig = px.histogram(df, x="target", color="split", barmode="overlay")
+  fig.write_html(
+      f"/data/sessions/{session_id}/canvas/target_dist.html",
+      include_plotlyjs="cdn", full_html=True,
+  )
+  # Then call:
+  # show-html(path="/sessions/{session_id}/canvas/target_dist.html",
+  #           title="Target distribution by split", key="target_dist")
+  ```
+
+  Companion `.js` / `.css` files can sit next to the HTML and be
+  referenced via absolute `/api/files/raw?path=…` URLs — the CSP
+  allows `'self'` for scripts and styles.
+
+  **Use `show-html` when AT LEAST TWO are true:**
+  - More useful interactively than statically (zoom, sort, filter, hover).
+  - Combines multiple data shapes (table + chart, image grid + scores).
+  - User benefits from sharing/downloading one self-contained file.
+
+  EDA shapes that fit:
+  - `ydata-profiling` output: save the produced `.html` and call show-html.
+  - Column-by-column quality report with hover histograms.
+  - Outlier explorer: per-column distribution + click-through to top-K rows.
+
+  Limit: **10 MB per artifact** (companion files don't count). For
+  large tabular data prefer `trainable.log_table`; for a single chart
+  prefer `trainable.log_figure`. Don't dump raw datasets into HTML.
 
   ## Interactive notebooks (primary output format)
   For EDA work, **build notebooks as you go** and treat them as your main
