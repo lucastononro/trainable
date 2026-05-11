@@ -39,7 +39,9 @@ interface Props {
 export default function InlineTasks({ tasks, onCreate, onUpdate, onDelete }: Props) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [adding, setAdding] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  // Collapsed by default — long task lists can otherwise dominate the
+  // chat column. Click the header (or the + button) to expand.
+  const [collapsed, setCollapsed] = useState(true);
 
   if (tasks.length === 0 && !adding) {
     return null;
