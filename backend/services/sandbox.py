@@ -72,6 +72,29 @@ _VOL_ROOT = "/data"
 _FIG_BASE = _trn_os.path.join(_VOL_ROOT, "sessions", _SID, "figures")
 _TABLE_ROW_LIMIT = 1000  # truncated server-side too; UI never needs more
 
+# --- Session repo bootstrap -------------------------------------------------
+# Make /data/sessions/{sid}/src/ a proper Python package and put it FIRST on
+# sys.path so the agent can `import data` / `from features import build_X`
+# from any subsequent execute_code call or notebook cell.
+#
+# Why this matters: each execute_code call spawns a fresh sandbox whose cwd
+# defaults to /root and whose sys.path doesn't include the session workspace.
+# Without this, an agent that writes utils.py in one call hits ModuleNotFoundError
+# on `import utils` in the next call. With this, the session feels like a repo.
+_SESSION_SRC = _trn_os.path.join(_VOL_ROOT, "sessions", _SID, "src")
+try:
+    _trn_os.makedirs(_SESSION_SRC, exist_ok=True)
+    _init_py = _trn_os.path.join(_SESSION_SRC, "__init__.py")
+    if not _trn_os.path.exists(_init_py):
+        with open(_init_py, "w") as _fh:
+            _fh.write("")
+    if _SESSION_SRC not in _trn_sys.path:
+        _trn_sys.path.insert(0, _SESSION_SRC)
+except Exception:
+    # Best-effort: a misconfigured volume mount shouldn't kill the run.
+    pass
+# ---------------------------------------------------------------------------
+
 def _safe_key(key):
     # `key` may include slashes (e.g. "val/predictions") — keep the slash
     # as a subdir separator but scrub anything else risky.
@@ -334,6 +357,22 @@ async def run_code(
 
     sandbox_failed = False
     try:
+        # Reload the volume so this sandbox observes writes from the previous
+        # one (e.g. an agent module written one execute_code call ago). The
+        # post-run reload in detect_new_files only refreshes the backend view.
+        # Also lay down /sessions/{sid}/src/__init__.py so `workdir=` below
+        # has a real directory to anchor to on the first sandbox of a session.
+        try:
+            from services.volume import (
+                ensure_session_workspace as _ensure_ws,
+                reload_volume_async as _reload_vol,
+            )
+
+            await _ensure_ws(session_id)
+            await _reload_vol()
+        except Exception as e:
+            logger.debug("pre-sandbox volume bootstrap skipped: %s", e)
+
         started = time.monotonic()
         sb = await modal.Sandbox.create.aio(
             "python",
@@ -344,6 +383,10 @@ async def run_code(
             volumes={"/data": get_volume()},
             gpu=gpu,
             timeout=effective_timeout,
+            # Anchor the process cwd inside the session workspace so relative
+            # file IO (open("data/x.parquet"), pd.to_parquet("models/m.pkl"))
+            # lands on the volume instead of /root.
+            workdir=f"/data/sessions/{session_id}",
             app=await _get_app(),
         )
 
