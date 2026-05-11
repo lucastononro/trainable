@@ -104,6 +104,31 @@ async def upload_to_volume(local_path: str, remote_path: str):
     logger.info("Uploaded %s -> %s", local_path, remote_path)
 
 
+async def upload_many_to_volume(pairs: list[tuple[str, str]]) -> int:
+    """Bulk-upload many files to the Modal Volume in a single batch.
+
+    `pairs` is a list of (local_path, remote_path). Critically, this opens
+    ONE batch_upload() context for the whole list — Modal then ships the
+    payload in a single round-trip rather than one per file. The 1-by-1
+    `upload_to_volume()` is a 30-min-for-1k-files trap; this is the bulk
+    path that should be used for any folder upload.
+
+    Returns the number of files actually pushed.
+    """
+    if not pairs:
+        return 0
+    vol = get_volume()
+
+    def _sync_upload():
+        with vol.batch_upload(force=True) as batch:
+            for local_path, remote_path in pairs:
+                batch.put_file(local_path, remote_path)
+
+    await asyncio.get_running_loop().run_in_executor(None, _sync_upload)
+    logger.info("Bulk-uploaded %d files to Modal Volume", len(pairs))
+    return len(pairs)
+
+
 async def remove_volume_file_async(path: str):
     """Remove a file from the Modal Volume without blocking the event loop."""
     vol = get_volume()

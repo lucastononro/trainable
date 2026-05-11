@@ -14,6 +14,7 @@ from services.broadcaster import broadcaster
 from services.metrics import (
     parse_stdout_line,
     persist_and_publish,
+    persist_and_publish_log_event,
     publish_chart_config,
 )
 from services.usage import record_sandbox_usage
@@ -46,27 +47,201 @@ _get_app = get_app
 
 # SDK injected at the top of every sandbox execution.
 # Creates a `trainable` module so agent code can do:
-#   from trainable import log, configure_dashboard
+#   from trainable import log, configure_dashboard, log_image, log_table, ...
 #
 # Used two ways:
-#   1. execute_code scripts — string-concatenated ahead of user code in run_code()
-#   2. notebook kernels    — sent to ipykernel as a silent preamble cell at boot
-#      (see kernel_manager.py)
-SDK_PREAMBLE = """\
-import types, json, sys
-_m = types.ModuleType('trainable')
-_json = json
+#   1. execute_code scripts — built per-session in run_code() with the session_id baked in
+#   2. notebook kernels     — sent to ipykernel as a silent preamble cell at boot
+#                             (see kernel_manager.py — also session-aware)
+#
+# `session_id` is interpolated into the file paths used by the rich helpers
+# (log_image / log_images / log_figure) so binary artifacts land at
+# /data/sessions/{sid}/figures/{key}/{step}.png and are addressable by the
+# frontend via /files/raw?path=/sessions/{sid}/figures/{key}/{step}.png.
+def build_sdk_preamble(session_id: str) -> str:
+    return SDK_PREAMBLE_TEMPLATE.replace("__SESSION_ID__", session_id)
+
+
+SDK_PREAMBLE_TEMPLATE = '''\
+import types as _trn_types, json as _trn_json, sys as _trn_sys, os as _trn_os, re as _trn_re
+_m = _trn_types.ModuleType("trainable")
+_SID = "__SESSION_ID__"
+# Volume mount inside the sandbox is /data; the frontend addresses files
+# by their volume-relative path (no /data prefix), e.g. /sessions/{sid}/...
+_VOL_ROOT = "/data"
+_FIG_BASE = _trn_os.path.join(_VOL_ROOT, "sessions", _SID, "figures")
+_TABLE_ROW_LIMIT = 1000  # truncated server-side too; UI never needs more
+
+def _safe_key(key):
+    # `key` may include slashes (e.g. "val/predictions") — keep the slash
+    # as a subdir separator but scrub anything else risky.
+    return _trn_re.sub(r"[^A-Za-z0-9_./-]", "_", str(key)).strip("/") or "log"
+
+def _vol_path(local_path):
+    if local_path.startswith(_VOL_ROOT):
+        return local_path[len(_VOL_ROOT):]
+    return local_path
+
+def _emit(envelope):
+    print(_trn_json.dumps(envelope), flush=True)
+
+def _save_image(img, dest_path):
+    """Normalize an image-ish object to PNG at dest_path. Accepts:
+    - str/PathLike: an existing file path (just copies if needed)
+    - PIL.Image.Image
+    - numpy.ndarray (HxW, HxWx3, HxWx4; uint8 or float-in-[0,1])
+    - torch.Tensor (CxHxW or HxW or HxWxC)
+    """
+    _trn_os.makedirs(_trn_os.path.dirname(dest_path), exist_ok=True)
+    # path passthrough
+    if isinstance(img, (str, bytes, _trn_os.PathLike)):
+        src = _trn_os.fspath(img)
+        if src == dest_path:
+            return
+        with open(src, "rb") as r, open(dest_path, "wb") as w:
+            w.write(r.read())
+        return
+    # PIL
+    try:
+        from PIL import Image as _PILImage
+        if isinstance(img, _PILImage.Image):
+            img.convert("RGB").save(dest_path, format="PNG")
+            return
+    except Exception:
+        pass
+    # torch — convert to numpy
+    try:
+        import torch as _torch
+        if isinstance(img, _torch.Tensor):
+            arr = img.detach().cpu().numpy()
+            # CxHxW -> HxWxC
+            if arr.ndim == 3 and arr.shape[0] in (1, 3, 4) and arr.shape[2] not in (1, 3, 4):
+                arr = arr.transpose(1, 2, 0)
+            img = arr
+    except Exception:
+        pass
+    # numpy
+    try:
+        import numpy as _np
+        if isinstance(img, _np.ndarray):
+            from PIL import Image as _PILImage
+            arr = img
+            if arr.dtype != _np.uint8:
+                a = arr.astype(_np.float32)
+                if a.max() <= 1.0 + 1e-6:
+                    a = a * 255.0
+                arr = a.clip(0, 255).astype(_np.uint8)
+            if arr.ndim == 2:
+                _PILImage.fromarray(arr, mode="L").save(dest_path, format="PNG")
+            elif arr.ndim == 3 and arr.shape[2] == 4:
+                _PILImage.fromarray(arr, mode="RGBA").save(dest_path, format="PNG")
+            else:
+                _PILImage.fromarray(arr).convert("RGB").save(dest_path, format="PNG")
+            return
+    except Exception:
+        pass
+    raise TypeError("log_image: unsupported image type %r" % (type(img),))
+
 def _log(step, metrics, run=None):
     p = {"step": int(step), "metrics": {k: float(v) for k, v in metrics.items()}}
     if run: p["run"] = str(run)
-    print(_json.dumps(p), flush=True)
+    _emit(p)
+
 def _cfg(charts):
-    print(_json.dumps({"chart_config": {"charts": charts}}), flush=True)
+    _emit({"chart_config": {"charts": charts}})
+
+def _log_event(event_type, step, key, data, run=None):
+    payload = {"type": event_type, "step": int(step), "key": _safe_key(key), "data": data}
+    if run: payload["run"] = str(run)
+    _emit({"log": payload})
+
+def _log_image(step, key, image, caption=None, run=None):
+    safe = _safe_key(key)
+    fname = "{}.png".format(int(step))
+    dest = _trn_os.path.join(_FIG_BASE, safe, fname)
+    _save_image(image, dest)
+    item = {"path": _vol_path(dest)}
+    if caption: item["caption"] = str(caption)
+    _log_event("image", step, key, {"items": [item]}, run=run)
+
+def _log_images(step, key, images, captions=None, run=None):
+    safe = _safe_key(key)
+    items = []
+    for i, img in enumerate(images):
+        dest = _trn_os.path.join(_FIG_BASE, safe, "{}_{}.png".format(int(step), i))
+        _save_image(img, dest)
+        item = {"path": _vol_path(dest)}
+        if captions and i < len(captions) and captions[i] is not None:
+            item["caption"] = str(captions[i])
+        items.append(item)
+    _log_event("image_grid", step, key, {"items": items}, run=run)
+
+def _log_figure(step, key, fig, run=None):
+    """Save a matplotlib Figure to PNG and emit an image event."""
+    safe = _safe_key(key)
+    dest = _trn_os.path.join(_FIG_BASE, safe, "{}.png".format(int(step)))
+    _trn_os.makedirs(_trn_os.path.dirname(dest), exist_ok=True)
+    try:
+        fig.savefig(dest, format="png", bbox_inches="tight", dpi=120)
+    except Exception as e:
+        raise TypeError("log_figure: object is not a matplotlib Figure (%s)" % e)
+    _log_event("image", step, key, {"items": [{"path": _vol_path(dest)}]}, run=run)
+
+def _log_table(step, key, columns, rows, run=None):
+    cols = [str(c) for c in columns]
+    rs = list(rows)[:_TABLE_ROW_LIMIT]
+    norm = []
+    for r in rs:
+        row = list(r) if not isinstance(r, dict) else [r.get(c) for c in cols]
+        norm.append([(None if v is None else (float(v) if isinstance(v, bool) is False and isinstance(v, (int, float)) else str(v))) for v in row])
+    _log_event(
+        "table",
+        step,
+        key,
+        {"columns": cols, "rows": norm, "truncated": len(list(rows)) > _TABLE_ROW_LIMIT},
+        run=run,
+    )
+
+def _log_confusion_matrix(step, key, y_true, y_pred, labels=None, run=None):
+    """Compute the confusion matrix server-side-free using sklearn if
+    available; otherwise hand-roll it."""
+    try:
+        from sklearn.metrics import confusion_matrix as _cm
+        import numpy as _np
+        labs = list(labels) if labels is not None else sorted(set(list(y_true) + list(y_pred)))
+        m = _cm(y_true, y_pred, labels=labs).tolist()
+    except Exception:
+        labs = list(labels) if labels is not None else sorted(set(list(y_true) + list(y_pred)))
+        idx = {l: i for i, l in enumerate(labs)}
+        m = [[0] * len(labs) for _ in labs]
+        for t, p in zip(y_true, y_pred):
+            if t in idx and p in idx:
+                m[idx[t]][idx[p]] += 1
+    _log_event(
+        "confusion_matrix",
+        step,
+        key,
+        {"labels": [str(l) for l in labs], "matrix": m},
+        run=run,
+    )
+
 _m.log = _log
 _m.configure_dashboard = _cfg
-sys.modules['trainable'] = _m
-del _m, types
-"""
+_m.log_image = _log_image
+_m.log_images = _log_images
+_m.log_figure = _log_figure
+_m.log_table = _log_table
+_m.log_confusion_matrix = _log_confusion_matrix
+_trn_sys.modules["trainable"] = _m
+del _m
+'''
+
+
+# Back-compat alias: kernel_manager.py and tests imported the constant by
+# name. It now defaults to a no-session preamble (still works, but the
+# rich helpers will write to /data/sessions/None/...). Kernel/code paths
+# that know the session should call build_sdk_preamble(session_id).
+SDK_PREAMBLE = SDK_PREAMBLE_TEMPLATE.replace("__SESSION_ID__", "")
 
 
 def get_image():
@@ -141,7 +316,7 @@ async def run_code(
         effective_timeout,
     )
 
-    full_code = SDK_PREAMBLE + code
+    full_code = build_sdk_preamble(session_id) + code
 
     # Wrap the entire sandbox lifecycle in an OTel span so trace UIs can show
     # how long the Modal call took, what stage it served, and which GPU was
@@ -183,6 +358,8 @@ async def run_code(
                 await persist_and_publish(session_id, stage, parsed["items"])
             elif parsed["type"] == "chart_config":
                 await publish_chart_config(session_id, parsed["config"])
+            elif parsed["type"] == "log_event":
+                await persist_and_publish_log_event(session_id, stage, parsed["event"])
 
         async def _drain_stderr():
             async for chunk in sb.stderr:

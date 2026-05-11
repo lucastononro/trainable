@@ -24,7 +24,7 @@ import modal
 
 from services import notebook_store
 from services.broadcaster import broadcaster
-from services.sandbox import SDK_PREAMBLE, get_app, get_image
+from services.sandbox import SDK_PREAMBLE, build_sdk_preamble, get_app, get_image
 from services.volume import get_volume
 
 logger = logging.getLogger(__name__)
@@ -220,10 +220,20 @@ asyncio.run(main())
 
 # Materialize the proxy source with the SDK preamble embedded as a Python
 # string literal. repr() gives us correct escaping regardless of the
-# preamble's contents.
+# preamble's contents. The session-less default (used by tests) embeds the
+# placeholder-only preamble; live spawns pass session_id to bake the path
+# helpers in correctly.
 KERNEL_PROXY_SCRIPT = _KERNEL_PROXY_SCRIPT_TEMPLATE.replace(
     "__SDK_PREAMBLE_LITERAL__", repr(SDK_PREAMBLE)
 )
+
+
+def build_kernel_proxy_script(session_id: str) -> str:
+    """Per-session kernel proxy. The SDK preamble is rebuilt per session so
+    rich helpers like log_image write to /data/sessions/{session_id}/figures/."""
+    return _KERNEL_PROXY_SCRIPT_TEMPLATE.replace(
+        "__SDK_PREAMBLE_LITERAL__", repr(build_sdk_preamble(session_id))
+    )
 
 
 @dataclass
@@ -298,7 +308,7 @@ class KernelManager:
             "python",
             "-u",
             "-c",
-            KERNEL_PROXY_SCRIPT,
+            build_kernel_proxy_script(session_id),
             image=get_image(),
             volumes={"/data": get_volume()},
             timeout=KERNEL_MAX_LIFETIME_S,

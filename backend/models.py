@@ -466,6 +466,42 @@ class Metric(Base):
         }
 
 
+class LogEvent(Base):
+    """Non-scalar dashboard payload — image grid, table, confusion matrix,
+    histogram, ROC/PR, text samples, custom plotly figure.
+
+    Scalars stay in `metrics` for fast queries; this table stores anything
+    the agent logs via the rich `trainable.log_*` helpers. The `payload`
+    JSON shape is per-`type` (see `services/metrics.parse_stdout_line`).
+    """
+
+    __tablename__ = "log_events"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    session_id = Column(
+        String(36), ForeignKey("sessions.id"), nullable=False, index=True
+    )
+    stage = Column(String(50), nullable=False, default="train")
+    step = Column(Integer, nullable=False)
+    key = Column(String(255), nullable=False)
+    type = Column(String(30), nullable=False)
+    run_tag = Column(String(100), nullable=True)
+    payload = Column(JSON, default=dict)
+    created_at = Column(String, default=lambda: utcnow().isoformat())
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "step": self.step,
+            "key": self.key,
+            "type": self.type,
+            "stage": self.stage,
+            "run_tag": self.run_tag,
+            "payload": self.payload or {},
+            "created_at": self.created_at,
+        }
+
+
 class DatasetVersion(Base):
     """A versioned dataset on the volume — raw upload or agent-processed.
 
