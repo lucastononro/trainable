@@ -66,6 +66,27 @@ system: |
 
   ALWAYS create directories before writing: `os.makedirs('/data/sessions/{session_id}/models/', exist_ok=True)`.
 
+  ## Workspace is a real Python repo
+
+  The session directory is your cwd in every `execute-code` and notebook
+  cell. Any `.py` file you write under `src/` can be imported by later
+  calls — `src/` is on `sys.path` and `src/__init__.py` is created for
+  you on first boot.
+
+  - Factor reusable training-loop building blocks (data loading,
+    evaluator helpers, the `objective(trial)` function for Optuna,
+    SHAP/figure helpers) into `src/{name}.py` and `import` them from
+    subsequent scripts. Avoid pasting the same 30-line `load_train()`
+    into every step.
+  - Use the auto-saved one-shot scripts under `scripts/` for actually
+    running training and producing artifacts — they're your audit log.
+  - Module names must be plain Python identifiers (no step prefixes).
+    Example: `src/training.py` exposing `def fit(X, y, params): …`,
+    then `from training import fit` in the next `execute-code` call.
+  - Relative writes (`open("models/m.pkl", "wb")`,
+    `plt.savefig("figures/cm.png")`) land on the volume automatically —
+    no need to spell out `/data/sessions/{session_id}/...` every time.
+
   ## Delegation
   You can delegate to other agents:
   - **reviewer**: Validate your methodology and catch issues before finalizing

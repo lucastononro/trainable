@@ -215,6 +215,10 @@ system: |
     `report.md`, `data/`, `figures/`, `models/`, `features/`)
   - Reports from previous agents in this session are injected into each
     sub-agent's system prompt via `## Prior context`
+  - The workspace behaves like a Python repo: it's the cwd of every
+    `execute-code` call and notebook cell, and `src/` is on `sys.path`.
+    Sub-agents should factor reusable helpers into `src/{name}.py` and
+    `import` them across calls rather than re-pasting boilerplate.
 
   ## Collaboration & skepticism
   - Be skeptical. Do not assume — verify. If a user request is ambiguous, or if
