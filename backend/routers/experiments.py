@@ -184,10 +184,14 @@ async def create_experiment(
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 tmp.write(content)
                 tmp_path = tmp.name
-            staged.append((tmp_path, _dataset_volume_path(project_id, rel_path), content))
+            staged.append(
+                (tmp_path, _dataset_volume_path(project_id, rel_path), content)
+            )
 
             uploaded_files.append(f"s3://datasets/{key}")
-            logger.info(f"Uploaded {rel_path} ({len(content)} bytes) → S3 (volume pending)")
+            logger.info(
+                f"Uploaded {rel_path} ({len(content)} bytes) → S3 (volume pending)"
+            )
 
             # Record content hash for dataset versioning. Failures here must not
             # block the upload — versioning is observability, not a gate.
@@ -285,7 +289,9 @@ async def create_experiment_from_s3(
                 for obj in page.get("Contents", []):
                     obj_key = obj["Key"]
                     rel_path = (
-                        obj_key[len(prefix) :] if obj_key.startswith(prefix) else obj_key
+                        obj_key[len(prefix) :]
+                        if obj_key.startswith(prefix)
+                        else obj_key
                     )
                     if not rel_path or rel_path.endswith("/"):
                         continue
@@ -293,7 +299,9 @@ async def create_experiment_from_s3(
                     with tempfile.NamedTemporaryFile(delete=False) as tmp:
                         tmp.write(data)
                         tmp_path = tmp.name
-                    staged.append((tmp_path, _dataset_volume_path(project_id, rel_path)))
+                    staged.append(
+                        (tmp_path, _dataset_volume_path(project_id, rel_path))
+                    )
             if staged:
                 try:
                     await upload_many_to_volume(staged)
