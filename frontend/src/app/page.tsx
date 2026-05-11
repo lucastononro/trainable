@@ -8,6 +8,7 @@ import {
   FileTreeNode,
   MetricPoint,
   ChartConfig,
+  LogEvent,
   Mention,
   Draft,
   LineageGraph as LineageGraphPayload,
@@ -231,6 +232,10 @@ export default function HomePage() {
   const [metricPoints, setMetricPoints] = useState<MetricPoint[]>([]);
   const [chartConfig, setChartConfig] = useState<ChartConfig | null>(null);
   const metricKeysRef = useRef(new Set<string>());
+  // Rich log payloads (image grids, tables, confusion matrices, …) — keyed
+  // dedup so backend resends + reload-hydrate don't double-render.
+  const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
+  const logEventKeysRef = useRef(new Set<string>());
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const sseRef = useRef<EventSource | null>(null);
@@ -647,6 +652,29 @@ export default function HomePage() {
               }
               break;
             }
+            case 'log_event': {
+              // Rich (non-scalar) panel payload — image grid, table,
+              // confusion matrix, etc. Keyed by (key, step) so a backend
+              // resend or reload-hydrate doesn't double-append.
+              const ev = data as any;
+              if (!ev || !ev.key || ev.step === undefined || !ev.type) break;
+              const dedupKey = `${ev.key}:${ev.step}:${ev.run_tag || ''}`;
+              if (logEventKeysRef.current.has(dedupKey)) break;
+              logEventKeysRef.current.add(dedupKey);
+              const entry: LogEvent = {
+                step: Number(ev.step),
+                key: String(ev.key),
+                type: ev.type,
+                stage: ev.stage,
+                run_tag: ev.run_tag || null,
+                payload: (ev.data || {}) as Record<string, unknown>,
+              };
+              setLogEvents((prev) => {
+                if (prev.length === 0) openCanvas();
+                return [...prev, entry];
+              });
+              break;
+            }
             // Multi-agent events
             case 'subagent_start': {
               const agentId = data.agent_id || `${Date.now()}`;
@@ -888,6 +916,8 @@ export default function HomePage() {
     setMetricPoints([]);
     setChartConfig(null);
     metricKeysRef.current = new Set();
+    setLogEvents([]);
+    logEventKeysRef.current = new Set();
     // Critical: clear per-session agent indicators. If we don't, the previous
     // session's running sub-agents leak into the new one and `agent_message`
     // events get mis-tagged with the wrong agent_type (the stale entry from
@@ -979,6 +1009,7 @@ export default function HomePage() {
             'metric',
             'metrics_batch',
             'chart_config',
+            'log_event',
             'validation_result',
             's3_sync_complete',
             'metadata_ready',
@@ -1244,6 +1275,20 @@ export default function HomePage() {
             }
           })
           .catch((e) => console.error('Failed to load historical metrics', e));
+
+        // Load historical rich-log events (image grids, tables, …)
+        api
+          .getLogEvents(sid)
+          .then((events) => {
+            if (!cancelled && events.length > 0) {
+              setLogEvents(events);
+              openCanvas();
+              for (const e of events) {
+                logEventKeysRef.current.add(`${e.key}:${e.step}:${e.run_tag || ''}`);
+              }
+            }
+          })
+          .catch((e) => console.error('Failed to load historical log events', e));
 
         // Load existing tasks for this session. The card is rendered
         // at the bottom of the chat from `tasks` state, so we just
@@ -1797,26 +1842,12 @@ export default function HomePage() {
               </div>
 
               {/* File previews */}
-              {attachedFiles.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {attachedFiles.map((f, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-gray-300"
-                    >
-                      <Paperclip className="w-3 h-3 text-gray-500" />
-                      <span className="truncate max-w-[160px]">{f.name}</span>
-                      <button
-                        onClick={() => removeAttachedFile(i)}
-                        title="Remove file"
-                        className="p-0.5 hover:bg-white/[0.1] rounded transition-colors"
-                      >
-                        <X className="w-3 h-3 text-gray-500" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <AttachedFilesPreview
+                files={attachedFiles}
+                onRemove={removeAttachedFile}
+                onClearAll={() => setAttachedFiles([])}
+                variant="home"
+              />
 
               {/* Input bar */}
               <div className="relative">
@@ -1993,25 +2024,12 @@ export default function HomePage() {
                 <div className="bg-black px-4 py-3">
                   <div className={`mx-auto ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}>
                     {/* Attached files preview */}
-                    {attachedFiles.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mb-2">
-                        {attachedFiles.map((f, i) => (
-                          <div
-                            key={i}
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-gray-300"
-                          >
-                            <Paperclip className="w-3 h-3 text-gray-500" />
-                            <span className="truncate max-w-[140px]">{f.name}</span>
-                            <button
-                              onClick={() => removeAttachedFile(i)}
-                              className="p-0.5 hover:bg-white/[0.1] rounded transition-colors"
-                            >
-                              <X className="w-3 h-3 text-gray-500" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <AttachedFilesPreview
+                      files={attachedFiles}
+                      onRemove={removeAttachedFile}
+                      onClearAll={() => setAttachedFiles([])}
+                      variant="session"
+                    />
 
                     <div className="flex items-center gap-1 bg-[#1e1f22] rounded-2xl px-2 py-1.5 transition-colors">
                       {/* Attach menu */}
@@ -2151,6 +2169,7 @@ export default function HomePage() {
                   fileTree={fileTree}
                   metricPoints={metricPoints}
                   chartConfig={chartConfig}
+                  logEvents={logEvents}
                   sessionState={sessionState}
                   onClose={() => workspacePanelRef.current?.collapse()}
                 />
@@ -2497,6 +2516,7 @@ function WorkspaceSidebar({
   fileTree,
   metricPoints,
   chartConfig,
+  logEvents,
   sessionState,
   onClose,
 }: {
@@ -2508,6 +2528,7 @@ function WorkspaceSidebar({
   fileTree: FileTreeNode;
   metricPoints: MetricPoint[];
   chartConfig: ChartConfig | null;
+  logEvents: LogEvent[];
   sessionState: string;
   onClose: () => void;
 }) {
@@ -2658,8 +2679,8 @@ function WorkspaceSidebar({
     }
   }, [canvasContent, canvasTitle]);
 
-  // Auto-open metrics tab when first metric arrives
-  const hasMetrics = metricPoints.length > 0;
+  // Auto-open metrics tab when the first metric OR rich log payload arrives
+  const hasMetrics = metricPoints.length > 0 || logEvents.length > 0;
   useEffect(() => {
     if (hasMetrics) {
       setOpenTabs((prev) => {
@@ -2758,7 +2779,7 @@ function WorkspaceSidebar({
 
   const pickDefaultTab = useCallback((): (() => void) | null => {
     if (canvasContent) return openReportTab;
-    if (metricPoints.length > 0) return openMetricsTab;
+    if (metricPoints.length > 0 || logEvents.length > 0) return openMetricsTab;
     const all = flattenFilePaths(fileTree);
     const notebook = all.find((p) => p.endsWith('.ipynb'));
     if (notebook) return () => openFile(notebook);
@@ -2771,6 +2792,7 @@ function WorkspaceSidebar({
   }, [
     canvasContent,
     metricPoints.length,
+    logEvents.length,
     fileTree,
     flattenFilePaths,
     openFile,
@@ -2977,6 +2999,7 @@ function WorkspaceSidebar({
                     <MetricsTab
                       metricPoints={metricPoints}
                       chartConfig={chartConfig}
+                      logEvents={logEvents}
                       state={sessionState}
                     />
                   </div>
@@ -3608,6 +3631,151 @@ function renderGroupedChatItems(
 }
 
 // ---------------------------------------------------------------------------
+// UserMessageFilePills — collapsed list of file pills inside a user bubble.
+//
+// Bulk uploads (e.g. an image dataset of thousands of files) used to render
+// every filename as a flex-wrapped pill, growing the bubble vertically until
+// it pushed the chat input bar off-screen and the user couldn't type. Cap
+// the visible count, and stash the rest behind a "+N more" toggle so the
+// bubble stays a sensible size.
+// ---------------------------------------------------------------------------
+
+const FILE_PILL_PREVIEW = 6;
+
+function UserMessageFilePills({ files, hasText }: { files: string[]; hasText: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const overflow = files.length - FILE_PILL_PREVIEW;
+  const visible = expanded || overflow <= 0 ? files : files.slice(0, FILE_PILL_PREVIEW);
+  return (
+    <div className={`flex flex-wrap gap-1.5 px-4 ${hasText ? 'pt-3 pb-1' : 'py-3'}`}>
+      {visible.map((f, i) => (
+        <span
+          key={i}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/15 text-xs"
+        >
+          <Paperclip className="w-3 h-3 opacity-70" />
+          <span className="truncate max-w-[150px]">{f}</span>
+        </span>
+      ))}
+      {overflow > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="inline-flex items-center px-2 py-0.5 rounded-md bg-white/20 hover:bg-white/30 text-xs transition-colors"
+        >
+          {expanded ? 'show less' : `+${overflow} more`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AttachedFilesPreview — staged-attachment preview that sits above the
+// chat input. Used in both the home (no-session) input and the in-session
+// input. Same goal as UserMessageFilePills: when the user picks a folder
+// of thousands of files, do NOT render every pill — that pushes the
+// input bar off-screen and makes Send unreachable. Cap to a preview of
+// ~6 with a "+N more" toggle and a "clear all" escape hatch. Also nudge
+// the user toward the S3 upload script when the count gets silly.
+// ---------------------------------------------------------------------------
+
+const STAGED_PILL_PREVIEW = 6;
+// Threshold for the "use the script" hint. Browser multipart uploads of
+// many small files are slow on the backend (per-file S3 + Modal Volume
+// round-trips), so steer the user to upload_to_s3.py for big sets.
+const BULK_UPLOAD_HINT_THRESHOLD = 100;
+
+function humanBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function AttachedFilesPreview({
+  files,
+  onRemove,
+  onClearAll,
+  variant,
+}: {
+  files: File[];
+  onRemove: (i: number) => void;
+  onClearAll: () => void;
+  /** "home" = larger pills (above the centered welcome input).
+   *  "session" = compact pills (above the in-session input). */
+  variant: 'home' | 'session';
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (files.length === 0) return null;
+
+  const overflow = files.length - STAGED_PILL_PREVIEW;
+  const visible = expanded || overflow <= 0 ? files : files.slice(0, STAGED_PILL_PREVIEW);
+  const totalBytes = files.reduce((s, f) => s + f.size, 0);
+  const showHint = files.length >= BULK_UPLOAD_HINT_THRESHOLD;
+
+  const pillCls =
+    variant === 'home'
+      ? 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-gray-300'
+      : 'flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-gray-300';
+  const wrapCls = variant === 'home' ? 'flex flex-wrap gap-2' : 'flex flex-wrap gap-2 mb-2';
+
+  return (
+    <div className={variant === 'home' ? '' : 'mb-2'}>
+      {/* Summary row: total count + size + clear-all */}
+      <div className="flex items-center justify-between mb-1.5 text-[11px] text-gray-500">
+        <span>
+          {files.length} file{files.length === 1 ? '' : 's'} · {humanBytes(totalBytes)}
+        </span>
+        <button
+          type="button"
+          onClick={onClearAll}
+          className="px-1.5 py-0.5 rounded hover:bg-white/[0.06] text-gray-500 hover:text-gray-300 transition-colors"
+          title="Remove all attached files"
+        >
+          clear all
+        </button>
+      </div>
+
+      {/* Hint for huge folder uploads — browser POST is the slow path */}
+      {showHint && (
+        <div className="mb-1.5 px-2 py-1 rounded text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20">
+          That&apos;s a lot of files. The browser upload streams each one serially through the
+          backend — for &gt;100 files, you&apos;ll get dramatically faster results from{' '}
+          <code className="bg-black/40 px-1 rounded">upload_to_s3.py</code> + the &quot;Browse
+          S3&quot; attach option.
+        </div>
+      )}
+
+      <div className={wrapCls}>
+        {visible.map((f, i) => (
+          <div key={i} className={pillCls}>
+            <Paperclip className="w-3 h-3 text-gray-500" />
+            <span className="truncate max-w-[160px]">{f.name}</span>
+            <button
+              onClick={() => onRemove(i)}
+              title="Remove file"
+              className="p-0.5 hover:bg-white/[0.1] rounded transition-colors"
+            >
+              <X className="w-3 h-3 text-gray-500" />
+            </button>
+          </div>
+        ))}
+        {overflow > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="inline-flex items-center px-2.5 py-1 rounded-lg bg-white/[0.1] hover:bg-white/[0.15] border border-white/[0.08] text-xs text-gray-300 transition-colors"
+          >
+            {expanded ? 'show less' : `+${overflow} more`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // renderChatItem
 // ---------------------------------------------------------------------------
 
@@ -3626,19 +3794,7 @@ function renderChatItem(
       return (
         <div key={item.id} className="flex justify-end animate-fade-in">
           <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary-600 text-white text-sm overflow-hidden">
-            {hasFiles && (
-              <div className={`flex flex-wrap gap-1.5 px-4 ${hasText ? 'pt-3 pb-1' : 'py-3'}`}>
-                {files.map((f, i) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/15 text-xs"
-                  >
-                    <Paperclip className="w-3 h-3 opacity-70" />
-                    <span className="truncate max-w-[150px]">{f}</span>
-                  </span>
-                ))}
-              </div>
-            )}
+            {hasFiles && <UserMessageFilePills files={files} hasText={Boolean(hasText)} />}
             {hasText && (
               <div className="px-4 py-2.5 whitespace-pre-wrap break-words">
                 {tokens

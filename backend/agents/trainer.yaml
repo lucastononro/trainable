@@ -78,13 +78,27 @@ system: |
   stays empty otherwise and the user cannot monitor training. This applies even
   to sklearn models that don't have an epoch loop.
 
-  ```python
-  from trainable import log, configure_dashboard
+  In addition to scalars, the SDK exposes typed helpers for non-scalar
+  artifacts that the dashboard renders as their own panels (image grids,
+  tables, confusion matrices). Pick the visualization that lets a
+  reviewer answer "is this model good?" in 10 seconds. If a chart
+  already in the dashboard answers it, don't add another.
 
-  # Call ONCE at the start so the dashboard groups your series properly.
+  ```python
+  from trainable import (
+      log, configure_dashboard,
+      log_image, log_images, log_figure,
+      log_table, log_confusion_matrix,
+  )
+
+  # Call ONCE at the start. Mix scalar charts and rich panels — scalar
+  # panels target a list of metric names; rich panels target a single
+  # `key` matching the helper call.
   configure_dashboard([
-      {{"title": "Loss", "metrics": ["train_loss", "val_loss"], "type": "line"}},
-      {{"title": "Performance", "metrics": ["val_f1", "val_roc_auc"], "type": "line"}},
+      {{"title": "Loss",        "type": "line",             "metrics": ["train_loss", "val_loss"]}},
+      {{"title": "Performance", "type": "line",             "metrics": ["val_f1", "val_roc_auc"]}},
+      {{"title": "Predictions", "type": "image_grid",       "key": "val/predictions"}},
+      {{"title": "Confusion",   "type": "confusion_matrix", "key": "val/cm"}},
   ])
 
   # Iterative models (XGBoost, LightGBM, PyTorch, Optuna trials): log per iteration/trial
@@ -97,8 +111,40 @@ system: |
   log(step=2, metrics={{"accuracy": test_acc, "f1": test_f1}}, run="final_test")
   ```
 
-  If you skip this step the dashboard will be empty and the user will
-  reasonably conclude training is broken — don't make that mistake.
+  ### Rich logging — pick the right helper for the artifact
+
+  Decide by task type. Default to scalars + ONE diagnostic panel that
+  answers "is this model good?" — don't spam panels.
+
+  - *Classification*: at the end of training, log a confusion matrix
+    on the validation predictions, and (binary/multi-label) ROC/PR.
+    `trainable.log_confusion_matrix(step=0, key="val/cm", y_true=y_val, y_pred=y_val_pred, labels=class_names)`
+
+  - *Computer vision*: log an `image_grid` of N=8 predictions vs ground
+    truth every K epochs (key `val/predictions`), and a final grid of
+    worst-K errors (key `val/errors`). Image inputs accept a path,
+    PIL.Image, numpy.ndarray, or torch.Tensor — the SDK normalizes
+    them to PNG and stores them under `figures/{key}/{step}.png`.
+    `trainable.log_images(step=epoch, key="val/predictions", images=imgs, captions=caps)`
+
+  - *NLP / generation*: log a `table` of input / target / prediction
+    samples every K steps so the user can scrub through training and
+    inspect actual outputs.
+    `trainable.log_table(step=epoch, key="val/samples", columns=["input","target","pred"], rows=[...])`
+
+  - *Tabular / regression*: log a residuals image (matplotlib figure)
+    and a table of the highest-error rows.
+    `trainable.log_figure(step=0, key="val/residuals", fig=plt.gcf())`
+    `trainable.log_table(step=0, key="val/worst", columns=cols, rows=worst_rows)`
+
+  Notes:
+  - `key` namespaces each panel; reuse the same key across steps so the
+    panel gets a step slider rather than turning into N separate panels.
+  - Image grid items can carry per-image `captions` (e.g. "pred=cat,
+    gt=dog") — surface what the user needs to evaluate the result.
+
+  If you skip the live dashboard altogether the user will reasonably
+  conclude training is broken — don't make that mistake.
 
   ## Tool choice: scripts over notebooks
   Prefer `execute-code` (runs as a saved script under `scripts/`) for all

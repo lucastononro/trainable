@@ -12,6 +12,7 @@ import type {
   Mention,
   Artifact,
   MetricPoint,
+  LogEvent,
   ModelInfo,
   ProviderInfo,
   FileTreeNode,
@@ -270,6 +271,8 @@ export const api = {
   getArtifacts: (sessionId: string) => fetchJSON<Artifact[]>(`/sessions/${sessionId}/artifacts`),
 
   getMetrics: (sessionId: string) => fetchJSON<MetricPoint[]>(`/sessions/${sessionId}/metrics`),
+
+  getLogEvents: (sessionId: string) => fetchJSON<LogEvent[]>(`/sessions/${sessionId}/log_events`),
 
   getTasks: (sessionId: string) => fetchJSON<Task[]>(`/sessions/${sessionId}/tasks`),
 

@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import async_session, get_db
-from models import Artifact, Experiment, Message, Metric, Task
+from models import Artifact, Experiment, LogEvent, Message, Metric, Task
 from models import Session as SessionModel
 from schemas import ClarificationReply, MessageCreate, TaskCreate, TaskUpdate
 from services.agent import abort_agent, run_agent
@@ -271,6 +271,26 @@ async def get_metrics(
     q = q.order_by(Metric.step)
     result = await db.execute(q)
     return [m.to_dict() for m in result.scalars().all()]
+
+
+@router.get("/sessions/{session_id}/log_events")
+async def get_log_events(
+    session_id: str,
+    type: Optional[str] = None,
+    key: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Hydrate the dashboard with non-scalar log payloads (image grids,
+    tables, confusion matrices, …) on session reload. Mirrors
+    /sessions/{id}/metrics for the rich-payload pipeline."""
+    q = select(LogEvent).where(LogEvent.session_id == session_id)
+    if type:
+        q = q.where(LogEvent.type == type)
+    if key:
+        q = q.where(LogEvent.key == key)
+    q = q.order_by(LogEvent.id)
+    result = await db.execute(q)
+    return [le.to_dict() for le in result.scalars().all()]
 
 
 @router.get("/sessions/{session_id}/tasks")

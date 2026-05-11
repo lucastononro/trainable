@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, useCallback, useEffect } from 'react';
+import { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import {
   LineChart,
   Line,
@@ -25,7 +25,7 @@ import {
   EyeOff,
   List,
 } from 'lucide-react';
-import { MetricPoint, ChartConfig } from '@/lib/types';
+import { MetricPoint, ChartConfig, ChartConfigEntry, LogEvent, RichPanelType } from '@/lib/types';
 
 // Persisted UI preferences for the metrics tab — chart-first order,
 // compact summary by default, but the user's choice sticks across reloads.
@@ -67,7 +67,25 @@ function useLocalStorageState<T>(key: string, initial: T): [T, (v: T) => void] {
 interface MetricsTabProps {
   metricPoints: MetricPoint[];
   chartConfig: ChartConfig | null;
+  logEvents?: LogEvent[];
   state: string;
+}
+
+// A chart_config entry whose `type` is a rich panel kind (image_grid,
+// table, confusion_matrix, …). Rendered by the panel registry below.
+const RICH_PANEL_TYPES: RichPanelType[] = [
+  'image',
+  'image_grid',
+  'table',
+  'histogram',
+  'confusion_matrix',
+  'roc',
+  'pr',
+  'text',
+  'plotly',
+];
+function isRichPanelEntry(c: ChartConfigEntry): boolean {
+  return RICH_PANEL_TYPES.includes(c.type as RichPanelType);
 }
 
 interface MetricSummary {
@@ -87,6 +105,13 @@ interface ChartGroup {
   type: 'line' | 'bar' | 'area';
   data: Record<string, number>[];
   seriesKeys: string[];
+}
+
+interface RichPanel {
+  title: string;
+  type: RichPanelType;
+  key: string;
+  events: LogEvent[];
 }
 
 // ---------------------------------------------------------------------------
@@ -188,7 +213,12 @@ function ChartTooltip({ active, payload, label }: any) {
 // Component
 // ---------------------------------------------------------------------------
 
-export default function MetricsTab({ metricPoints, chartConfig, state }: MetricsTabProps) {
+export default function MetricsTab({
+  metricPoints,
+  chartConfig,
+  logEvents = [],
+  state,
+}: MetricsTabProps) {
   const [hiddenSeries, setHiddenSeries] = useState<Set<string>>(new Set());
   const [summaryView, setSummaryView] = useLocalStorageState<SummaryView>(
     SUMMARY_VIEW_STORAGE_KEY,
@@ -275,16 +305,20 @@ export default function MetricsTab({ metricPoints, chartConfig, state }: Metrics
 
       let gDefs: { title: string; type: 'line' | 'bar' | 'area'; seriesKeys: string[] }[];
       if (chartConfig && chartConfig.charts.length > 0) {
-        gDefs = chartConfig.charts.map((c) => {
+        // Skip rich panel entries (image_grid / table / cm / …) — they
+        // come through `richPanels` further down, not the scalar groups.
+        const scalarEntries = chartConfig.charts.filter((c) => !isRichPanelEntry(c));
+        gDefs = scalarEntries.map((c) => {
           const matchedKeys: string[] = [];
-          for (const metricName of c.metrics) {
+          for (const metricName of c.metrics || []) {
             for (const sk of allSeriesKeys) {
               if (sk === metricName || sk.startsWith(metricName + ' (')) {
                 if (!matchedKeys.includes(sk)) matchedKeys.push(sk);
               }
             }
           }
-          return { title: c.title, type: c.type || 'line', seriesKeys: matchedKeys };
+          const type = (c.type as 'line' | 'bar' | 'area') || 'line';
+          return { title: c.title, type, seriesKeys: matchedKeys };
         });
         const coveredKeys = new Set(gDefs.flatMap((g) => g.seriesKeys));
         const uncovered = allSeriesKeys.filter((k) => !coveredKeys.has(k));
@@ -340,8 +374,51 @@ export default function MetricsTab({ metricPoints, chartConfig, state }: Metrics
 
   const color = useCallback((key: string) => colorMap.get(key) || PALETTE[0], [colorMap]);
 
-  // ── Empty state ──
-  if (metricPoints.length === 0) {
+  // ── Rich panels: group log events by (key, type), then map to either a
+  // chart_config-pinned panel or an auto-emitted "Other" panel below. ──
+  const richPanels = useMemo(() => {
+    if (logEvents.length === 0) return [] as RichPanel[];
+
+    const byKey = new Map<string, LogEvent[]>();
+    for (const ev of logEvents) {
+      if (!byKey.has(ev.key)) byKey.set(ev.key, []);
+      byKey.get(ev.key)!.push(ev);
+    }
+    Array.from(byKey.values()).forEach((arr: LogEvent[]) => arr.sort((a, b) => a.step - b.step));
+
+    const configured: RichPanel[] = [];
+    const claimed = new Set<string>();
+    if (chartConfig?.charts?.length) {
+      for (const c of chartConfig.charts) {
+        if (!isRichPanelEntry(c) || !c.key) continue;
+        const events = byKey.get(c.key) || [];
+        if (events.length === 0) continue;
+        claimed.add(c.key);
+        configured.push({
+          title: c.title,
+          type: c.type as RichPanelType,
+          key: c.key,
+          events,
+        });
+      }
+    }
+
+    const auto: RichPanel[] = [];
+    Array.from(byKey.entries()).forEach(([key, events]: [string, LogEvent[]]) => {
+      if (claimed.has(key)) return;
+      auto.push({
+        title: key,
+        type: events[events.length - 1].type,
+        key,
+        events,
+      });
+    });
+
+    return [...configured, ...auto];
+  }, [logEvents, chartConfig]);
+
+  // ── Empty state — only shown when there's NEITHER scalars nor rich payloads ──
+  if (metricPoints.length === 0 && richPanels.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full px-8">
         <div className="w-16 h-16 rounded-2xl bg-white/[0.03] border border-white/[0.06] flex items-center justify-center mb-4">
@@ -423,6 +500,8 @@ export default function MetricsTab({ metricPoints, chartConfig, state }: Metrics
             />
           ),
         )}
+
+        {richPanels.length > 0 && <RichPanelsGrid panels={richPanels} />}
       </div>
     </div>
   );
@@ -750,5 +829,237 @@ function renderChart(chart: ChartGroup, visibleKeys: string[], getColor: (key: s
         />
       ))}
     </LineChart>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Rich panels — image grids, tables, confusion matrices.
+//
+// Renders any log_event types the agent emitted via trainable.log_image /
+// log_images / log_table / log_confusion_matrix. Each panel has a step
+// slider so the user can scrub through training to see how the model
+// improved over epochs.
+// ---------------------------------------------------------------------------
+
+function RichPanelsGrid({ panels }: { panels: RichPanel[] }) {
+  return (
+    <div className="grid grid-cols-1 2xl:grid-cols-2 gap-3">
+      {panels.map((p) => (
+        <RichPanelCard key={p.key} panel={p} />
+      ))}
+    </div>
+  );
+}
+
+function RichPanelCard({ panel }: { panel: RichPanel }) {
+  // Step slider — defaults to the latest event so the dashboard always
+  // reflects what just streamed in. Snaps to the actual logged step
+  // values rather than a continuous range so scrubbing is meaningful.
+  const steps = useMemo(
+    () => Array.from(new Set(panel.events.map((e) => e.step))).sort((a, b) => a - b),
+    [panel.events],
+  );
+  const [stepIdx, setStepIdx] = useState(steps.length - 1);
+  // Stick to the latest as new events arrive — when a fresh step shows
+  // up, jump the slider to it. The user can still scrub back; the
+  // ref tracks how many steps we'd seen so we only auto-advance on
+  // strict growth.
+  const lastSeenStepsRef = useRef(steps.length);
+  useEffect(() => {
+    if (steps.length > lastSeenStepsRef.current) {
+      setStepIdx(steps.length - 1);
+    }
+    lastSeenStepsRef.current = steps.length;
+  }, [steps.length]);
+  const safeIdx = Math.min(stepIdx, steps.length - 1);
+  const currentStep = steps[safeIdx];
+  const event = useMemo(
+    () => panel.events.find((e) => e.step === currentStep) || panel.events[panel.events.length - 1],
+    [panel.events, currentStep],
+  );
+
+  return (
+    <div className="bg-white/[0.02] border border-white/[0.06] rounded-lg overflow-hidden">
+      <div className="flex items-center justify-between px-3 py-2 border-b border-white/[0.04]">
+        <span className="text-[11px] font-semibold text-gray-400 truncate">{panel.title}</span>
+        <span className="text-[10px] text-gray-600 tabular-nums">
+          step {currentStep} · {steps.length} pt{steps.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      <div className="p-3">
+        {panel.type === 'image' || panel.type === 'image_grid' ? (
+          <ImageGridBody event={event} />
+        ) : panel.type === 'table' ? (
+          <TableBody event={event} />
+        ) : panel.type === 'confusion_matrix' ? (
+          <ConfusionMatrixBody event={event} />
+        ) : (
+          <UnsupportedBody type={panel.type} />
+        )}
+      </div>
+
+      {steps.length > 1 && (
+        <div className="px-3 pb-2.5 pt-1 border-t border-white/[0.04]">
+          <input
+            type="range"
+            min={0}
+            max={steps.length - 1}
+            value={safeIdx}
+            onChange={(e) => setStepIdx(Number(e.target.value))}
+            className="w-full accent-emerald-400 cursor-pointer"
+          />
+          <div className="flex justify-between text-[9px] text-gray-700 tabular-nums mt-0.5">
+            <span>step {steps[0]}</span>
+            <span>step {steps[steps.length - 1]}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+interface ImageItem {
+  path: string;
+  caption?: string;
+}
+
+function ImageGridBody({ event }: { event: LogEvent }) {
+  const items = ((event.payload?.items as ImageItem[]) || []).filter((i) => i && i.path);
+  if (items.length === 0) {
+    return <div className="text-[11px] text-gray-600">No images.</div>;
+  }
+  // Square-ish grid — auto column count based on item count.
+  const cols = items.length === 1 ? 1 : items.length <= 4 ? 2 : items.length <= 9 ? 3 : 4;
+  return (
+    <div
+      className="grid gap-1.5"
+      style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+    >
+      {items.map((it, i) => (
+        <figure key={i} className="bg-black/30 border border-white/[0.04] rounded overflow-hidden">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`/api/files/raw?path=${encodeURIComponent(it.path)}`}
+            alt={it.caption || ''}
+            className="w-full h-auto block object-contain max-h-[280px]"
+            loading="lazy"
+          />
+          {it.caption && (
+            <figcaption className="text-[10px] text-gray-500 px-2 py-1 truncate">
+              {it.caption}
+            </figcaption>
+          )}
+        </figure>
+      ))}
+    </div>
+  );
+}
+
+function TableBody({ event }: { event: LogEvent }) {
+  const cols = (event.payload?.columns as string[]) || [];
+  const rows = (event.payload?.rows as (string | number | null)[][]) || [];
+  const truncated = Boolean(event.payload?.truncated);
+  if (cols.length === 0 || rows.length === 0) {
+    return <div className="text-[11px] text-gray-600">Empty table.</div>;
+  }
+  return (
+    <div className="max-h-[320px] overflow-auto">
+      <table className="w-full text-[11px]">
+        <thead className="sticky top-0 bg-[#0a0a0a]">
+          <tr className="text-gray-500 text-[10px] uppercase tracking-wider">
+            {cols.map((c) => (
+              <th
+                key={c}
+                className="text-left py-1.5 px-2 font-medium border-b border-white/[0.04]"
+              >
+                {c}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="font-mono">
+          {rows.map((r, i) => (
+            <tr key={i} className="border-t border-white/[0.03] hover:bg-white/[0.02]">
+              {r.map((v, j) => (
+                <td key={j} className="py-1 px-2 tabular-nums text-gray-300 truncate max-w-[240px]">
+                  {v === null ? <span className="text-gray-700">—</span> : String(v)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {truncated && (
+        <div className="px-2 py-1.5 text-[10px] text-gray-600">
+          truncated — log_table caps the payload at 1k rows
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ConfusionMatrixBody({ event }: { event: LogEvent }) {
+  const labels = ((event.payload?.labels as string[]) || []).map(String);
+  const matrix = ((event.payload?.matrix as number[][]) || []).map((r) => r.map(Number));
+  if (labels.length === 0 || matrix.length === 0) {
+    return <div className="text-[11px] text-gray-600">No confusion data.</div>;
+  }
+  // Per-row totals so we can color cells by per-true-class proportion
+  // — that's the question this chart actually answers ("of all the
+  // true positives, what fraction did the model call positive?").
+  const rowTotals = matrix.map((r) => r.reduce((s, v) => s + v, 0) || 1);
+  // Color scale: white at 0 → emerald-500 at 1 (per-row proportion).
+  const cellColor = (val: number, total: number) => {
+    const p = total === 0 ? 0 : val / total;
+    const alpha = Math.max(0.04, Math.min(1, p));
+    return `rgba(16, 185, 129, ${alpha.toFixed(3)})`;
+  };
+  return (
+    <div className="overflow-auto">
+      <table className="text-[10px] border-separate" style={{ borderSpacing: 2 }}>
+        <thead>
+          <tr>
+            <th className="text-gray-600 font-medium px-1 py-0.5">true ↓ / pred →</th>
+            {labels.map((l) => (
+              <th
+                key={l}
+                className="text-gray-500 font-medium px-1.5 py-0.5 text-center max-w-[60px] truncate"
+              >
+                {l}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {labels.map((rowLabel, i) => (
+            <tr key={rowLabel}>
+              <th className="text-gray-500 font-medium px-1.5 py-0.5 text-right max-w-[60px] truncate">
+                {rowLabel}
+              </th>
+              {matrix[i].map((v, j) => (
+                <td
+                  key={j}
+                  className="text-center w-12 h-9 tabular-nums font-mono text-gray-100 rounded"
+                  style={{ backgroundColor: cellColor(v, rowTotals[i]) }}
+                  title={`true=${rowLabel} pred=${labels[j]}: ${v}`}
+                >
+                  {v}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function UnsupportedBody({ type }: { type: string }) {
+  return (
+    <div className="text-[11px] text-gray-600">
+      Renderer for <span className="font-mono text-gray-400">{type}</span> not yet implemented in
+      this build.
+    </div>
   );
 }

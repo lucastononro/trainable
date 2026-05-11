@@ -121,14 +121,51 @@ export interface MetricPoint {
   created_at: string;
 }
 
+// Scalar charts keep the original shape — `metrics` lists series names.
+// Rich panels (image_grid, table, confusion_matrix, ...) target a single
+// `key` instead, since their payload isn't a series of scalars.
+export type RichPanelType =
+  | 'image'
+  | 'image_grid'
+  | 'table'
+  | 'histogram'
+  | 'confusion_matrix'
+  | 'roc'
+  | 'pr'
+  | 'text'
+  | 'plotly';
+
 export interface ChartConfigEntry {
   title: string;
-  metrics: string[];
-  type: 'line' | 'bar' | 'area';
+  type: 'line' | 'bar' | 'area' | RichPanelType;
+  /** For scalar chart panels — list of metric names this panel groups. */
+  metrics?: string[];
+  /** For rich panels (image_grid / table / etc.) — the log_event key. */
+  key?: string;
 }
 
 export interface ChartConfig {
   charts: ChartConfigEntry[];
+}
+
+// Rich (non-scalar) log payload streamed from the agent. Shape of
+// `payload` is per-`type`; renderers narrow it inside the panel.
+export interface LogEvent {
+  id?: number;
+  step: number;
+  key: string;
+  type: RichPanelType;
+  stage?: string;
+  run_tag?: string | null;
+  payload: Record<string, unknown>;
+  created_at?: string;
+}
+
+// Per-key buffer of log events. Renderers index by step.
+export interface LogEventGroup {
+  key: string;
+  type: RichPanelType;
+  events: LogEvent[];
 }
 
 export type Stage = 'eda' | 'prep' | 'train';
