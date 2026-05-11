@@ -159,6 +159,8 @@ async def publish_artifacts(session_id: str, experiment_id: str, stage: str):
                             artifact_type = "metadata"
                         elif name.endswith(".md"):
                             artifact_type = "report"
+                        elif name.endswith(".html"):
+                            artifact_type = "html"
                         elif name.endswith((".png", ".jpg", ".jpeg", ".svg")):
                             artifact_type = "chart"
                         elif name.endswith((".parquet", ".csv")):

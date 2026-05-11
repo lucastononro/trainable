@@ -168,6 +168,19 @@ export interface LogEventGroup {
   events: LogEvent[];
 }
 
+// Agent-published HTML artifact rendered in a sandboxed iframe on the
+// canvas. The body lives on the volume at `path` and is fetched via
+// /api/files/raw — we never carry it in app state.
+export interface HtmlArtifact {
+  key: string;
+  title: string;
+  path: string;
+  size: number | null;
+  ts: number | null;
+  step: number | null;
+  stage?: string | null;
+}
+
 export type Stage = 'eda' | 'prep' | 'train';
 
 export type MentionKind = 'file' | 'session';
