@@ -11,15 +11,13 @@ import textwrap
 import time
 import urllib.request
 import webbrowser
+from importlib import metadata, resources
 from pathlib import Path
-
-REPO = "lucastononro/trainable"
-BRANCH = "main"
-RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 
 COMPOSE_FILE = "docker-compose.prod.yml"
 ENV_FILE = ".env"
 PROJECT_NAME = "trainable"
+PACKAGE_NAME = "trainable-ai"
 
 # Config lives in ~/.trainable so `trainable up` works from any directory.
 # Override via TRAINABLE_HOME env var for advanced users.
@@ -82,10 +80,33 @@ def prompt_choice(label: str, options: list[str]) -> int:
         warn(f"Please enter a number between 1 and {len(options)}")
 
 
-def download_file(filename: str, dest: Path):
-    url = f"{RAW_BASE}/{filename}"
-    urllib.request.urlretrieve(url, dest / filename)
-    success(f"Downloaded {filename}")
+def _cli_version() -> str:
+    """Return the installed wheel's version (matches the published image tag).
+
+    Falls back to "latest" if the package can't be introspected — happens
+    when running from a source checkout that hasn't been installed.
+    """
+    try:
+        return metadata.version(PACKAGE_NAME)
+    except metadata.PackageNotFoundError:
+        return "latest"
+
+
+def _write_compose_template(dest: Path) -> None:
+    """Write `docker-compose.prod.yml` from the template bundled in the wheel.
+
+    Called on every `trainable init` *and* every `trainable up` so existing
+    installs migrate to the env-var-tag-aware compose layout automatically.
+    """
+    template = resources.files("trainable_cli").joinpath(
+        "_templates", COMPOSE_FILE
+    )
+    (dest / COMPOSE_FILE).write_text(template.read_text(encoding="utf-8"))
+
+
+def write_compose_from_template(dest: Path) -> None:
+    _write_compose_template(dest)
+    success(f"Wrote {COMPOSE_FILE}")
 
 
 def check_docker():
@@ -344,11 +365,11 @@ def cmd_init():
     step(1, 4, "Checking prerequisites")
     check_docker()
 
-    # Step 2 — download compose file
-    step(2, 4, "Downloading docker-compose.prod.yml")
+    # Step 2 — write compose file from the wheel's bundled template
+    step(2, 4, "Writing docker-compose.prod.yml")
     if (dest / COMPOSE_FILE).exists():
         warn(f"{COMPOSE_FILE} already exists, overwriting")
-    download_file(COMPOSE_FILE, dest)
+    write_compose_from_template(dest)
 
     # Step 3 — wizard. If config exists, give the user three paths so they
     # don't lose previously-entered keys when adding a new provider.
@@ -493,7 +514,21 @@ def _maybe_spawn_browser_opener(url: str) -> None:
 def cmd_up():
     _require_config()
 
-    print(f"\n{GREEN}{BOLD}Starting trainable...{RESET}")
+    # Pin the docker images to this CLI's version: the published image tag
+    # `:0.0.4` ships from the same release that produced this wheel. Without
+    # this, the compose file's `:${TRAINABLE_*_TAG:-latest}` defaults would
+    # pick up whichever stale `:latest` is in the user's docker cache.
+    version = _cli_version()
+    os.environ.setdefault("TRAINABLE_BACKEND_TAG", version)
+    os.environ.setdefault("TRAINABLE_FRONTEND_TAG", version)
+
+    # Refresh the compose file from the wheel's bundled template every time —
+    # users who upgraded the wheel but never re-ran `init` would otherwise
+    # keep an old compose layout (no env-var-tag indirection) and miss the
+    # version pinning entirely. Quiet by default; init handles the noisy path.
+    _write_compose_template(CONFIG_DIR)
+
+    print(f"\n{GREEN}{BOLD}Starting trainable {version}...{RESET}")
     print(f"{DIM}  Frontend:      {FRONTEND_URL}")
     print("  Backend API:   http://localhost:8000")
     print(f"  MinIO Console: http://localhost:9001{RESET}\n")
