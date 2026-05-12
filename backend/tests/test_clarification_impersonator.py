@@ -117,6 +117,101 @@ async def test_impersonator_uses_claude_when_parent_is_claude(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_impersonator_routes_by_model_when_user_overrides(monkeypatch):
+    """When the user runs the parent on a model whose provider differs from
+    the agent YAML's `provider:`, the impersonator must route by model, not
+    by YAML. Previously chat.yaml's `provider=claude` would win even when
+    the user had picked a Gemini model, sending a Gemini model id to the
+    Claude SDK (exit 1)."""
+    import services.skills.registry as reg
+
+    skill = reg.get_skill("request-clarification")
+    handler_path = reg._SKILLS_ROOT / skill.slug / "handler.py"
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("rc_handler", handler_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    # YAML says claude, but the user picked a Gemini model.
+    _patch_agents(monkeypatch, provider_id="claude", default_model="claude-sonnet-4-6")
+
+    # Catalog: gemini-3.1-flash-lite → provider=gemini.
+    import services.usage as usage_mod
+
+    monkeypatch.setattr(
+        usage_mod,
+        "get_llm_catalog",
+        lambda: {"gemini-3.1-flash-lite": {"provider": "gemini"}},
+    )
+
+    requested = {}
+    provider = _RecordingProvider(reply_text="ok")
+
+    def get_provider(pid):
+        requested["id"] = pid
+        return provider
+
+    monkeypatch.setattr(mod.llm_factory, "get_provider", get_provider)
+
+    await mod._run_impersonator(
+        parent_agent_type="chat",
+        parent_thought_stream="",
+        question="?",
+        why_needed="",
+        asker_agent_type="orchestrator",
+        parent_model="gemini-3.1-flash-lite",
+    )
+
+    assert requested["id"] == "gemini", (
+        f"Expected per-model override to pick 'gemini'; got {requested.get('id')!r}. "
+        "This is the bug where the bundled Claude CLI received a Gemini model id."
+    )
+    assert provider.calls[0]["model"] == "gemini-3.1-flash-lite"
+
+
+@pytest.mark.asyncio
+async def test_impersonator_falls_back_to_yaml_when_model_not_in_catalog(
+    monkeypatch,
+):
+    """If the model isn't in the catalog (custom override, typo, etc.), use
+    the agent YAML's provider as before — don't crash and don't 'guess'."""
+    import services.skills.registry as reg
+
+    skill = reg.get_skill("request-clarification")
+    handler_path = reg._SKILLS_ROOT / skill.slug / "handler.py"
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("rc_handler", handler_path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+
+    _patch_agents(monkeypatch, provider_id="claude", default_model="claude-sonnet-4-6")
+    import services.usage as usage_mod
+
+    monkeypatch.setattr(usage_mod, "get_llm_catalog", lambda: {})
+
+    requested = {}
+    provider = _RecordingProvider(reply_text="ok")
+
+    def get_provider(pid):
+        requested["id"] = pid
+        return provider
+
+    monkeypatch.setattr(mod.llm_factory, "get_provider", get_provider)
+
+    await mod._run_impersonator(
+        parent_agent_type="chat",
+        parent_thought_stream="",
+        question="?",
+        why_needed="",
+        asker_agent_type="orchestrator",
+        parent_model="some-custom-id",
+    )
+    assert requested["id"] == "claude"
+
+
+@pytest.mark.asyncio
 async def test_impersonator_escalates_when_provider_unavailable(monkeypatch):
     """If the configured provider can't be resolved, escalate to the user."""
     import services.skills.registry as reg

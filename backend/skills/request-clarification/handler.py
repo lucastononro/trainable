@@ -134,12 +134,24 @@ async def _run_impersonator(
         asker_agent_type=asker_agent_type,
     )
 
-    provider_id = get_agent_provider(parent_agent_type)
     model = (
         parent_model
         or get_agent_default_model(parent_agent_type)
         or settings.claude_model
     )
+
+    # Mirror runner.py's per-model provider routing: when the user runs the
+    # parent on a non-YAML-default model (e.g. chat.yaml defaults to claude
+    # but the user picked gemini-3.1-flash-lite), route to the provider that
+    # owns that model instead of the YAML's. Otherwise we hand a Gemini
+    # model id to the Claude SDK and the bundled CLI exits 1.
+    from services.usage import get_llm_catalog
+
+    _model_entry = get_llm_catalog().get(model) or {}
+    _model_provider = (
+        _model_entry.get("provider") if isinstance(_model_entry, dict) else None
+    )
+    provider_id = _model_provider or get_agent_provider(parent_agent_type)
 
     try:
         provider = llm_factory.get_provider(provider_id)
