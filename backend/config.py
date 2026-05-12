@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     agent_abort_timeout: float = 5.0
 
     # -- Sandbox --
+    # Per-execution timeout for code running in a Modal sandbox. This is the
+    # single timeout that governs an agent's tool calls — when it fires, the
+    # sandbox is killed and the runner returns a tool_result describing the
+    # timeout so the model can adapt (smaller chunk, different approach) or
+    # stop. Override per project via the `default`/`training` sandbox
+    # profiles' `timeout` field.
     sandbox_timeout: int = Field(
         default=600, description="Per-execution timeout in Modal sandbox (seconds)"
     )
