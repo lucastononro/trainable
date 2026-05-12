@@ -28,8 +28,7 @@ from services.volume import (
 )
 
 from observability import agent_span, bind_log_context, clear_log_context
-from services.broadcaster import broadcaster
-from services.usage import compute_llm_cost, record_llm_usage
+from services.usage import record_llm_usage
 
 from .agents import (
     get_agent_default_model,
@@ -460,6 +459,7 @@ async def _drive_provider(
     agent_models: dict,
     publish,
     agent_span,
+    thinking_level: str | None = None,
 ) -> str:
     """Drive one agent run via the LLM factory.
 
@@ -588,6 +588,21 @@ async def _drive_provider(
 
     timeout_s = settings.agent_timeout_seconds
 
+    # Translate the resolved thinking level into provider-shaped kwargs once
+    # so both run-paths spread the same config. OpenAI consumes
+    # `reasoning_effort`; Claude/Gemini accept the kwargs and currently
+    # ignore them (extending those providers is tracked separately).
+    thinking_kwargs: dict = {}
+    if thinking_level:
+        try:
+            from services.llm.thinking import to_provider_config
+
+            thinking_kwargs = to_provider_config(
+                provider_id, thinking_level, model_id=model
+            )
+        except Exception as e:
+            logger.debug("thinking config build failed: %s", e)
+
     # ---- Claude / MCP path -------------------------------------------------
     if caps.supports_mcp:
         # claude-agent-sdk's query() bakes the toolset/MCP server in upfront
@@ -626,6 +641,7 @@ async def _drive_provider(
                 max_turns=settings.agent_max_turns,
                 timeout_seconds=timeout_s,
                 env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
+                **thinking_kwargs,
             ):
                 if event.kind == "text":
                     await _persist_text(event.data.get("text", ""))
@@ -700,6 +716,7 @@ async def _drive_provider(
                 max_turns=1,
                 timeout_seconds=timeout_s,
                 messages=messages,
+                **thinking_kwargs,
             ):
                 if event.kind == "text":
                     text = event.data.get("text", "")
@@ -850,130 +867,6 @@ async def run_agent(
         )
 
     collected_text = ""
-
-    # Per-turn usage accumulator. claude-agent-sdk yields usage in two
-    # different shapes depending on the surface:
-    #   - AssistantMessage.usage  → snake_case (input_tokens, output_tokens,
-    #     cache_*_input_tokens) — Anthropic API raw shape.
-    #   - ResultMessage.model_usage[model] → camelCase (inputTokens,
-    #     outputTokens, cacheReadInputTokens, cacheCreationInputTokens,
-    #     costUSD).
-    # We normalize to snake_case so the rest of the cost path is uniform
-    # regardless of provider/SDK convention.
-    _accumulated_usage: dict[str, dict] = {}
-
-    # camelCase → snake_case key map covering Anthropic + claude-agent-sdk
-    # variants. Add entries here when a new provider lands with a different
-    # casing convention; the rest of the stack stays unchanged.
-    _USAGE_KEY_ALIASES: dict[str, str] = {
-        "inputTokens": "input_tokens",
-        "outputTokens": "output_tokens",
-        "cacheReadInputTokens": "cache_read_input_tokens",
-        "cacheCreationInputTokens": "cache_creation_input_tokens",
-        "promptTokens": "input_tokens",
-        "completionTokens": "output_tokens",
-        "prompt_tokens": "input_tokens",
-        "completion_tokens": "output_tokens",
-        "costUSD": "cost_usd",
-    }
-
-    def _normalize_usage(u: dict | None) -> dict:
-        """Coerce a usage dict into snake_case Anthropic-shaped keys."""
-        if not isinstance(u, dict):
-            return {}
-        out: dict = {}
-        for k, v in u.items():
-            target = _USAGE_KEY_ALIASES.get(k, k)
-            try:
-                if target == "cost_usd":
-                    out[target] = float(v or 0.0)
-                else:
-                    out[target] = int(v or 0)
-            except (TypeError, ValueError):
-                continue
-        return out
-
-    def _bump_usage(model_name: str, turn_usage: dict | None) -> None:
-        norm = _normalize_usage(turn_usage)
-        if not norm:
-            return
-        bucket = _accumulated_usage.setdefault(model_name, {})
-        for k in (
-            "input_tokens",
-            "output_tokens",
-            "cache_creation_input_tokens",
-            "cache_read_input_tokens",
-        ):
-            v = norm.get(k, 0)
-            try:
-                bucket[k] = bucket.get(k, 0) + int(v)
-            except (TypeError, ValueError):
-                continue
-
-    # Live LLM cost feedback. claude-agent-sdk only fires ResultMessage at the
-    # END of an agent run, so without these per-turn broadcasts the LLM-cost
-    # tile in the badge sits at 0 for the entire run while the user watches
-    # `execute-code` rack up sandbox time. We broadcast a synthetic
-    # `usage_event` per AssistantMessage with that turn's usage delta. The
-    # canonical DB row still gets written at ResultMessage time via
-    # record_llm_usage(broadcast=False) — no double-count.
-    #
-    # Dedupe: the SDK occasionally emits AssistantMessage twice for one turn
-    # (streaming partial + complete). message_id is stable per turn; fall
-    # back to a usage-tuple key when missing.
-    _seen_partial_keys: set = set()
-
-    async def _broadcast_partial_llm(
-        message_obj,
-        turn_model: str,
-        norm_usage: dict,
-    ) -> None:
-        in_tok = int(norm_usage.get("input_tokens", 0) or 0)
-        out_tok = int(norm_usage.get("output_tokens", 0) or 0)
-        cache_r = int(norm_usage.get("cache_read_input_tokens", 0) or 0)
-        cache_w = int(norm_usage.get("cache_creation_input_tokens", 0) or 0)
-        if in_tok == 0 and out_tok == 0 and cache_r == 0 and cache_w == 0:
-            return  # nothing to report
-
-        mid = getattr(message_obj, "message_id", None) or getattr(
-            message_obj, "uuid", None
-        )
-        dedupe_key = mid or (turn_model, in_tok, out_tok, cache_r, cache_w)
-        if dedupe_key in _seen_partial_keys:
-            return
-        _seen_partial_keys.add(dedupe_key)
-
-        cost = compute_llm_cost(
-            model=turn_model,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            cache_read_input_tokens=cache_r,
-            cache_creation_input_tokens=cache_w,
-        )
-
-        try:
-            await broadcaster.publish(
-                session_id,
-                {
-                    "type": "usage_event",
-                    "data": {
-                        "kind": "llm",
-                        "agent_type": agent_type,
-                        "agent_id": agent_id,
-                        "provider": "claude",
-                        "model": turn_model,
-                        "input_tokens": in_tok,
-                        "output_tokens": out_tok,
-                        "cache_read_input_tokens": cache_r,
-                        "cache_creation_input_tokens": cache_w,
-                        "sandbox_seconds": 0.0,
-                        "cost_usd": cost,
-                        "is_partial": True,
-                    },
-                },
-            )
-        except Exception as e:
-            logger.debug("Partial usage broadcast failed: %s", e)
 
     bind_log_context(
         session_id=session_id,
@@ -1146,6 +1039,7 @@ async def run_agent(
             agent_models=agent_models or {},
             publish=_publish,
             agent_span=_agent_span,
+            thinking_level=thinking_level,
         )
         collected_text += drive_text
 

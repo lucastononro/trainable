@@ -39,20 +39,26 @@ def _bootstrap():
     function so the module loads even when optional SDKs aren't installed.
     Provider instantiation is lazy too — actual auth resolution and SDK
     import happen on first `get_provider()` call.
+
+    Only `ImportError` is suppressed (optional SDK missing). Anything else
+    raised at import time is a programming error in the provider module and
+    must surface — otherwise `get_provider("claude")` later reports
+    "Unknown LLM provider" with no hint that the real cause was an
+    AttributeError in `claude_provider.py`.
     """
     try:
         from .claude_provider import ClaudeProvider
 
         register_provider("claude", lambda: ClaudeProvider())
         register_provider("anthropic", lambda: ClaudeProvider())
-    except Exception as e:
+    except ImportError as e:
         logger.warning("ClaudeProvider unavailable: %s", e)
 
     try:
         from .openai_provider import OpenAIProvider
 
         register_provider("openai", lambda: OpenAIProvider())
-    except Exception as e:
+    except ImportError as e:
         logger.debug("OpenAIProvider not registered: %s", e)
 
     try:
@@ -60,14 +66,14 @@ def _bootstrap():
 
         register_provider("gemini", lambda: GeminiProvider())
         register_provider("google", lambda: GeminiProvider())
-    except Exception as e:
+    except ImportError as e:
         logger.debug("GeminiProvider not registered: %s", e)
 
     try:
         from .litellm_provider import LiteLLMProvider
 
         register_provider("litellm", lambda: LiteLLMProvider())
-    except Exception as e:
+    except ImportError as e:
         logger.debug("LiteLLMProvider not registered: %s", e)
 
 

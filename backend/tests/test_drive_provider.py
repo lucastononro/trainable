@@ -326,3 +326,131 @@ async def test_claude_path_passes_mcp_server(patched_runner, monkeypatch):
     assert call.get("messages") is None
     # Tool names were prefixed with the MCP namespace.
     assert any(t.startswith("mcp__trainable__") for t in call["tools"])
+
+
+# ---------------------------------------------------------------------------
+# Regression: thinking_level must be plumbed into provider.run().
+# Was computed in run_agent but never forwarded — UI picker had no effect.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_thinking_level_forwards_reasoning_effort_to_openai(
+    patched_runner, monkeypatch
+):
+    runner = patched_runner
+
+    monkeypatch.setattr(runner, "build_skill_entries", lambda **kw: {})
+    _stub_agent(monkeypatch, skills=[])
+
+    provider = _FakeProvider(
+        [[_FakeEvent("text", {"text": "ok"})]],
+        supports_mcp=False,
+    )
+    monkeypatch.setattr(runner.llm_factory, "get_provider", lambda _id: provider)
+
+    publish, _ = _make_publish()
+
+    await runner._drive_provider(
+        provider_id="openai",
+        prompt="hi",
+        system_prompt="sys",
+        model="gpt-5.5-mini",
+        agent_type="eda",
+        session_id="s",
+        experiment_id="e",
+        stage="eda",
+        depth=0,
+        agent_id="root",
+        parent_agent_id=None,
+        agent_skills=[],
+        sandbox_config={},
+        instructions="",
+        agent_models={},
+        publish=publish,
+        agent_span=MagicMock(),
+        thinking_level="high",
+    )
+
+    assert provider.calls, "provider.run was never called"
+    assert provider.calls[0].get("reasoning_effort") == "high"
+
+
+@pytest.mark.asyncio
+async def test_thinking_level_off_does_not_spread_kwargs(patched_runner, monkeypatch):
+    runner = patched_runner
+
+    monkeypatch.setattr(runner, "build_skill_entries", lambda **kw: {})
+    _stub_agent(monkeypatch, skills=[])
+
+    provider = _FakeProvider(
+        [[_FakeEvent("text", {"text": "ok"})]],
+        supports_mcp=False,
+    )
+    monkeypatch.setattr(runner.llm_factory, "get_provider", lambda _id: provider)
+
+    publish, _ = _make_publish()
+
+    await runner._drive_provider(
+        provider_id="openai",
+        prompt="hi",
+        system_prompt="sys",
+        # GPT-5 / o-series — "off" maps to "minimal", confirming the
+        # thinking config path actually fired.
+        model="gpt-5",
+        agent_type="eda",
+        session_id="s",
+        experiment_id="e",
+        stage="eda",
+        depth=0,
+        agent_id="root",
+        parent_agent_id=None,
+        agent_skills=[],
+        sandbox_config={},
+        instructions="",
+        agent_models={},
+        publish=publish,
+        agent_span=MagicMock(),
+        thinking_level="off",
+    )
+
+    assert provider.calls[0].get("reasoning_effort") == "minimal"
+
+
+@pytest.mark.asyncio
+async def test_no_thinking_level_means_no_kwarg(patched_runner, monkeypatch):
+    runner = patched_runner
+
+    monkeypatch.setattr(runner, "build_skill_entries", lambda **kw: {})
+    _stub_agent(monkeypatch, skills=[])
+
+    provider = _FakeProvider(
+        [[_FakeEvent("text", {"text": "ok"})]],
+        supports_mcp=False,
+    )
+    monkeypatch.setattr(runner.llm_factory, "get_provider", lambda _id: provider)
+
+    publish, _ = _make_publish()
+
+    await runner._drive_provider(
+        provider_id="openai",
+        prompt="hi",
+        system_prompt="sys",
+        model="gpt-5",
+        agent_type="eda",
+        session_id="s",
+        experiment_id="e",
+        stage="eda",
+        depth=0,
+        agent_id="root",
+        parent_agent_id=None,
+        agent_skills=[],
+        sandbox_config={},
+        instructions="",
+        agent_models={},
+        publish=publish,
+        agent_span=MagicMock(),
+        # thinking_level omitted → no provider kwargs
+    )
+
+    assert "reasoning_effort" not in provider.calls[0]

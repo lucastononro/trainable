@@ -46,11 +46,48 @@ def _extract_slug(code: str) -> str:
 
 
 def _script_filename(code: str, session_id: str) -> str:
-    """Generate a sequential, descriptive filename for a code execution."""
-    counter = _code_counter.get(session_id, 0) + 1
+    """Generate a sequential, descriptive filename for a code execution.
+
+    Counter lives in-process, so a backend restart mid-session would reset
+    it and collide with existing `step_NN_*.py` files on the volume. On
+    first call per session, we probe the on-volume `scripts/` directory
+    and seed the counter past the highest existing index. Best-effort —
+    if the probe fails (no volume, missing dir), we fall through to a
+    fresh 1.
+    """
+    counter = _code_counter.get(session_id)
+    if counter is None:
+        counter = _max_existing_step(session_id)
+    counter += 1
     _code_counter[session_id] = counter
     slug = _extract_slug(code)
     return f"step_{counter:02d}_{slug}.py"
+
+
+_STEP_RE = re.compile(r"^step_(\d{2,})_")
+
+
+def _max_existing_step(session_id: str) -> int:
+    """Return the highest `step_NN_*.py` index already on the volume, or 0."""
+    try:
+        from services.volume import get_volume
+
+        vol = get_volume()
+        entries = list(vol.listdir(f"/sessions/{session_id}/scripts"))
+    except Exception:
+        return 0
+    highest = 0
+    for entry in entries:
+        path = getattr(entry, "path", str(entry))
+        name = path.rsplit("/", 1)[-1]
+        m = _STEP_RE.match(name)
+        if not m:
+            continue
+        try:
+            highest = max(highest, int(m.group(1)))
+        except ValueError:
+            continue
+    return highest
 
 
 def activate_tools(session_id: str, agent_id: str, slugs: list[str]) -> list[str]:

@@ -51,7 +51,7 @@ class LiteLLMProvider(LLMProvider):
         supports_mcp=False,
         supports_prompt_cache=False,
         supports_streaming=True,
-        default_model="groq/llama-3.3-70b-versatile",
+        default_model="anthropic/claude-sonnet-4-6",
     )
 
     def __init__(self):

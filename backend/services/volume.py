@@ -165,19 +165,39 @@ async def ensure_session_workspace(session_id: str) -> None:
     await asyncio.get_running_loop().run_in_executor(None, _sync)
 
 
-async def write_to_volume(content: str, remote_path: str):
-    """Write text content directly to the Modal Volume (non-blocking)."""
+async def write_to_volume(content: str | bytes, remote_path: str):
+    """Write file content directly to the Modal Volume (non-blocking).
+
+    Accepts both `str` (text) and `bytes`. Every model-promotion caller hands
+    in bytes from `read_volume_file_async`; the original `mode="w"` raised
+    `TypeError` on every such call, which was swallowed by
+    `register_model_declared`'s best-effort copy block — so the advertised
+    `/projects/{pid}/models/.../v{N}/model.{ext}` registry artifact never
+    actually landed.
+    """
     vol = get_volume()
+    is_bytes = isinstance(content, (bytes, bytearray, memoryview))
 
     def _sync_write():
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            f.write(content)
-            tmp = f.name
+        if is_bytes:
+            f = tempfile.NamedTemporaryFile(mode="wb", suffix=".bin", delete=False)
+            payload = bytes(content)
+        else:
+            f = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            )
+            payload = content
         try:
+            with f:
+                f.write(payload)
+                tmp = f.name
             with vol.batch_upload(force=True) as batch:
                 batch.put_file(tmp, remote_path)
         finally:
-            os.unlink(tmp)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     await asyncio.get_running_loop().run_in_executor(None, _sync_write)
     logger.info("Wrote %dB -> %s", len(content), remote_path)

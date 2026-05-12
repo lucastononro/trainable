@@ -1,15 +1,8 @@
-"""Canvas artifact publishing — HTML/JS showcases the agent surfaces on
-the workspace canvas.
+"""Canvas HTML/JS artifact publishing.
 
-This is the *non-metrics* side of the canvas surface. Reports
-(`report_ready`) and rich-log panels (`log_event`) target the structured
-metrics dashboard; HTML artifacts published here are arbitrary
-presentation pages (Plotly dashboards, ydata-profiling reports, custom
-HTML/JS apps) rendered in a sandboxed iframe.
-
-Kept in its own module so it doesn't get tangled with the metrics
-parser pipeline — agents publish HTML via the `show-html` skill, not via
-stdout envelopes.
+Agents publish HTML pages (Plotly dashboards, profiling reports, custom
+apps) via the `show-html` skill; they're rendered on the workspace
+canvas in a sandboxed iframe.
 """
 
 from __future__ import annotations
