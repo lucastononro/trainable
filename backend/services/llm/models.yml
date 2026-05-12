@@ -236,63 +236,63 @@ models:
   # Thinking: Gemini 2.5+ accepts `thinking_config.thinking_budget` (int
   # tokens) — we map level → token budget in services/llm/thinking.py.
   #
-  # Gemini 3.x pricing — placeholder until Google publishes. Verify at
-  # https://ai.google.dev/pricing when promoting out of `experimental`.
-  gemini-3-1-pro:
-    name: Gemini 3.1 Pro
+  # Model IDs must match the strings the Gemini API expects (verified via
+  # client.models.list). Don't substitute dashes for dots — they're not
+  # equivalent. Pricing source: https://ai.google.dev/pricing
+  gemini-3.1-pro-preview:
+    name: Gemini 3.1 Pro Preview
     provider: gemini
     tier: premium
-    context: 2M
-    description: Google's latest flagship, very long context windows.
+    context: 1M
+    description: Google's latest flagship preview.
     experimental: true
-    input: 2.00          # placeholder — verify
-    output: 10.00
-    cache_read: 0.50     # ~0.25× input
+    input: 2.00          # prompts <= 200k
+    output: 12.00        # prompts <= 200k
+    cache_read: 0.20
     cache_creation: 0.0
     thinking:
       default: medium
       levels: ["off", low, medium, high]
 
-  gemini-3-1-flash:
-    name: Gemini 3.1 Flash
+  gemini-3.1-flash-lite:
+    name: Gemini 3.1 Flash-Lite
     provider: gemini
     tier: fast
     context: 1M
-    description: Latest fast Gemini. Cheap streaming for high-volume tasks.
-    experimental: true
-    input: 0.20
-    output: 0.80
-    cache_read: 0.05
+    description: Cost-efficient model for high-volume agentic tasks.
+    input: 0.25
+    output: 1.50
+    cache_read: 0.025
     cache_creation: 0.0
     thinking:
       default: low
       levels: ["off", low, medium]
 
-  gemini-3-0-pro:
-    name: Gemini 3.0 Pro
+  gemini-3-pro-preview:
+    name: Gemini 3 Pro Preview
     provider: gemini
     tier: premium
-    context: 2M
-    description: Gemini 3 generation flagship.
+    context: 1M
+    description: Gemini 3 generation flagship preview.
     experimental: true
-    input: 1.75          # placeholder
-    output: 8.00
-    cache_read: 0.44
+    input: 2.00          # placeholder — verify
+    output: 12.00
+    cache_read: 0.20
     cache_creation: 0.0
     thinking:
       default: medium
       levels: ["off", low, medium, high]
 
-  gemini-3-0-flash:
-    name: Gemini 3.0 Flash
+  gemini-3-flash-preview:
+    name: Gemini 3 Flash Preview
     provider: gemini
     tier: fast
     context: 1M
-    description: Gemini 3 fast tier.
+    description: Frontier-speed Gemini 3 with superior search/grounding.
     experimental: true
-    input: 0.15
-    output: 0.60
-    cache_read: 0.04
+    input: 0.50
+    output: 3.00
+    cache_read: 0.05
     cache_creation: 0.0
     thinking:
       default: low
@@ -302,11 +302,11 @@ models:
     name: Gemini 2.5 Pro
     provider: gemini
     tier: standard
-    context: 2M
+    context: 1M
     description: Gemini 2.5 flagship. Reliable choice for long context.
-    input: 1.25
-    output: 5.00
-    cache_read: 0.31
+    input: 1.25         # prompts <= 200k
+    output: 10.00       # prompts <= 200k
+    cache_read: 0.125
     cache_creation: 0.0
     thinking:
       # 2.5 Pro thinking_budget range is 128–32,768; cannot disable.
@@ -318,10 +318,24 @@ models:
     provider: gemini
     tier: fast
     context: 1M
-    description: Cheapest streaming model. Good for EDA on cost-sensitive runs.
+    description: Hybrid reasoning model with thinking budgets.
+    input: 0.30
+    output: 2.50
+    cache_read: 0.03
+    cache_creation: 0.0
+    thinking:
+      default: "off"
+      levels: ["off", low, medium]
+
+  gemini-2.5-flash-lite:
+    name: Gemini 2.5 Flash-Lite
+    provider: gemini
+    tier: fast
+    context: 1M
+    description: Smallest and most cost-effective 2.5 model. Built for scale.
     input: 0.10
     output: 0.40
-    cache_read: 0.025
+    cache_read: 0.01
     cache_creation: 0.0
     thinking:
       default: "off"

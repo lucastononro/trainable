@@ -48,7 +48,6 @@ def _import_litellm():
 class LiteLLMProvider(LLMProvider):
     capabilities = ProviderCapabilities(
         name="litellm",
-        supports_subagents=False,
         supports_mcp=False,
         supports_prompt_cache=False,
         supports_streaming=True,

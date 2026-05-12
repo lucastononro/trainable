@@ -29,16 +29,30 @@ class LLMEvent:
 
     @classmethod
     def tool_call(
-        cls, *, tool_name: str, tool_call_id: str, arguments: dict
+        cls,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+        arguments: dict,
+        provider_metadata: dict | None = None,
     ) -> "LLMEvent":
-        return cls(
-            "tool_call",
-            {
-                "tool_name": tool_name,
-                "tool_call_id": tool_call_id,
-                "arguments": arguments,
-            },
-        )
+        """Construct a tool_call event.
+
+        `provider_metadata` is an opaque per-call bag the runner stores on
+        the assistant message and passes back to the provider on the next
+        turn. It's how providers thread their own continuation tokens
+        through the runner without leaking them into the abstraction.
+        Gemini 3 uses this for `thought_signature` — without it, multi-turn
+        function calls are rejected with INVALID_ARGUMENT.
+        """
+        data: dict[str, Any] = {
+            "tool_name": tool_name,
+            "tool_call_id": tool_call_id,
+            "arguments": arguments,
+        }
+        if provider_metadata:
+            data["provider_metadata"] = provider_metadata
+        return cls("tool_call", data)
 
     @classmethod
     def tool_result(
@@ -80,7 +94,6 @@ class ProviderCapabilities:
     """What a provider can do. Used by the runner to gate features."""
 
     name: str
-    supports_subagents: bool = False
     supports_mcp: bool = False
     supports_prompt_cache: bool = False
     supports_streaming: bool = True
