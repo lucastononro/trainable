@@ -276,6 +276,90 @@ class TestActiveToolsState:
         assert get_active_tools("sess", "agent") == set()
 
 
+class TestScriptFilenameSeeding:
+    """Regression for A12: in-process `_code_counter` reset on restart
+    used to collide with `step_NN_*.py` files already on the volume.
+    After the fix, the counter seeds from the highest on-volume index
+    on first call per session.
+    """
+
+    def setup_method(self):
+        from services.skills import state
+
+        state._code_counter.clear()
+
+    def teardown_method(self):
+        from services.skills import state
+
+        state._code_counter.clear()
+
+    def test_seeds_counter_past_existing_step_files(self, monkeypatch):
+        from services.skills import state
+
+        class _FakeEntry:
+            def __init__(self, path: str):
+                self.path = path
+
+        fake_listing = [
+            _FakeEntry("/sessions/abc/scripts/step_01_load.py"),
+            _FakeEntry("/sessions/abc/scripts/step_05_train.py"),
+            _FakeEntry("/sessions/abc/scripts/step_07_eval.py"),
+            _FakeEntry("/sessions/abc/scripts/notes.md"),
+        ]
+
+        class _FakeVolume:
+            def listdir(self, path):
+                assert path == "/sessions/abc/scripts"
+                return iter(fake_listing)
+
+        monkeypatch.setattr(
+            "services.volume.get_volume", lambda: _FakeVolume(), raising=True
+        )
+
+        # No prior in-process counter — simulates fresh backend after restart.
+        name = state._script_filename("print('hello')", "abc")
+        # Highest existing was 07 → next call must produce 08.
+        assert name.startswith("step_08_"), name
+
+    def test_falls_back_to_one_when_volume_empty(self, monkeypatch):
+        from services.skills import state
+
+        class _FakeVolume:
+            def listdir(self, path):
+                return iter([])
+
+        monkeypatch.setattr(
+            "services.volume.get_volume", lambda: _FakeVolume(), raising=True
+        )
+
+        name = state._script_filename("# first run", "fresh-session")
+        assert name.startswith("step_01_"), name
+
+    def test_in_process_counter_takes_precedence_over_volume(self, monkeypatch):
+        """After the first call seeds from the volume, subsequent calls
+        increment the in-memory counter without re-probing — otherwise
+        we'd pay a Modal round-trip per step."""
+        from services.skills import state
+
+        probes = {"n": 0}
+
+        class _FakeVolume:
+            def listdir(self, path):
+                probes["n"] += 1
+                return iter([])
+
+        monkeypatch.setattr(
+            "services.volume.get_volume", lambda: _FakeVolume(), raising=True
+        )
+
+        state._script_filename("# a", "sid")
+        state._script_filename("# b", "sid")
+        state._script_filename("# c", "sid")
+        # Volume listdir only on the first call; the next two read from
+        # the in-process counter.
+        assert probes["n"] == 1
+
+
 class TestUseSkillActivation:
     """Drive the use-skill handler against a tmp skills tree to verify it
     activates declared `enables` and surfaces them in the response text."""

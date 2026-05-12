@@ -51,3 +51,30 @@ Statuses: `open` · `fixing` · `fixed (<commit>)` · `deferred` · `wontfix`
 ## Rollout
 
 This document evolves with the work. Each fixed row gets the commit SHA appended once it lands. Deferred rows stay here until they're either upgraded to `fixing` or graduated to dedicated issues.
+
+## Validation coverage
+
+Every `fixing`/`fixed` row above has at least one of: a regression unit test, an experiment script under `backend/scripts/bug_validation/`, or both. Mapping:
+
+| Bug | Regression test | Experiment script |
+|---|---|---|
+| A4 | (none — tsc green) | — |
+| A5 | `test_llm_factory.py::test_bootstrap_does_not_swallow_non_import_errors` | `exp_factory_narrow_except.py` |
+| A6 | `test_llm_factory.py::test_litellm_default_model_is_claude_sonnet` | — |
+| A8 | (style; existing test_drive_provider exercises the new with-block) | `exp_sandbox_span_exit.py` |
+| A9 | (style only) | — |
+| A12 | `test_skill_registry.py::TestScriptFilenameSeeding` (3 cases) | `exp_step_filename_seeding.py` |
+| B1 | `test_volume_write.py` (2 cases) | `exp_write_to_volume_bytes.py` |
+| B2 | `test_validator.py::test_validate_train_output_resolves_report_via_artifact_row` | `exp_validator_await.py` |
+| B3 | `test_drive_provider.py::test_thinking_level_*` (3 cases) | `exp_thinking_plumbing.py` |
+| B6 | (existing suite catches the regression — no new test) | — |
+
+Run all scripts:
+
+```bash
+cd backend
+for f in scripts/bug_validation/exp_*.py; do
+  echo "===== $f ====="
+  .venv/bin/python "$f" || { echo "FAILED: $f"; exit 1; }
+done
+```
