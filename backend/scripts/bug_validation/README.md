@@ -1,7 +1,7 @@
 # Bug-fix validation scripts
 
 One-off scripts that demonstrate the expected behavior of each fix in PR #83
-(see `docs/BUGS.md`). They are not part of the test suite — run them by hand
+(see `docs/pre-release-v0.0.3-bugs.md`). They are not part of the test suite — run them by hand
 when you want a live, end-to-end-ish trace of what the fix does.
 
 Each script:
