@@ -121,7 +121,6 @@ def _make_sdk_client(creds: Credentials):
 class OpenAIProvider(LLMProvider):
     capabilities = ProviderCapabilities(
         name="openai",
-        supports_subagents=False,
         supports_mcp=False,
         supports_prompt_cache=False,
         supports_streaming=True,

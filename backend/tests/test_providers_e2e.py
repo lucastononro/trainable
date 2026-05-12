@@ -151,7 +151,7 @@ async def test_gemini_oneshot():
         p,
         prompt="Reply with exactly: PONG",
         system="You are a smoke test.",
-        model=os.getenv("E2E_GEMINI_MODEL", "gemini-2.0-flash-exp"),
+        model=os.getenv("E2E_GEMINI_MODEL", "gemini-2.5-flash"),
     )
     assert "PONG" in text.upper(), f"got: {text!r}"
 
@@ -278,6 +278,214 @@ async def test_openai_tool_call_loop():
         if event.kind == "text":
             final += event.data.get("text", "")
 
+    assert "42" in final, f"expected 42 in {final!r}"
+
+
+@requires("gemini")
+@pytest.mark.asyncio
+async def test_gemini_tool_call_loop():
+    """Same multi-turn tool round-trip as the OpenAI version, but against
+    Gemini — proves the runner-managed loop survives across two calls.
+
+    Regression guard: prior to the message-translation fix, Gemini would
+    re-see only the original prompt on turn 2 (its provider ignored the
+    `messages=` kwarg), and would loop on the same tool call until
+    `agent_max_turns` ran out.
+    """
+    import json
+
+    from services.llm.factory import get_provider
+
+    p = get_provider("gemini")
+    model = os.getenv("E2E_GEMINI_MODEL", "gemini-2.5-flash")
+
+    tools = [
+        {
+            "name": "add",
+            "description": "Return a+b.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                "required": ["a", "b"],
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "system",
+            "content": "Use the `add` tool to compute. Then reply with the integer answer alone.",
+        },
+        {"role": "user", "content": "What is 14 + 28?"},
+    ]
+
+    # Round 1: expect a tool_call.
+    pending = []
+    async for event in p.run(
+        prompt="",
+        system_prompt="",
+        model=model,
+        tools=tools,
+        max_turns=1,
+        timeout_seconds=60,
+        messages=messages,
+    ):
+        if event.kind == "tool_call":
+            pending.append(event.data)
+
+    assert pending, "expected Gemini to call `add`"
+    call = pending[0]
+    assert call["tool_name"] == "add"
+    a, b = call["arguments"].get("a", 0), call["arguments"].get("b", 0)
+    result = a + b
+
+    # Round 2: feed assistant + tool result back via `messages`.
+    messages.append(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call["tool_call_id"],
+                    "type": "function",
+                    "function": {
+                        "name": "add",
+                        "arguments": json.dumps(call["arguments"]),
+                    },
+                }
+            ],
+        }
+    )
+    messages.append(
+        {"role": "tool", "tool_call_id": call["tool_call_id"], "content": str(result)}
+    )
+
+    final = ""
+    saw_repeat_call = False
+    async for event in p.run(
+        prompt="",
+        system_prompt="",
+        model=model,
+        tools=tools,
+        max_turns=1,
+        timeout_seconds=60,
+        messages=messages,
+    ):
+        if event.kind == "text":
+            final += event.data.get("text", "")
+        if event.kind == "tool_call":
+            saw_repeat_call = True
+
+    assert not saw_repeat_call, (
+        "Gemini called `add` again on turn 2 — message history was not "
+        "delivered to the SDK. This is the infinite-loop bug."
+    )
+    assert "42" in final, f"expected 42 in {final!r}"
+
+
+@requires("gemini")
+@pytest.mark.asyncio
+async def test_gemini_3_tool_call_preserves_thought_signature():
+    """Gemini 3 stamps a `thought_signature` on each function_call Part
+    and 400s if we drop it on the next turn. This test runs the same
+    tool round-trip against a 3.x model — without signature preservation
+    it fails with INVALID_ARGUMENT before the model can answer.
+    """
+    import json
+
+    from services.llm.factory import get_provider
+
+    p = get_provider("gemini")
+    model = os.getenv("E2E_GEMINI_3_MODEL", "gemini-3.1-flash-lite")
+
+    tools = [
+        {
+            "name": "add",
+            "description": "Return a+b.",
+            "input_schema": {
+                "type": "object",
+                "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+                "required": ["a", "b"],
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "system",
+            "content": "Use the `add` tool. Then reply with the integer answer alone.",
+        },
+        {"role": "user", "content": "What is 14 + 28?"},
+    ]
+
+    # Round 1: capture the tool_call AND its provider_metadata.
+    pending = []
+    async for event in p.run(
+        prompt="",
+        system_prompt="",
+        model=model,
+        tools=tools,
+        max_turns=1,
+        timeout_seconds=60,
+        messages=messages,
+    ):
+        if event.kind == "tool_call":
+            pending.append(event.data)
+
+    assert pending, "expected Gemini 3 to call `add`"
+    call = pending[0]
+    assert call["tool_name"] == "add"
+    # Gemini 3 MUST attach a thought_signature.
+    assert call.get("provider_metadata"), (
+        "Gemini 3 should emit provider_metadata with the thought_signature"
+    )
+    assert call["provider_metadata"].get("thought_signature"), (
+        "thought_signature must be present for Gemini 3 round-trip to work"
+    )
+
+    a, b = call["arguments"].get("a", 0), call["arguments"].get("b", 0)
+    result = a + b
+
+    messages.append(
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": call["tool_call_id"],
+                    "type": "function",
+                    "function": {
+                        "name": "add",
+                        "arguments": json.dumps(call["arguments"]),
+                    },
+                    "_provider_metadata": call["provider_metadata"],
+                }
+            ],
+        }
+    )
+    messages.append(
+        {"role": "tool", "tool_call_id": call["tool_call_id"], "content": str(result)}
+    )
+
+    final = ""
+    saw_error = False
+    async for event in p.run(
+        prompt="",
+        system_prompt="",
+        model=model,
+        tools=tools,
+        max_turns=1,
+        timeout_seconds=60,
+        messages=messages,
+    ):
+        if event.kind == "text":
+            final += event.data.get("text", "")
+        if event.kind == "error":
+            saw_error = True
+            print(f"provider error: {event.data.get('message')}")
+
+    assert not saw_error, (
+        "Gemini 3 rejected the round-trip — thought_signature was likely "
+        "dropped between turns."
+    )
     assert "42" in final, f"expected 42 in {final!r}"
 
 

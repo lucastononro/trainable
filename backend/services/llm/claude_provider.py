@@ -95,7 +95,6 @@ def _is_empty(usage: dict | None) -> bool:
 class ClaudeProvider(LLMProvider):
     capabilities = ProviderCapabilities(
         name="claude",
-        supports_subagents=True,
         supports_mcp=True,
         supports_prompt_cache=True,
         supports_streaming=True,

@@ -660,8 +660,10 @@ async def _drive_provider(
         return collected_text
 
     # ---- Non-Claude / runner-managed tool loop -----------------------------
-    # OpenAI/LiteLLM message shape; Gemini provider also accepts these but
-    # without function-result re-injection (single-pass for Gemini in v1).
+    # OpenAI/LiteLLM/Gemini path. Each provider translates this Chat-
+    # Completions-shaped `messages` list into its native conversation
+    # shape, so the runner can re-inject tool results without caring
+    # which SDK is downstream.
     messages: list[dict] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": prompt},
@@ -710,7 +712,14 @@ async def _drive_provider(
                         event.data.get("tool_call_id") or f"call_{uuid.uuid4().hex[:8]}"
                     )
                     args = event.data.get("arguments", {}) or {}
-                    pending_calls.append({"id": call_id, "name": name, "args": args})
+                    # Opaque per-provider continuation metadata (e.g. Gemini
+                    # 3's thought_signature). The runner doesn't read it —
+                    # we just preserve it on the assistant message so the
+                    # provider can restore it on the next turn.
+                    pmeta = event.data.get("provider_metadata")
+                    pending_calls.append(
+                        {"id": call_id, "name": name, "args": args, "pmeta": pmeta}
+                    )
                     await _persist_tool_call(name, call_id, args)
                 elif event.kind == "usage":
                     # Partial events are per-AssistantMessage deltas the
@@ -743,6 +752,12 @@ async def _drive_provider(
                             "name": c["name"],
                             "arguments": json.dumps(c["args"]),
                         },
+                        # `_provider_metadata` is namespaced with an
+                        # underscore so providers that don't use it (OpenAI,
+                        # LiteLLM) can ignore the unknown key safely.
+                        **(
+                            {"_provider_metadata": c["pmeta"]} if c.get("pmeta") else {}
+                        ),
                     }
                     for c in pending_calls
                 ]
