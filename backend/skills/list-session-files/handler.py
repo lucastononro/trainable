@@ -20,7 +20,11 @@ from sqlalchemy import select
 from db import async_session
 from models import Experiment
 from models import Session as SessionModel
-from services.volume import listdir_async, reload_volume_async
+from services.volume import (
+    listdir_async,
+    reload_volume_async,
+    should_ignore_workspace_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +122,8 @@ def create_handler(session_id: str, experiment_id: str, publish_fn, **kwargs):
             if entry.type.name != "FILE":
                 continue
             path = entry.path
+            if should_ignore_workspace_path(path):
+                continue
             rel = (
                 path[len(workspace) + 1 :] if path.startswith(workspace + "/") else path
             )

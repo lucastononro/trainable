@@ -15,6 +15,38 @@ logger = logging.getLogger(__name__)
 
 _volume = None
 
+# Path segments hidden from user-facing file listings (tree route, S3 browser,
+# list-session-files skill). The agent still writes them via execute-code; we
+# just don't surface them. Match by whole segment, not glob suffix.
+WORKSPACE_IGNORE_SEGMENTS: frozenset[str] = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".ipynb_checkpoints",
+        ".DS_Store",
+        ".git",
+    }
+)
+WORKSPACE_IGNORE_SUFFIXES: tuple[str, ...] = (".pyc", ".pyo", ".pyd", ".egg-info")
+
+
+def should_ignore_workspace_path(path: str) -> bool:
+    """Return True if `path` is build noise the user should not see.
+
+    Splits on `/` and checks every segment. A path is ignored if any segment
+    matches `WORKSPACE_IGNORE_SEGMENTS` or its basename ends with any
+    `WORKSPACE_IGNORE_SUFFIXES`.
+    """
+    if not path:
+        return False
+    parts = [p for p in path.split("/") if p]
+    if any(p in WORKSPACE_IGNORE_SEGMENTS for p in parts):
+        return True
+    basename = parts[-1] if parts else ""
+    return basename.endswith(WORKSPACE_IGNORE_SUFFIXES)
+
 
 def get_volume():
     """Return a lazily-initialized Modal Volume."""

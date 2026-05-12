@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from config import settings
 from services.s3_client import get_s3_client, get_s3_external_endpoint
+from services.volume import should_ignore_workspace_path
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -44,6 +45,7 @@ async def list_objects(bucket: str, prefix: Optional[str] = ""):
         folders = [
             {"name": p["Prefix"].rstrip("/").split("/")[-1], "prefix": p["Prefix"]}
             for p in response.get("CommonPrefixes", [])
+            if not should_ignore_workspace_path(p["Prefix"])
         ]
         files = [
             {
@@ -54,6 +56,7 @@ async def list_objects(bucket: str, prefix: Optional[str] = ""):
             }
             for obj in response.get("Contents", [])
             if obj["Key"] != prefix
+            and not should_ignore_workspace_path(obj["Key"])
         ]
 
         return {"bucket": bucket, "prefix": prefix, "folders": folders, "files": files}
