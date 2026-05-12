@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import get_db
-from models import Experiment, Project
+from models import Experiment, Project, RegisteredModel
 from models import Session as SessionModel
 from schemas import ProjectCreate, ProjectUpdate
 from services.s3_client import get_s3_client
@@ -216,10 +216,21 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
     orphan the files. If storage cleanup succeeds but the DB commit fails,
     the caller gets the error; the files are gone but that's idempotent.
     """
+    # Eager-load both the experiment chain AND registered_models →
+    # deployments so SQLAlchemy can flush the cascading deletes in
+    # dependency order. Without selectinload on `deployments`, Postgres
+    # raises ForeignKeyViolationError on registered_models when a
+    # deployment still references the model — the ORM cascade only
+    # rewrites delete order if the child rows are loaded.
     result = await db.execute(
         select(Project)
         .where(Project.id == project_id)
-        .options(selectinload(Project.experiments))
+        .options(
+            selectinload(Project.experiments),
+            selectinload(Project.registered_models).selectinload(
+                RegisteredModel.deployments
+            ),
+        )
     )
     project = result.scalar_one_or_none()
     if not project:

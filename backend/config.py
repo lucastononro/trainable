@@ -31,7 +31,7 @@ class Settings(BaseSettings):
     modal_volume_name: str = "trainable-data"
 
     # -- Claude / Agent --
-    claude_model: str = "claude-opus-4-6"
+    claude_model: str = "claude-sonnet-4-6"
     claude_code_oauth_token: str = ""
     agent_max_turns: int = 30
     agent_timeout_seconds: int = Field(
@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     agent_abort_timeout: float = 5.0
 
     # -- Sandbox --
+    # Per-execution timeout for code running in a Modal sandbox. This is the
+    # single timeout that governs an agent's tool calls — when it fires, the
+    # sandbox is killed and the runner returns a tool_result describing the
+    # timeout so the model can adapt (smaller chunk, different approach) or
+    # stop. Override per project via the `default`/`training` sandbox
+    # profiles' `timeout` field.
     sandbox_timeout: int = Field(
         default=600, description="Per-execution timeout in Modal sandbox (seconds)"
     )
@@ -62,6 +68,20 @@ class Settings(BaseSettings):
 
     # -- Logging --
     log_level: str = "INFO"
+
+    # -- Observability (OpenTelemetry + Sentry) --
+    # All optional. When unset, telemetry init is a no-op.
+    otel_service_name: str = "trainable-backend"
+    otel_service_version: str = "0.1.0"
+    otel_exporter_otlp_endpoint: Optional[str] = None
+    # "grpc" (default OTLP/gRPC port 4317) or "http/protobuf" (port 4318)
+    otel_exporter_otlp_protocol: str = "grpc"
+    otel_resource_attributes: Optional[str] = None  # comma-separated k=v pairs
+    otel_traces_sampler_ratio: float = 1.0  # 0.0 to 1.0 — fraction sampled
+
+    sentry_dsn: Optional[str] = None
+    sentry_environment: Optional[str] = None
+    sentry_traces_sample_rate: float = 0.1
 
 
 settings = Settings()

@@ -2,7 +2,7 @@
 
 import logging
 
-from sqlalchemy import inspect, text
+from sqlalchemy import event, inspect, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -21,6 +21,19 @@ if not settings.database_url.startswith("sqlite"):
 
 engine = create_async_engine(settings.database_url, **_engine_kwargs)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+
+# SQLite doesn't enforce FK constraints unless PRAGMA foreign_keys=ON is set
+# per connection. Without this, ON DELETE CASCADE is silently a no-op,
+# leaving orphan rows after parent deletes (and breaking our tests). Postgres
+# enforces FKs unconditionally so this listener is a SQLite-only concern.
+if settings.database_url.startswith("sqlite"):
+
+    @event.listens_for(engine.sync_engine, "connect")
+    def _sqlite_fk_pragma(dbapi_conn, _record):
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA foreign_keys=ON")
+        cur.close()
 
 
 class Base(DeclarativeBase):
@@ -146,6 +159,256 @@ def _run_migrations(connection):
             logger.info("[DB] Wiped %d experiments", orphans)
 
     # ------------------------------------------------------------------
+    # FK upgrade: usage_events.session_id ON DELETE CASCADE.
+    # The original FK was created without a delete action, so deleting a
+    # session that has any usage_events rows fails with FK violation —
+    # which makes "delete chat" in the UI fail for any session that
+    # produced LLM/sandbox events. The model now declares CASCADE so
+    # fresh DBs are fine; this block migrates pre-existing Postgres DBs.
+    # SQLite doesn't support DROP/ADD CONSTRAINT in-place; we skip it
+    # because tests recreate the schema each run via create_all.
+    # ------------------------------------------------------------------
+    if connection.dialect.name == "postgresql" and insp.has_table("usage_events"):
+        try:
+            rule = connection.execute(
+                text(
+                    "SELECT confdeltype FROM pg_constraint "
+                    "WHERE conname = 'usage_events_session_id_fkey'"
+                )
+            ).scalar()
+            # confdeltype: 'a'=NO ACTION, 'r'=RESTRICT, 'c'=CASCADE,
+            # 'n'=SET NULL, 'd'=SET DEFAULT. Migrate anything that's not CASCADE.
+            if rule and rule != "c":
+                connection.execute(
+                    text(
+                        "ALTER TABLE usage_events "
+                        "DROP CONSTRAINT usage_events_session_id_fkey"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "ALTER TABLE usage_events "
+                        "ADD CONSTRAINT usage_events_session_id_fkey "
+                        "FOREIGN KEY (session_id) REFERENCES sessions(id) "
+                        "ON DELETE CASCADE"
+                    )
+                )
+                logger.info(
+                    "[DB] Migrated usage_events.session_id FK to ON DELETE CASCADE"
+                )
+        except Exception as e:
+            logger.warning("[DB] usage_events FK migration skipped: %s", e)
+
+    # ------------------------------------------------------------------
+    # Lineage feature: agent-declared experiments + dataset versions.
+    # New columns on existing tables; new tables created via create_all.
+    # ------------------------------------------------------------------
+    if insp.has_table("experiments"):
+        ecols = [c["name"] for c in insp.get_columns("experiments")]
+        for col_name, col_def in [
+            ("session_id", "VARCHAR(36)"),
+            ("hypothesis", "TEXT"),
+            ("started_at", "VARCHAR"),
+            ("completed_at", "VARCHAR"),
+            ("tags", "JSON"),
+        ]:
+            if col_name not in ecols:
+                connection.execute(
+                    text(f"ALTER TABLE experiments ADD COLUMN {col_name} {col_def}")
+                )
+                logger.info("[DB] Added %s column to experiments", col_name)
+        if "state" not in ecols:
+            # Legacy experiments default to 'trained' so they don't show
+            # as in-progress in the new sidebar.
+            connection.execute(
+                text(
+                    "ALTER TABLE experiments ADD COLUMN state VARCHAR(20)"
+                    " DEFAULT 'trained'"
+                )
+            )
+            logger.info("[DB] Added state column to experiments")
+        if "pinned" not in ecols:
+            connection.execute(
+                text("ALTER TABLE experiments ADD COLUMN pinned BOOLEAN DEFAULT FALSE")
+            )
+            logger.info("[DB] Added pinned column to experiments")
+        if "archived" not in ecols:
+            connection.execute(
+                text(
+                    "ALTER TABLE experiments ADD COLUMN archived BOOLEAN DEFAULT FALSE"
+                )
+            )
+            logger.info("[DB] Added archived column to experiments")
+        # Backfill: each legacy experiment maps to its earliest session.
+        connection.execute(
+            text(
+                "UPDATE experiments SET session_id = ("
+                " SELECT sessions.id FROM sessions"
+                " WHERE sessions.experiment_id = experiments.id"
+                " ORDER BY sessions.created_at ASC LIMIT 1"
+                ") WHERE session_id IS NULL"
+            )
+        )
+        # Loosen experiments.dataset_ref NOT NULL on Postgres so new
+        # agent-declared experiments can omit it.
+        if connection.dialect.name == "postgresql":
+            try:
+                connection.execute(
+                    text(
+                        "ALTER TABLE experiments ALTER COLUMN dataset_ref DROP NOT NULL"
+                    )
+                )
+            except Exception as e:
+                logger.warning("[DB] dataset_ref nullability already loosened: %s", e)
+
+    if insp.has_table("sessions"):
+        scols = [c["name"] for c in insp.get_columns("sessions")]
+        if "project_id" not in scols:
+            connection.execute(
+                text("ALTER TABLE sessions ADD COLUMN project_id VARCHAR(36)")
+            )
+            logger.info("[DB] Added project_id column to sessions")
+        if "name" not in scols:
+            connection.execute(
+                text("ALTER TABLE sessions ADD COLUMN name VARCHAR(255)")
+            )
+            logger.info("[DB] Added name column to sessions")
+        # Backfill: legacy session.experiment_id → experiments.project_id.
+        connection.execute(
+            text(
+                "UPDATE sessions SET project_id = ("
+                " SELECT experiments.project_id FROM experiments"
+                " WHERE experiments.id = sessions.experiment_id"
+                ") WHERE project_id IS NULL AND experiment_id IS NOT NULL"
+            )
+        )
+        # Loosen experiment_id NOT NULL on Postgres so agent-driven
+        # sessions don't have to fake a parent at create time.
+        if connection.dialect.name == "postgresql":
+            try:
+                connection.execute(
+                    text(
+                        "ALTER TABLE sessions ALTER COLUMN experiment_id DROP NOT NULL"
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "[DB] sessions.experiment_id nullability already loosened: %s", e
+                )
+
+    if insp.has_table("deployments"):
+        dcols = [c["name"] for c in insp.get_columns("deployments")]
+        if "compute" not in dcols:
+            connection.execute(
+                text(
+                    "ALTER TABLE deployments ADD COLUMN compute VARCHAR(20)"
+                    " DEFAULT 'cpu'"
+                )
+            )
+            logger.info("[DB] Added compute column to deployments")
+
+    if insp.has_table("registered_models"):
+        mcols = [c["name"] for c in insp.get_columns("registered_models")]
+        # Loosen source_session_id NOT NULL on Postgres so the new
+        # agent-declared register-model path can write rows when the
+        # experiment was created via the legacy upload route (which sets
+        # Session.experiment_id, not Experiment.session_id, leaving the
+        # session-back-reference indirect). Models can resolve the
+        # session via the experiment regardless.
+        if connection.dialect.name == "postgresql":
+            try:
+                connection.execute(
+                    text(
+                        "ALTER TABLE registered_models "
+                        "ALTER COLUMN source_session_id DROP NOT NULL"
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "[DB] registered_models.source_session_id nullability already loosened: %s",
+                    e,
+                )
+        for col_name, col_def in [
+            ("experiment_id", "VARCHAR(36)"),
+            ("description", "TEXT"),
+            ("hyperparams", "JSON"),
+            ("dataset_refs", "JSON"),
+            ("metrics_history", "JSON"),
+            ("serving_app_path", "VARCHAR(512)"),
+            ("api_key", "VARCHAR(64)"),
+        ]:
+            if col_name not in mcols:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE registered_models ADD COLUMN {col_name} {col_def}"
+                    )
+                )
+                logger.info("[DB] Added %s column to registered_models", col_name)
+        # Backfill experiment_id from the legacy session→experiment join.
+        connection.execute(
+            text(
+                "UPDATE registered_models SET experiment_id = ("
+                " SELECT sessions.experiment_id FROM sessions"
+                " WHERE sessions.id = registered_models.source_session_id"
+                ") WHERE experiment_id IS NULL AND source_session_id IS NOT NULL"
+            )
+        )
+
+    if insp.has_table("dataset_versions"):
+        dcols = [c["name"] for c in insp.get_columns("dataset_versions")]
+        if "kind" not in dcols:
+            connection.execute(
+                text(
+                    "ALTER TABLE dataset_versions ADD COLUMN kind VARCHAR(20)"
+                    " NOT NULL DEFAULT 'raw'"
+                )
+            )
+            logger.info("[DB] Added kind column to dataset_versions")
+        for col_name, col_def in [
+            ("name", "VARCHAR(255)"),
+            ("description", "TEXT"),
+            ("parent_id", "INTEGER"),
+            ("source_session_id", "VARCHAR(36)"),
+            ("source_experiment_id", "VARCHAR(36)"),
+            ("metadata", "JSON"),
+        ]:
+            if col_name not in dcols:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE dataset_versions ADD COLUMN {col_name} {col_def}"
+                    )
+                )
+                logger.info("[DB] Added %s column to dataset_versions", col_name)
+
+    if insp.has_table("run_snapshots"):
+        rcols = [c["name"] for c in insp.get_columns("run_snapshots")]
+        if "experiment_id" not in rcols:
+            connection.execute(
+                text("ALTER TABLE run_snapshots ADD COLUMN experiment_id VARCHAR(36)")
+            )
+            logger.info("[DB] Added experiment_id column to run_snapshots")
+        connection.execute(
+            text(
+                "UPDATE run_snapshots SET experiment_id = ("
+                " SELECT sessions.experiment_id FROM sessions"
+                " WHERE sessions.id = run_snapshots.session_id"
+                ") WHERE experiment_id IS NULL AND session_id IS NOT NULL"
+            )
+        )
+        if connection.dialect.name == "postgresql":
+            try:
+                connection.execute(
+                    text(
+                        "ALTER TABLE run_snapshots DROP CONSTRAINT IF EXISTS"
+                        " run_snapshots_session_id_key"
+                    )
+                )
+            except Exception as e:
+                logger.warning(
+                    "[DB] run_snapshots session_id unique drop skipped: %s", e
+                )
+
+    # ------------------------------------------------------------------
     # Indexes on hot FK columns. `CREATE INDEX IF NOT EXISTS` is supported
     # by both Postgres and SQLite, so this is a no-op on fresh DBs where
     # create_all already built them, and fills the gap on DBs upgraded
@@ -153,7 +416,10 @@ def _run_migrations(connection):
     # ------------------------------------------------------------------
     indexes = [
         ("ix_experiments_project_id", "experiments", "project_id"),
+        ("ix_experiments_session_id", "experiments", "session_id"),
+        ("ix_experiments_state", "experiments", "state"),
         ("ix_sessions_experiment_id", "sessions", "experiment_id"),
+        ("ix_sessions_project_id", "sessions", "project_id"),
         ("ix_messages_session_id", "messages", "session_id"),
         ("ix_artifacts_session_id", "artifacts", "session_id"),
         ("ix_metrics_session_id", "metrics", "session_id"),
@@ -166,6 +432,39 @@ def _run_migrations(connection):
             "ix_processed_dataset_meta_experiment_id",
             "processed_dataset_meta",
             "experiment_id",
+        ),
+        ("ix_usage_events_session_id", "usage_events", "session_id"),
+        ("ix_usage_events_project_id", "usage_events", "project_id"),
+        ("ix_log_events_session_id", "log_events", "session_id"),
+        ("ix_tasks_session_id", "tasks", "session_id"),
+        ("ix_registered_models_project_id", "registered_models", "project_id"),
+        ("ix_registered_models_experiment_id", "registered_models", "experiment_id"),
+        (
+            "ix_registered_models_source_session",
+            "registered_models",
+            "source_session_id",
+        ),
+        ("ix_deployments_model_id", "deployments", "model_id"),
+        ("ix_run_snapshots_session_id", "run_snapshots", "session_id"),
+        ("ix_run_snapshots_experiment_id", "run_snapshots", "experiment_id"),
+        ("ix_dataset_versions_project_id", "dataset_versions", "project_id"),
+        ("ix_dataset_versions_hash", "dataset_versions", "hash"),
+        ("ix_dataset_versions_kind", "dataset_versions", "kind"),
+        ("ix_dataset_versions_parent_id", "dataset_versions", "parent_id"),
+        (
+            "ix_dataset_versions_source_experiment",
+            "dataset_versions",
+            "source_experiment_id",
+        ),
+        (
+            "ix_experiment_datasets_experiment_id",
+            "experiment_datasets",
+            "experiment_id",
+        ),
+        (
+            "ix_experiment_datasets_dataset_version_id",
+            "experiment_datasets",
+            "dataset_version_id",
         ),
     ]
     for idx_name, table, column in indexes:
@@ -181,12 +480,20 @@ def _run_migrations(connection):
 async def init_db():
     from models import (  # noqa: F401
         Artifact,
+        DatasetVersion,
+        Deployment,
         Experiment,
+        ExperimentDataset,
+        LogEvent,
         Message,
         Metric,
         ProcessedDatasetMeta,
         Project,
+        RegisteredModel,
+        RunSnapshot,
         Session,
+        Task,
+        UsageEvent,
     )
 
     async with engine.begin() as conn:

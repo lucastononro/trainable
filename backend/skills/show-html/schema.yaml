@@ -1,0 +1,13 @@
+type: object
+properties:
+  path:
+    type: string
+    description: Volume path to the HTML entry file. MUST live under /sessions/<your-session-id>/ and end in .html. Max 10 MB.
+  title:
+    type: string
+    description: Tab label shown in the canvas. Defaults to the filename stem.
+  key:
+    type: string
+    description: Stable identifier for this artifact. Reuse the same key to overwrite the existing tab on regeneration; default = filename stem.
+required:
+  - path

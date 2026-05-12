@@ -15,6 +15,38 @@ logger = logging.getLogger(__name__)
 
 _volume = None
 
+# Path segments hidden from user-facing file listings (tree route, S3 browser,
+# list-session-files skill). The agent still writes them via execute-code; we
+# just don't surface them. Match by whole segment, not glob suffix.
+WORKSPACE_IGNORE_SEGMENTS: frozenset[str] = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".ipynb_checkpoints",
+        ".DS_Store",
+        ".git",
+    }
+)
+WORKSPACE_IGNORE_SUFFIXES: tuple[str, ...] = (".pyc", ".pyo", ".pyd", ".egg-info")
+
+
+def should_ignore_workspace_path(path: str) -> bool:
+    """Return True if `path` is build noise the user should not see.
+
+    Splits on `/` and checks every segment. A path is ignored if any segment
+    matches `WORKSPACE_IGNORE_SEGMENTS` or its basename ends with any
+    `WORKSPACE_IGNORE_SUFFIXES`.
+    """
+    if not path:
+        return False
+    parts = [p for p in path.split("/") if p]
+    if any(p in WORKSPACE_IGNORE_SEGMENTS for p in parts):
+        return True
+    basename = parts[-1] if parts else ""
+    return basename.endswith(WORKSPACE_IGNORE_SUFFIXES)
+
 
 def get_volume():
     """Return a lazily-initialized Modal Volume."""
@@ -104,6 +136,31 @@ async def upload_to_volume(local_path: str, remote_path: str):
     logger.info("Uploaded %s -> %s", local_path, remote_path)
 
 
+async def upload_many_to_volume(pairs: list[tuple[str, str]]) -> int:
+    """Bulk-upload many files to the Modal Volume in a single batch.
+
+    `pairs` is a list of (local_path, remote_path). Critically, this opens
+    ONE batch_upload() context for the whole list — Modal then ships the
+    payload in a single round-trip rather than one per file. The 1-by-1
+    `upload_to_volume()` is a 30-min-for-1k-files trap; this is the bulk
+    path that should be used for any folder upload.
+
+    Returns the number of files actually pushed.
+    """
+    if not pairs:
+        return 0
+    vol = get_volume()
+
+    def _sync_upload():
+        with vol.batch_upload(force=True) as batch:
+            for local_path, remote_path in pairs:
+                batch.put_file(local_path, remote_path)
+
+    await asyncio.get_running_loop().run_in_executor(None, _sync_upload)
+    logger.info("Bulk-uploaded %d files to Modal Volume", len(pairs))
+    return len(pairs)
+
+
 async def remove_volume_file_async(path: str):
     """Remove a file from the Modal Volume without blocking the event loop."""
     vol = get_volume()
@@ -115,19 +172,64 @@ async def remove_volume_file_async(path: str):
     logger.info("Removed %s", path)
 
 
-async def write_to_volume(content: str, remote_path: str):
-    """Write text content directly to the Modal Volume (non-blocking)."""
+async def ensure_session_workspace(session_id: str) -> None:
+    """Ensure `/sessions/{sid}/src/__init__.py` exists on the Modal Volume.
+
+    Setting `workdir=/data/sessions/{sid}` on a Sandbox requires the directory
+    to exist when Python starts. For a brand-new session, no agent has written
+    there yet, so we lay down an empty `src/__init__.py` first. Idempotent —
+    safe to call before every sandbox spawn.
+    """
+    import tempfile
+
     vol = get_volume()
 
-    def _sync_write():
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            f.write(content)
-            tmp = f.name
+    def _sync():
         try:
+            with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+                tmp = f.name
+            with vol.batch_upload(force=False) as batch:
+                batch.put_file(tmp, f"/sessions/{session_id}/src/__init__.py")
+            os.unlink(tmp)
+        except Exception as e:
+            logger.debug("ensure_session_workspace skipped: %s", e)
+
+    await asyncio.get_running_loop().run_in_executor(None, _sync)
+
+
+async def write_to_volume(content: str | bytes, remote_path: str):
+    """Write file content directly to the Modal Volume (non-blocking).
+
+    Accepts both `str` (text) and `bytes`. Every model-promotion caller hands
+    in bytes from `read_volume_file_async`; the original `mode="w"` raised
+    `TypeError` on every such call, which was swallowed by
+    `register_model_declared`'s best-effort copy block — so the advertised
+    `/projects/{pid}/models/.../v{N}/model.{ext}` registry artifact never
+    actually landed.
+    """
+    vol = get_volume()
+    is_bytes = isinstance(content, (bytes, bytearray, memoryview))
+
+    def _sync_write():
+        if is_bytes:
+            f = tempfile.NamedTemporaryFile(mode="wb", suffix=".bin", delete=False)
+            payload = bytes(content)
+        else:
+            f = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            )
+            payload = content
+        try:
+            with f:
+                f.write(payload)
+                tmp = f.name
             with vol.batch_upload(force=True) as batch:
                 batch.put_file(tmp, remote_path)
         finally:
-            os.unlink(tmp)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     await asyncio.get_running_loop().run_in_executor(None, _sync_write)
     logger.info("Wrote %dB -> %s", len(content), remote_path)

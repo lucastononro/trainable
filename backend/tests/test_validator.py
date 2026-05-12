@@ -220,6 +220,66 @@ async def test_validate_train_output_no_model():
 
 
 @pytest.mark.asyncio
+async def test_validate_train_output_resolves_report_via_artifact_row():
+    """Regression for B2: pre-fix, line 396 called `_read_volume_file_safe`
+    without `await`. With an Artifact row pointing to the report, the bare
+    coroutine was truthy → fallback scan skipped → `len(coroutine)` raised
+    TypeError → validation aborted halfway through, so leakage/metadata
+    checks below silently never ran. With the await in place, the function
+    walks the entire checklist and produces `report.md exists` from the DB
+    path."""
+    from db import async_session
+    from models import Artifact, Project, Session
+
+    train_meta = json.dumps(
+        {
+            "best_model": "XGBClassifier",
+            "test_metrics": {"accuracy": 0.85, "f1_weighted": 0.84},
+        }
+    ).encode("utf-8")
+    files = {
+        "/sessions/sid-art/models/model.pkl": b"fake-model",
+        # Report at a non-default path — only reachable via the Artifact row.
+        "/sessions/sid-art/reports/train_report.md": b"# Train Report\nXGB.",
+        "/sessions/sid-art/data/metadata.json": train_meta,
+    }
+    vol = MockVolume(files)
+
+    # Seed Project + Session so the Artifact FK doesn't trip.
+    async with async_session() as db:
+        db.add(Project(id="proj-art", name="P"))
+        db.add(Session(id="sid-art", project_id="proj-art"))
+        await db.commit()
+        db.add(
+            Artifact(
+                session_id="sid-art",
+                stage="train",
+                artifact_type="report",
+                name="train_report.md",
+                path="/sessions/sid-art/reports/train_report.md",
+                created_at="2026-05-12T00:00:00",
+            )
+        )
+        await db.commit()
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
+        from services.validator import validate_train_output
+
+        # Pre-fix this raised TypeError("object of type 'coroutine' has no len()").
+        result = await validate_train_output("sid-art", "exp-art")
+
+    assert result["stage"] == "train"
+    passed = " ".join(result["passed"])
+    assert "report.md exists" in passed
+    # Confirm the rest of the checklist (metadata) was reachable too —
+    # the pre-fix TypeError aborted before this line.
+    assert "metadata.json has model and test metrics" in passed
+
+
+@pytest.mark.asyncio
 async def test_validate_train_output_perfect_metrics_warning():
     """Perfect accuracy=1.0 on test should warn about overfitting."""
     meta = json.dumps(

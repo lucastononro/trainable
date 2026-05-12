@@ -1,9 +1,24 @@
 'use client';
 
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
+import { memo, useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
-import { SSEEvent, FileTreeNode, MetricPoint, ChartConfig, Mention, Draft } from '@/lib/types';
+import {
+  SSEEvent,
+  FileTreeNode,
+  MetricPoint,
+  ChartConfig,
+  LogEvent,
+  HtmlArtifact,
+  Mention,
+  Draft,
+  LineageGraph as LineageGraphPayload,
+  LineageNode,
+  Task,
+  TaskCreatePayload,
+  TaskUpdatePayload,
+  TaskEventData,
+} from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
 import {
   ImperativePanelHandle,
@@ -48,12 +63,32 @@ import {
   ListChecks,
   FileSearch,
   Wrench,
+  GitBranch,
+  Globe,
+  ExternalLink,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
-import ModelSelector from '@/components/ModelSelector';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
+import CostBadge, { UsageTotals } from '@/components/CostBadge';
+import InlineTasks from '@/components/InlineTasks';
+import type { UsageEvent } from '@/lib/types';
+
+const ZERO_USAGE: UsageTotals = {
+  cost_usd: 0,
+  llm_cost_usd: 0,
+  compute_cost_usd: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+  llm_calls: 0,
+  sandbox_seconds: 0,
+  compute_runs: 0,
+};
 import MetricsTab from '@/components/MetricsTab';
+import LineageGraph from '@/components/lineage/LineageGraph';
+import NodeMetadataPanel from '@/components/lineage/NodeMetadataPanel';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
 import ProjectDataModal from '@/components/ProjectDataModal';
 import MentionInput, { MentionInputHandle } from '@/components/MentionInput';
@@ -148,7 +183,6 @@ export default function HomePage() {
     activeExperimentId,
     activeSessionId,
     activeProjectId,
-    selectedModel,
     sidebarOpen,
     setSidebarOpen,
     setActiveExperiment,
@@ -156,21 +190,34 @@ export default function HomePage() {
     refreshExperiments,
     refreshProjects,
     agentModels,
+    agentThinking,
+    isRunning,
+    setIsRunning,
   } = useApp();
   // Keep a ref for stable access inside async handlers/closures
   const agentModelsRef = useRef<Record<string, string>>({});
   useEffect(() => {
     agentModelsRef.current = agentModels;
   }, [agentModels]);
+  const agentThinkingRef = useRef<Record<string, string>>({});
+  useEffect(() => {
+    agentThinkingRef.current = agentThinking;
+  }, [agentThinking]);
 
   // Chat / session state
   const [chatItems, setChatItems] = useState<ChatItem[]>([]);
   const [draft, setDraft] = useState<Draft>([]);
-  const [isRunning, setIsRunning] = useState(false);
   const [sessionState, setSessionState] = useState('created');
   const [loading, setLoading] = useState(false);
   const [sseConnected, setSseConnected] = useState(false);
-  const [experimentName, setExperimentName] = useState('');
+  // Derive the displayed experiment name from the experiments list (single
+  // source of truth) so a rename in the sidebar updates the header without
+  // needing a session reload.
+  const experimentName = useMemo(
+    () => experiments.find((e) => e.id === activeExperimentId)?.name ?? '',
+    [experiments, activeExperimentId],
+  );
+  const [tasks, setTasks] = useState<Task[]>([]);
 
   // Workspace state
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -188,6 +235,13 @@ export default function HomePage() {
   const [metricPoints, setMetricPoints] = useState<MetricPoint[]>([]);
   const [chartConfig, setChartConfig] = useState<ChartConfig | null>(null);
   const metricKeysRef = useRef(new Set<string>());
+  // Rich log payloads (image grids, tables, confusion matrices, …) — keyed
+  // dedup so backend resends + reload-hydrate don't double-render.
+  const [logEvents, setLogEvents] = useState<LogEvent[]>([]);
+  const logEventKeysRef = useRef(new Set<string>());
+  // Agent-published HTML artifacts: keyed by `key` so regenerating an
+  // artifact in the same session overwrites instead of piling tabs.
+  const [htmlArtifacts, setHtmlArtifacts] = useState<Map<string, HtmlArtifact>>(() => new Map());
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const sseRef = useRef<EventSource | null>(null);
@@ -206,8 +260,17 @@ export default function HomePage() {
     if (!p) return;
     p.expand();
     // Run on the next frame so the expand takes effect before we resize.
-    requestAnimationFrame(() => p.resize(CANVAS_DEFAULT_SIZE));
+    requestAnimationFrame(() => {
+      p.resize(CANVAS_DEFAULT_SIZE);
+      // Notify the workspace tab manager so it can pick a sensible default
+      // tab if the user opens the canvas with nothing currently active.
+      window.dispatchEvent(new CustomEvent('trainable:canvas-opened'));
+    });
   }, []);
+
+  // Live usage totals for the active session (cost badge in header)
+  const [usageTotals, setUsageTotals] = useState<UsageTotals>(ZERO_USAGE);
+  const [recentUsage, setRecentUsage] = useState<UsageEvent[]>([]);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -294,6 +357,45 @@ export default function HomePage() {
                 setIsRunning(false);
                 // Clear all active agents when session finishes
                 setActiveAgents([]);
+                // Defensive sweep: when the run terminates, any leftover
+                // tool_start / subagent_start chat items mean their matching
+                // *_end event was dropped (queue backpressure, handler raised
+                // before emitting it, etc.) — convert them so the cards stop
+                // spinning. Mirrors the orphan cleanup the restore-on-reload
+                // path already does for persisted history.
+                setChatItems((prev) => {
+                  let mutated = false;
+                  const next = prev.map((it) => {
+                    if (it.type === 'tool_start') {
+                      mutated = true;
+                      return { ...it, type: 'tool_end' as const };
+                    }
+                    if (it.type === 'subagent_start') {
+                      mutated = true;
+                      return { ...it, type: 'subagent_end' as const };
+                    }
+                    return it;
+                  });
+                  return mutated ? next : prev;
+                });
+                // Same for the inline tasks card: any task left in_progress
+                // when the run ended would otherwise spin forever. Flip them
+                // back to pending so the user can re-trigger or close them.
+                setTasks((prev) => {
+                  let mutated = false;
+                  const next = prev.map((t) => {
+                    if (t.status === 'in_progress') {
+                      mutated = true;
+                      return { ...t, status: 'pending' as const };
+                    }
+                    return t;
+                  });
+                  return mutated ? next : prev;
+                });
+                // Pull the now-final state into the experiments array so
+                // non-active sidebar rows reflect "done"/"failed"/"cancelled"
+                // without waiting on the user to trigger an unrelated refresh.
+                void refreshExperiments();
               }
               if (data.state.endsWith('_done')) {
                 const stageName = data.state.replace('_done', '');
@@ -416,6 +518,29 @@ export default function HomePage() {
               addItem({ type: 'error', content: data.error });
               setIsRunning(false);
               break;
+            case 'usage_event': {
+              const ev = data as UsageEvent;
+              setRecentUsage((prev) => [...prev.slice(-49), ev]);
+              setUsageTotals((prev) => {
+                const c = ev.cost_usd || 0;
+                const isLlm = ev.kind === 'llm';
+                return {
+                  cost_usd: prev.cost_usd + c,
+                  llm_cost_usd: prev.llm_cost_usd + (isLlm ? c : 0),
+                  compute_cost_usd: prev.compute_cost_usd + (isLlm ? 0 : c),
+                  input_tokens: prev.input_tokens + (ev.input_tokens || 0),
+                  output_tokens: prev.output_tokens + (ev.output_tokens || 0),
+                  cache_read_input_tokens:
+                    prev.cache_read_input_tokens + (ev.cache_read_input_tokens || 0),
+                  cache_creation_input_tokens:
+                    prev.cache_creation_input_tokens + (ev.cache_creation_input_tokens || 0),
+                  llm_calls: prev.llm_calls + (isLlm ? 1 : 0),
+                  sandbox_seconds: prev.sandbox_seconds + (ev.sandbox_seconds || 0),
+                  compute_runs: prev.compute_runs + (isLlm ? 0 : 1),
+                };
+              });
+              break;
+            }
             case 'report_ready':
               setCanvasContent(data.content);
               setCanvasTitle(`${(data.stage || 'EDA').toUpperCase()} Report`);
@@ -444,6 +569,12 @@ export default function HomePage() {
                 }
                 return merged;
               });
+              // Same auto-open contract as file_created — some agent stages
+              // emit only the batch (files_ready) at end-of-stage without
+              // per-file file_created events, so we open here too. openCanvas
+              // is idempotent (no-op if already open) and the picker only
+              // runs when no tab is active.
+              if (newFiles.length > 0) openCanvas();
               break;
             }
             case 'file_created': {
@@ -460,6 +591,12 @@ export default function HomePage() {
                   stage,
                 ),
               );
+              // The ONLY auto-open trigger. Sending a message no longer
+              // forces the canvas open just because the agent reports back —
+              // we wait for an actual file to land. openCanvas() dispatches
+              // 'trainable:canvas-opened' which kicks the picker so the new
+              // file (or notebook / report / metrics) gets surfaced.
+              openCanvas();
               break;
             }
             case 'agent_aborted':
@@ -519,6 +656,57 @@ export default function HomePage() {
               if (cfg.charts && Array.isArray(cfg.charts)) {
                 setChartConfig({ charts: cfg.charts });
               }
+              break;
+            }
+            case 'log_event': {
+              // Rich (non-scalar) panel payload — image grid, table,
+              // confusion matrix, etc. Keyed by (key, step) so a backend
+              // resend or reload-hydrate doesn't double-append.
+              const ev = data as any;
+              if (!ev || !ev.key || ev.step === undefined || !ev.type) break;
+              const dedupKey = `${ev.key}:${ev.step}:${ev.run_tag || ''}`;
+              if (logEventKeysRef.current.has(dedupKey)) break;
+              logEventKeysRef.current.add(dedupKey);
+              const entry: LogEvent = {
+                step: Number(ev.step),
+                key: String(ev.key),
+                type: ev.type,
+                stage: ev.stage,
+                run_tag: ev.run_tag || null,
+                payload: (ev.data || {}) as Record<string, unknown>,
+              };
+              setLogEvents((prev) => {
+                if (prev.length === 0) openCanvas();
+                return [...prev, entry];
+              });
+              break;
+            }
+            case 'canvas_html': {
+              // Agent published a self-contained HTML artifact. Overwrite
+              // by key so regeneration reuses the tab. Open the canvas and
+              // ask the WorkspaceSidebar to open/focus the tab.
+              const ev = data as any;
+              if (!ev || !ev.key || !ev.path) break;
+              const artifact: HtmlArtifact = {
+                key: String(ev.key),
+                title: String(ev.title || ev.key),
+                path: String(ev.path),
+                size: typeof ev.size === 'number' ? ev.size : null,
+                ts: typeof ev.ts === 'number' ? ev.ts : null,
+                step: typeof ev.step === 'number' ? ev.step : null,
+                stage: ev.stage || null,
+              };
+              setHtmlArtifacts((prev) => {
+                const next = new Map(prev);
+                next.set(artifact.key, artifact);
+                return next;
+              });
+              openCanvas();
+              window.dispatchEvent(
+                new CustomEvent('trainable:open-html-tab', {
+                  detail: { key: artifact.key, title: artifact.title },
+                }),
+              );
               break;
             }
             // Multi-agent events
@@ -683,6 +871,51 @@ export default function HomePage() {
               }
               break;
             }
+            // Lineage events from agent-declared experiment lifecycle.
+            // Notify the WorkspaceSidebar so its lineage tab refetches; on
+            // experiment_created we also auto-open the canvas + lineage tab
+            // so the user sees the new experiment land in real time.
+            case 'experiment_created':
+            case 'dataset_registered':
+            case 'model_registered':
+            case 'experiment_state_changed':
+            case 'experiments_abandoned': {
+              window.dispatchEvent(
+                new CustomEvent('trainable:lineage-changed', {
+                  detail: { kind: event.type },
+                }),
+              );
+              if (event.type === 'experiment_created') {
+                // No openCanvas() — only file_created auto-opens the canvas.
+                // If the canvas is already open (e.g. files have landed), the
+                // open-lineage-tab event still switches to the lineage view.
+                window.dispatchEvent(new CustomEvent('trainable:open-lineage-tab'));
+              }
+              break;
+            }
+            // Tasks live to-do list — agent calls (add/update/delete) and
+            // user REST CRUD both publish these events. The card is rendered
+            // ONCE at the bottom of the chat (not inline per event), so we
+            // only update the tasks state here.
+            case 'task_created':
+            case 'task_updated': {
+              const t = data as TaskEventData;
+              setTasks((prev) => {
+                const idx = prev.findIndex((x) => x.id === t.id);
+                if (idx >= 0) {
+                  const next = [...prev];
+                  next[idx] = t;
+                  return next;
+                }
+                return [...prev, t];
+              });
+              break;
+            }
+            case 'task_deleted': {
+              const id = data.id as number;
+              setTasks((prev) => prev.filter((x) => x.id !== id));
+              break;
+            }
           }
         } catch {
           /* ignore parse errors */
@@ -691,7 +924,7 @@ export default function HomePage() {
       source.onerror = () => setSseConnected(false);
       sseRef.current = source;
     },
-    [addItem],
+    [addItem, openCanvas, refreshExperiments, setIsRunning],
   );
 
   // ---------------------------------------------------------------------------
@@ -717,7 +950,9 @@ export default function HomePage() {
     setMetricPoints([]);
     setChartConfig(null);
     metricKeysRef.current = new Set();
-    setExperimentName('');
+    setLogEvents([]);
+    logEventKeysRef.current = new Set();
+    setHtmlArtifacts(new Map());
     // Critical: clear per-session agent indicators. If we don't, the previous
     // session's running sub-agents leak into the new one and `agent_message`
     // events get mis-tagged with the wrong agent_type (the stale entry from
@@ -725,7 +960,10 @@ export default function HomePage() {
     // so the SSE handler closure sees an empty list immediately.
     setActiveAgents([]);
     activeAgentsRef.current = [];
-  }, []);
+    setUsageTotals(ZERO_USAGE);
+    setRecentUsage([]);
+    setTasks([]);
+  }, [setIsRunning]);
 
   // ---------------------------------------------------------------------------
   // Load experiment + session when activeExperimentId/activeSessionId change
@@ -756,10 +994,35 @@ export default function HomePage() {
       setLoading(true);
       resetSessionState();
 
+      // Hydrate the CostBadge from the session's historical usage rows.
+      // Without this, reopening a session shows 0/0 until the next live
+      // usage_event SSE arrives. Fire-and-forget — non-fatal on failure.
+      api
+        .sessionUsage(activeSessionId!)
+        .then((s) => {
+          if (cancelled) return;
+          const t = s.totals;
+          setUsageTotals({
+            cost_usd: t.cost_usd || 0,
+            llm_cost_usd: t.llm_cost_usd || 0,
+            compute_cost_usd: t.compute_cost_usd || 0,
+            input_tokens: t.input_tokens || 0,
+            output_tokens: t.output_tokens || 0,
+            cache_read_input_tokens: t.cache_read_input_tokens || 0,
+            cache_creation_input_tokens: t.cache_creation_input_tokens || 0,
+            llm_calls: t.llm_calls || 0,
+            sandbox_seconds: t.sandbox_seconds || 0,
+            compute_runs: t.compute_runs || 0,
+          });
+          setRecentUsage(s.events ?? []);
+        })
+        .catch(() => {
+          /* historical usage is best-effort; live SSE will fill in */
+        });
+
       try {
-        const exp = await api.getExperiment(activeExperimentId);
+        await api.getExperiment(activeExperimentId);
         if (cancelled) return;
-        setExperimentName(exp.name);
 
         const sid = activeSessionId;
         const sessionData = await api.getSession(sid);
@@ -771,6 +1034,7 @@ export default function HomePage() {
         let restoredCanvasTitle = 'Report';
         let restoredCanvasOpen = false;
         let restoredFiles: any[] = [];
+        const restoredHtmlArtifacts = new Map<string, HtmlArtifact>();
 
         if (sessionData.messages?.length > 0) {
           // Events persisted for introspection/telemetry only — never rendered as bubbles.
@@ -781,6 +1045,8 @@ export default function HomePage() {
             'metric',
             'metrics_batch',
             'chart_config',
+            'log_event',
+            'canvas_html',
             'validation_result',
             's3_sync_complete',
             'metadata_ready',
@@ -788,6 +1054,23 @@ export default function HomePage() {
 
           for (const msg of sessionData.messages) {
             const eventType = msg.metadata?.event_type as string | undefined;
+            // Capture canvas_html (persisted as system Messages) before
+            // the NON_VISIBLE skip so reload restores the canvas tabs.
+            if (eventType === 'canvas_html') {
+              const m = msg.metadata || {};
+              if (m.key && m.path) {
+                restoredHtmlArtifacts.set(String(m.key), {
+                  key: String(m.key),
+                  title: String(m.title || m.key),
+                  path: String(m.path),
+                  size: typeof m.size === 'number' ? m.size : null,
+                  ts: typeof m.ts === 'number' ? m.ts : null,
+                  step: typeof m.step === 'number' ? m.step : null,
+                  stage: (m.stage as string | null) || null,
+                });
+              }
+              continue;
+            }
             if (eventType && NON_VISIBLE_EVENTS.has(eventType)) continue;
             // Legacy seeded intro messages (pre-dated system-prompt injection) — hide.
             if (msg.metadata?.session_intro) continue;
@@ -1015,7 +1298,10 @@ export default function HomePage() {
         setChatItems(restored);
         setCanvasContent(restoredCanvasContent);
         setCanvasTitle(restoredCanvasTitle);
-        if (restoredCanvasOpen) {
+        if (restoredHtmlArtifacts.size > 0) {
+          setHtmlArtifacts(restoredHtmlArtifacts);
+        }
+        if (restoredCanvasOpen || restoredHtmlArtifacts.size > 0) {
           // Delay expand to next tick so panel ref is mounted
           setTimeout(() => openCanvas(), 0);
         }
@@ -1047,6 +1333,31 @@ export default function HomePage() {
           })
           .catch((e) => console.error('Failed to load historical metrics', e));
 
+        // Load historical rich-log events (image grids, tables, …)
+        api
+          .getLogEvents(sid)
+          .then((events) => {
+            if (!cancelled && events.length > 0) {
+              setLogEvents(events);
+              openCanvas();
+              for (const e of events) {
+                logEventKeysRef.current.add(`${e.key}:${e.step}:${e.run_tag || ''}`);
+              }
+            }
+          })
+          .catch((e) => console.error('Failed to load historical log events', e));
+
+        // Load existing tasks for this session. The card is rendered
+        // at the bottom of the chat from `tasks` state, so we just
+        // hydrate it — no chat-stream entry needed.
+        api
+          .getTasks(sid)
+          .then((rows) => {
+            if (cancelled) return;
+            setTasks(rows);
+          })
+          .catch((e) => console.error('Failed to load tasks', e));
+
         // Set running state from session. `state` in the DB is only a stage
         // marker (e.g. "eda_done"), so the definitive "is this session still
         // working right now?" answer comes from the backend's in-memory task
@@ -1060,7 +1371,7 @@ export default function HomePage() {
         }
 
         connectSSE(sid);
-      } catch (e) {
+      } catch {
         if (!cancelled) addItem({ type: 'error', content: 'Failed to load experiment' });
       } finally {
         if (!cancelled) setLoading(false);
@@ -1072,7 +1383,15 @@ export default function HomePage() {
       cancelled = true;
       sseRef.current?.close();
     };
-  }, [activeExperimentId, activeSessionId, connectSSE, addItem, resetSessionState]);
+  }, [
+    activeExperimentId,
+    activeSessionId,
+    connectSSE,
+    addItem,
+    resetSessionState,
+    openCanvas,
+    setIsRunning,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Send pending message once SSE is connected (after auto-create)
@@ -1095,13 +1414,14 @@ export default function HomePage() {
           true,
           agentModelsRef.current,
           pending.mentions,
+          agentThinkingRef.current,
         )
         .catch((e: any) => {
           addItem({ type: 'error', content: e.message });
           setIsRunning(false);
         });
     }
-  }, [activeSessionId, sseConnected, addItem]);
+  }, [activeSessionId, sseConnected, addItem, setIsRunning]);
 
   // Drain a pending file attachment once the auto-created session's SSE is live
   useEffect(() => {
@@ -1128,7 +1448,14 @@ export default function HomePage() {
           ? pending.text
           : `I've attached ${pending.fileNames.length} file${pending.fileNames.length > 1 ? 's' : ''}: ${pending.fileNames.join(', ')}. What can you tell me about this data?`;
         setIsRunning(true);
-        await api.sendMessage(sesId, agentPrompt, true, agentModelsRef.current);
+        await api.sendMessage(
+          sesId,
+          agentPrompt,
+          true,
+          agentModelsRef.current,
+          undefined,
+          agentThinkingRef.current,
+        );
       } catch (e: any) {
         addItem({ type: 'error', content: e.message });
         setIsRunning(false);
@@ -1136,7 +1463,14 @@ export default function HomePage() {
         setAttachingFiles(false);
       }
     })();
-  }, [activeExperimentId, activeSessionId, sseConnected, addItem, refreshExperiments]);
+  }, [
+    activeExperimentId,
+    activeSessionId,
+    sseConnected,
+    addItem,
+    refreshExperiments,
+    setIsRunning,
+  ]);
 
   // ---------------------------------------------------------------------------
   // Handlers
@@ -1150,6 +1484,45 @@ export default function HomePage() {
       addItem({ type: 'error', content: `Failed to stop: ${e.message}` });
     }
   };
+
+  // Tasks card — user-side CRUD. Optimistic on the wire isn't needed:
+  // the backend publishes task_created/task_updated/task_deleted SSE
+  // for both REST and skill paths, and the SSE handler upserts by id.
+  const handleTaskCreate = useCallback(
+    async (body: TaskCreatePayload) => {
+      if (!activeSessionId) return;
+      try {
+        await api.createTask(activeSessionId, body);
+      } catch (e: any) {
+        addItem({ type: 'error', content: `Failed to create task: ${e.message}` });
+      }
+    },
+    [activeSessionId, addItem],
+  );
+
+  const handleTaskUpdate = useCallback(
+    async (id: number, body: TaskUpdatePayload) => {
+      if (!activeSessionId) return;
+      try {
+        await api.updateTask(activeSessionId, id, body);
+      } catch (e: any) {
+        addItem({ type: 'error', content: `Failed to update task: ${e.message}` });
+      }
+    },
+    [activeSessionId, addItem],
+  );
+
+  const handleTaskDelete = useCallback(
+    async (id: number) => {
+      if (!activeSessionId) return;
+      try {
+        await api.deleteTask(activeSessionId, id);
+      } catch (e: any) {
+        addItem({ type: 'error', content: `Failed to delete task: ${e.message}` });
+      }
+    },
+    [activeSessionId, addItem],
+  );
 
   const handleSend = async () => {
     // If there are attached files, use the attach-and-send flow
@@ -1202,7 +1575,14 @@ export default function HomePage() {
     setIsRunning(true);
 
     try {
-      await api.sendMessage(activeSessionId, content, true, agentModelsRef.current, mentions);
+      await api.sendMessage(
+        activeSessionId,
+        content,
+        true,
+        agentModelsRef.current,
+        mentions,
+        agentThinkingRef.current,
+      );
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
       setIsRunning(false);
@@ -1286,7 +1666,14 @@ export default function HomePage() {
         ? textToSend
         : `I've attached ${fileNames.length} file${fileNames.length > 1 ? 's' : ''}: ${fileNames.join(', ')}. What can you tell me about this data?`;
       setIsRunning(true);
-      await api.sendMessage(sesId, agentPrompt, true, agentModelsRef.current, draftMentions);
+      await api.sendMessage(
+        sesId,
+        agentPrompt,
+        true,
+        agentModelsRef.current,
+        draftMentions,
+        agentThinkingRef.current,
+      );
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
     } finally {
@@ -1303,6 +1690,7 @@ export default function HomePage() {
     setActiveExperiment,
     setActiveProject,
     addItem,
+    setIsRunning,
   ]);
 
   const handleS3Select = useCallback(
@@ -1346,6 +1734,8 @@ export default function HomePage() {
               `I've attached data from S3: ${s3Path}. What can you tell me about this data?`,
               true,
               agentModelsRef.current,
+              undefined,
+              agentThinkingRef.current,
             );
           }
         }
@@ -1364,6 +1754,7 @@ export default function HomePage() {
       setActiveExperiment,
       setActiveProject,
       addItem,
+      setIsRunning,
     ],
   );
 
@@ -1433,7 +1824,7 @@ export default function HomePage() {
 
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
-          <ModelSelector />
+          {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
 
           {hasActiveSession && (
             <>
@@ -1495,6 +1886,7 @@ export default function HomePage() {
               {/* Logo + title */}
               <div className="text-center space-y-3">
                 <div className="flex items-center justify-center gap-3">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src="/logo-brain-transparent.png" alt="Trainable" className="h-10 w-auto" />
                 </div>
                 <h1 className="text-2xl font-semibold text-white">
@@ -1507,26 +1899,12 @@ export default function HomePage() {
               </div>
 
               {/* File previews */}
-              {attachedFiles.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {attachedFiles.map((f, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-gray-300"
-                    >
-                      <Paperclip className="w-3 h-3 text-gray-500" />
-                      <span className="truncate max-w-[160px]">{f.name}</span>
-                      <button
-                        onClick={() => removeAttachedFile(i)}
-                        title="Remove file"
-                        className="p-0.5 hover:bg-white/[0.1] rounded transition-colors"
-                      >
-                        <X className="w-3 h-3 text-gray-500" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <AttachedFilesPreview
+                files={attachedFiles}
+                onRemove={removeAttachedFile}
+                onClearAll={() => setAttachedFiles([])}
+                variant="home"
+              />
 
               {/* Input bar */}
               <div className="relative">
@@ -1660,6 +2038,15 @@ export default function HomePage() {
                   >
                     {renderGroupedChatItems(chatItems, streamingItemIdRef.current, activeSessionId)}
 
+                    {tasks.length > 0 && (
+                      <InlineTasks
+                        tasks={tasks}
+                        onCreate={handleTaskCreate}
+                        onUpdate={handleTaskUpdate}
+                        onDelete={handleTaskDelete}
+                      />
+                    )}
+
                     {isRunning &&
                       !streamingItemIdRef.current &&
                       (() => {
@@ -1694,25 +2081,12 @@ export default function HomePage() {
                 <div className="bg-black px-4 py-3">
                   <div className={`mx-auto ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}>
                     {/* Attached files preview */}
-                    {attachedFiles.length > 0 && (
-                      <div className="flex flex-wrap gap-2 mb-2">
-                        {attachedFiles.map((f, i) => (
-                          <div
-                            key={i}
-                            className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-gray-300"
-                          >
-                            <Paperclip className="w-3 h-3 text-gray-500" />
-                            <span className="truncate max-w-[140px]">{f.name}</span>
-                            <button
-                              onClick={() => removeAttachedFile(i)}
-                              className="p-0.5 hover:bg-white/[0.1] rounded transition-colors"
-                            >
-                              <X className="w-3 h-3 text-gray-500" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <AttachedFilesPreview
+                      files={attachedFiles}
+                      onRemove={removeAttachedFile}
+                      onClearAll={() => setAttachedFiles([])}
+                      variant="session"
+                    />
 
                     <div className="flex items-center gap-1 bg-[#1e1f22] rounded-2xl px-2 py-1.5 transition-colors">
                       {/* Attach menu */}
@@ -1852,6 +2226,8 @@ export default function HomePage() {
                   fileTree={fileTree}
                   metricPoints={metricPoints}
                   chartConfig={chartConfig}
+                  logEvents={logEvents}
+                  htmlArtifacts={htmlArtifacts}
                   sessionState={sessionState}
                   onClose={() => workspacePanelRef.current?.collapse()}
                 />
@@ -1888,6 +2264,7 @@ export default function HomePage() {
 function getFileIconInfo(name: string): { icon: typeof FileText; color: string } {
   if (name.endsWith('.py')) return { icon: Code2, color: 'text-yellow-400' };
   if (name.endsWith('.md')) return { icon: FileText, color: 'text-blue-400' };
+  if (/\.html?$/i.test(name)) return { icon: Globe, color: 'text-fuchsia-400' };
   if (/\.(png|jpg|jpeg|svg|gif)$/i.test(name)) return { icon: Image, color: 'text-purple-400' };
   if (name.endsWith('.csv')) return { icon: Table, color: 'text-green-400' };
   if (name.endsWith('.parquet')) return { icon: Database, color: 'text-amber-400' };
@@ -1987,20 +2364,126 @@ function FileTreeRow({
 }
 
 // ---------------------------------------------------------------------------
+// HtmlPanel -- renders an agent-published HTML artifact in a sandboxed
+// iframe. Used both by the canvas_html tab type and the FileViewer .html
+// branch. The iframe deliberately omits `allow-same-origin`: scripts
+// inside still run (Plotly/D3 interactivity works), but they can't read
+// cookies, fetch the API as the user, or postMessage usefully to the
+// parent. The backend pairs this with a strict CSP on /files/raw for
+// text/html responses (no outbound connect-src; img-src/script-src
+// allow-listed).
+// ---------------------------------------------------------------------------
+
+function humanArtifactBytes(n: number | null | undefined): string | null {
+  if (n == null) return null;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+const HtmlPanel = memo(function HtmlPanel({ artifact }: { artifact: HtmlArtifact | undefined }) {
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setLoadFailed(false);
+    setLoaded(false);
+  }, [artifact?.path]);
+
+  if (!artifact) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-black">
+        <Globe className="w-8 h-8 mb-2 text-gray-700" />
+        <p className="text-xs">HTML artifact not loaded yet.</p>
+      </div>
+    );
+  }
+
+  const rawUrl = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(artifact.path)}`;
+  const sizeLabel = humanArtifactBytes(artifact.size);
+
+  return (
+    <div className="h-full flex flex-col bg-black">
+      <div className="flex items-center justify-between gap-3 px-4 h-8 border-b border-white/[0.06] shrink-0">
+        <div className="flex items-center gap-2 min-w-0">
+          <Globe className="w-3.5 h-3.5 shrink-0 text-fuchsia-400" />
+          <span className="text-[12px] text-gray-300 truncate">{artifact.title}</span>
+          {sizeLabel && <span className="text-[11px] text-gray-600 shrink-0">· {sizeLabel}</span>}
+        </div>
+        <a
+          href={rawUrl}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 text-[11px] text-gray-500 hover:text-gray-300 transition-colors shrink-0"
+          title="Open this artifact in a new tab"
+        >
+          <ExternalLink className="w-3 h-3" />
+          Open in new tab
+        </a>
+      </div>
+      <div className="flex-1 overflow-hidden relative bg-white">
+        {loadFailed ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-700 bg-black">
+            <AlertCircle className="w-7 h-7 mb-2 text-amber-500" />
+            <p className="text-sm text-gray-400">HTML artifact failed to load.</p>
+            <a
+              href={rawUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="mt-3 text-[12px] text-fuchsia-400 hover:text-fuchsia-300 underline"
+            >
+              Download raw HTML
+            </a>
+          </div>
+        ) : (
+          <iframe
+            // Keys the iframe on the artifact path so regenerating an artifact
+            // with the same key forces a fresh load instead of a cached view.
+            key={artifact.path}
+            src={rawUrl}
+            sandbox="allow-scripts allow-pointer-lock allow-popups"
+            referrerPolicy="no-referrer"
+            loading="lazy"
+            style={{ colorScheme: 'dark' }}
+            className="w-full h-full bg-white border-0"
+            title={artifact.title}
+            onLoad={() => setLoaded(true)}
+            onError={() => setLoadFailed(true)}
+          />
+        )}
+        {!loaded && !loadFailed && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/40">
+            <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+// ---------------------------------------------------------------------------
 // FileViewer -- displays file content based on type
 // ---------------------------------------------------------------------------
 
-function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: string }) {
+const FileViewer = memo(function FileViewer({
+  filePath,
+  sessionId,
+}: {
+  filePath: string;
+  sessionId: string;
+}) {
   const [content, setContent] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fileName = filePath.split('/').pop() || '';
   const isImage = /\.(png|jpg|jpeg|svg|gif)$/i.test(fileName);
+  const isPdf = fileName.toLowerCase().endsWith('.pdf');
   const isPython = fileName.endsWith('.py');
   const isMarkdown = fileName.endsWith('.md');
   const isJSON = fileName.endsWith('.json');
   const isNotebook = fileName.endsWith('.ipynb');
+  const isHtml = fileName.toLowerCase().endsWith('.html');
   const isBinary = /\.(pkl|joblib|parquet|h5|hdf5|pt|pth|onnx)$/i.test(fileName);
 
   // Notebook files are rendered inline by a dedicated component — skip the
@@ -2012,7 +2495,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
   }, [filePath, isNotebook]);
 
   useEffect(() => {
-    if (isImage || isBinary || isNotebook) {
+    if (isImage || isPdf || isBinary || isNotebook || isHtml) {
       setLoading(false);
       return;
     }
@@ -2028,10 +2511,25 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
         setError(err.message);
         setLoading(false);
       });
-  }, [filePath, isImage, isBinary, isNotebook]);
+  }, [filePath, isImage, isPdf, isBinary, isNotebook, isHtml]);
 
   if (isNotebook && notebookName) {
     return <Notebook sessionId={sessionId} notebookName={notebookName} variant="inline" />;
+  }
+
+  if (isHtml) {
+    return (
+      <HtmlPanel
+        artifact={{
+          key: filePath,
+          title: fileName,
+          path: filePath,
+          size: null,
+          ts: null,
+          step: null,
+        }}
+      />
+    );
   }
 
   return (
@@ -2045,12 +2543,19 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
           <div className="p-4 text-sm text-red-400">{error}</div>
         ) : isImage ? (
           <div className="p-6 flex items-center justify-center bg-black">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={`${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(filePath)}`}
               alt={fileName}
               className="max-w-full max-h-[60vh] rounded-lg"
             />
           </div>
+        ) : isPdf ? (
+          <iframe
+            src={`${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(filePath)}#view=FitH`}
+            title={fileName}
+            className="w-full h-full min-h-[80vh] bg-white border-0"
+          />
         ) : isBinary ? (
           <div className="flex flex-col items-center justify-center h-32 text-gray-500">
             <Cpu className="w-8 h-8 mb-2" />
@@ -2092,6 +2597,7 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
                     imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(dir + '/' + imgSrc)}`;
                   }
                   return (
+                    // eslint-disable-next-line @next/next/no-img-element
                     <img
                       src={imgSrc}
                       alt={alt || ''}
@@ -2112,7 +2618,51 @@ function FileViewer({ filePath, sessionId }: { filePath: string; sessionId: stri
       </div>
     </div>
   );
-}
+});
+
+// ---------------------------------------------------------------------------
+// ReportMarkdown -- the canvas report tab body. Memoized so parent renders
+// triggered by chat / SSE / task ticks don't re-parse the markdown tree.
+// ---------------------------------------------------------------------------
+
+const ReportMarkdown = memo(function ReportMarkdown({
+  content,
+  sessionId,
+}: {
+  content: string;
+  sessionId: string;
+}) {
+  // Stable `components` map: only rebuilt when sessionId changes (effectively
+  // never within a session). Without useMemo the inline `img` lambda would
+  // be a fresh ref each render and ReactMarkdown would re-key its tree.
+  const components = useMemo(
+    () => ({
+      img: ({ src, alt }: { src?: string; alt?: string }) => {
+        let imgSrc = src || '';
+        if (imgSrc.startsWith('/data/')) {
+          imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+        } else if (imgSrc && !imgSrc.startsWith('http')) {
+          const workspace = `/sessions/${sessionId}/eda`;
+          imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
+        }
+        return (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={imgSrc} alt={alt || ''} className="max-w-full rounded-lg shadow-md my-4" />
+        );
+      },
+    }),
+    [sessionId],
+  );
+  return (
+    <div className="h-full overflow-y-auto p-6 bg-black">
+      <div className="markdown-content">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+          {content}
+        </ReactMarkdown>
+      </div>
+    </div>
+  );
+});
 
 // ---------------------------------------------------------------------------
 // Workspace Panel -- github.dev-style: tree sidebar + tabbed editor
@@ -2123,11 +2673,15 @@ interface OpenTab {
   label: string;
   icon: typeof FileText;
   iconColor: string;
-  type: 'file' | 'report' | 'metrics';
+  type: 'file' | 'report' | 'metrics' | 'lineage' | 'html';
+  /** For type='html': the artifact key (also the suffix of the tab id). */
+  htmlKey?: string;
 }
 
 const REPORT_TAB_ID = '__report__';
 const METRICS_TAB_ID = '__metrics__';
+const LINEAGE_TAB_ID = '__lineage__';
+const HTML_TAB_PREFIX = '__html__:';
 
 function WorkspaceSidebar({
   experimentId,
@@ -2138,6 +2692,8 @@ function WorkspaceSidebar({
   fileTree,
   metricPoints,
   chartConfig,
+  logEvents,
+  htmlArtifacts,
   sessionState,
   onClose,
 }: {
@@ -2149,12 +2705,43 @@ function WorkspaceSidebar({
   fileTree: FileTreeNode;
   metricPoints: MetricPoint[];
   chartConfig: ChartConfig | null;
+  logEvents: LogEvent[];
+  htmlArtifacts: Map<string, HtmlArtifact>;
   sessionState: string;
   onClose: () => void;
 }) {
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set());
   const [openTabs, setOpenTabs] = useState<OpenTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  // MRU list of tab ids that are currently mounted in the DOM. Capped to
+  // MAX_MOUNTED_TABS so opening a long parade of files doesn't pin every
+  // FileViewer in memory. The active tab is always at the head and
+  // therefore never evicted.
+  const [mountedTabIds, setMountedTabIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    const MAX_MOUNTED_TABS = 8;
+    setMountedTabIds((prev) => {
+      const stillOpen = new Set(openTabs.map((t) => t.id));
+      const carried = prev.filter((id) => stillOpen.has(id));
+      const next =
+        activeTabId && stillOpen.has(activeTabId)
+          ? [activeTabId, ...carried.filter((id) => id !== activeTabId)]
+          : carried;
+      return next.slice(0, MAX_MOUNTED_TABS);
+    });
+  }, [activeTabId, openTabs]);
+
+  // Lineage tab state — fetched lazily once the user opens the tab (or
+  // an SSE event auto-opens it). Re-fetched on lineage-changed events.
+  const [lineageData, setLineageData] = useState<LineageGraphPayload | null>(null);
+  const [lineageLoading, setLineageLoading] = useState(false);
+  const [lineageNode, setLineageNode] = useState<LineageNode | null>(null);
+
+  // Stable handlers so memoized children (LineageGraph, NodeMetadataPanel)
+  // don't bail out of memo every time the parent re-renders.
+  const handleLineageNodeClick = useCallback((n: LineageNode) => setLineageNode(n), []);
+  const handleLineageNodeClose = useCallback(() => setLineageNode(null), []);
 
   // Listen for "open metrics tab" event from header button
   useEffect(() => {
@@ -2177,6 +2764,117 @@ function WorkspaceSidebar({
     window.addEventListener('trainable:open-metrics-tab', handler);
     return () => window.removeEventListener('trainable:open-metrics-tab', handler);
   }, []);
+
+  // Listen for "open lineage tab" event (dispatched on experiment_created
+  // SSE) so the user lands on the new graph without manually clicking.
+  useEffect(() => {
+    const handler = () => {
+      setOpenTabs((prev) => {
+        if (prev.find((t) => t.id === LINEAGE_TAB_ID)) return prev;
+        return [
+          ...prev,
+          {
+            id: LINEAGE_TAB_ID,
+            label: 'Lineage',
+            icon: GitBranch,
+            iconColor: 'text-violet-400',
+            type: 'lineage',
+          },
+        ];
+      });
+      setActiveTabId(LINEAGE_TAB_ID);
+    };
+    window.addEventListener('trainable:open-lineage-tab', handler);
+    return () => window.removeEventListener('trainable:open-lineage-tab', handler);
+  }, []);
+
+  // Listen for "open html tab" — fired by the page-level canvas_html SSE
+  // handler. Opens (or focuses) the tab for that artifact key. Regenerating
+  // an artifact with the same key reuses the existing tab.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { key?: string; title?: string } | undefined;
+      const key = detail?.key;
+      if (!key) return;
+      const tabId = HTML_TAB_PREFIX + key;
+      setOpenTabs((prev) => {
+        const existing = prev.find((t) => t.id === tabId);
+        if (existing) {
+          if (detail?.title && existing.label !== detail.title) {
+            return prev.map((t) => (t.id === tabId ? { ...t, label: detail.title! } : t));
+          }
+          return prev;
+        }
+        return [
+          ...prev,
+          {
+            id: tabId,
+            label: detail?.title || key,
+            icon: Globe,
+            iconColor: 'text-fuchsia-400',
+            type: 'html',
+            htmlKey: key,
+          },
+        ];
+      });
+      setActiveTabId(tabId);
+    };
+    window.addEventListener('trainable:open-html-tab', handler as EventListener);
+    return () => window.removeEventListener('trainable:open-html-tab', handler as EventListener);
+  }, []);
+
+  // When session reload hydrates htmlArtifacts in bulk, materialize the
+  // tabs on mount (no SSE event will fire for them retroactively).
+  useEffect(() => {
+    if (htmlArtifacts.size === 0) return;
+    setOpenTabs((prev) => {
+      const present = new Set(prev.map((t) => t.id));
+      const additions: OpenTab[] = [];
+      for (const a of Array.from(htmlArtifacts.values())) {
+        const id = HTML_TAB_PREFIX + a.key;
+        if (!present.has(id)) {
+          additions.push({
+            id,
+            label: a.title || a.key,
+            icon: Globe,
+            iconColor: 'text-fuchsia-400',
+            type: 'html',
+            htmlKey: a.key,
+          });
+        }
+      }
+      return additions.length > 0 ? [...prev, ...additions] : prev;
+    });
+  }, [htmlArtifacts]);
+
+  // Refetch lineage on session change or when an SSE event signals a
+  // change. Keeping the fetch keyed on sessionId so reopening a closed
+  // canvas doesn't double-fire.
+  const refetchLineage = useCallback(async () => {
+    if (!sessionId) {
+      setLineageData(null);
+      return;
+    }
+    setLineageLoading(true);
+    try {
+      const g = await api.sessionLineage(sessionId);
+      setLineageData(g);
+    } catch (err) {
+      console.warn('lineage fetch failed', err);
+    } finally {
+      setLineageLoading(false);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    refetchLineage();
+  }, [refetchLineage]);
+
+  useEffect(() => {
+    const handler = () => refetchLineage();
+    window.addEventListener('trainable:lineage-changed', handler);
+    return () => window.removeEventListener('trainable:lineage-changed', handler);
+  }, [refetchLineage]);
 
   // Auto-expand directories when tree updates
   useEffect(() => {
@@ -2218,8 +2916,8 @@ function WorkspaceSidebar({
     }
   }, [canvasContent, canvasTitle]);
 
-  // Auto-open metrics tab when first metric arrives
-  const hasMetrics = metricPoints.length > 0;
+  // Auto-open metrics tab when the first metric OR rich log payload arrives
+  const hasMetrics = metricPoints.length > 0 || logEvents.length > 0;
   useEffect(() => {
     if (hasMetrics) {
       setOpenTabs((prev) => {
@@ -2267,6 +2965,120 @@ function WorkspaceSidebar({
     window.addEventListener('trainable:open-file', handler as EventListener);
     return () => window.removeEventListener('trainable:open-file', handler as EventListener);
   }, [openFile]);
+
+  // Pick a sensible default tab when the canvas opens with no active tab.
+  // Priority: existing report → live metrics → notebook → README/report.md →
+  // first browseable data file → first file at all. Skips when the user
+  // already has a tab active so reopening the canvas never overrides them.
+  const openMetricsTab = useCallback(() => {
+    setOpenTabs((prev) => {
+      if (prev.find((t) => t.id === METRICS_TAB_ID)) return prev;
+      return [
+        ...prev,
+        {
+          id: METRICS_TAB_ID,
+          label: 'Metrics',
+          icon: BarChart3,
+          iconColor: 'text-emerald-400',
+          type: 'metrics',
+        },
+      ];
+    });
+    setActiveTabId(METRICS_TAB_ID);
+  }, []);
+
+  const openReportTab = useCallback(() => {
+    setOpenTabs((prev) => {
+      if (prev.find((t) => t.id === REPORT_TAB_ID)) return prev;
+      return [
+        ...prev,
+        {
+          id: REPORT_TAB_ID,
+          label: canvasTitle || 'Report',
+          icon: FileText,
+          iconColor: 'text-blue-400',
+          type: 'report',
+        },
+      ];
+    });
+    setActiveTabId(REPORT_TAB_ID);
+  }, [canvasTitle]);
+
+  const flattenFilePaths = useCallback((root: FileTreeNode): string[] => {
+    const out: string[] = [];
+    const walk = (n: FileTreeNode) => {
+      if (n.type === 'file' && n.path) out.push(n.path);
+      for (const c of n.children || []) walk(c);
+    };
+    walk(root);
+    return out;
+  }, []);
+
+  const pickDefaultTab = useCallback((): (() => void) | null => {
+    // Prefer the most recent HTML artifact — the agent went to the
+    // trouble of authoring a visual showcase, so surface it on auto-open.
+    if (htmlArtifacts.size > 0) {
+      let latest: HtmlArtifact | null = null;
+      for (const a of Array.from(htmlArtifacts.values())) {
+        if (!latest || (a.ts || 0) > (latest.ts || 0)) latest = a;
+      }
+      if (latest) {
+        const target = latest;
+        return () =>
+          window.dispatchEvent(
+            new CustomEvent('trainable:open-html-tab', {
+              detail: { key: target.key, title: target.title },
+            }),
+          );
+      }
+    }
+    if (canvasContent) return openReportTab;
+    if (metricPoints.length > 0 || logEvents.length > 0) return openMetricsTab;
+    const all = flattenFilePaths(fileTree);
+    const notebook = all.find((p) => p.endsWith('.ipynb'));
+    if (notebook) return () => openFile(notebook);
+    const readme = all.find((p) => /\/(readme|report)\.md$/i.test(p));
+    if (readme) return () => openFile(readme);
+    const data = all.find((p) => /\.(csv|parquet|json|png|jpg|jpeg|svg)$/i.test(p));
+    if (data) return () => openFile(data);
+    if (all[0]) return () => openFile(all[0]);
+    return null;
+  }, [
+    htmlArtifacts,
+    canvasContent,
+    metricPoints.length,
+    logEvents.length,
+    fileTree,
+    flattenFilePaths,
+    openFile,
+    openMetricsTab,
+    openReportTab,
+  ]);
+
+  useEffect(() => {
+    const handler = () => {
+      if (activeTabId) return;
+      const action = pickDefaultTab();
+      action?.();
+    };
+    window.addEventListener('trainable:canvas-opened', handler);
+    return () => window.removeEventListener('trainable:canvas-opened', handler);
+  }, [activeTabId, pickDefaultTab]);
+
+  // Cold-open race: WorkspaceSidebar only mounts when canvasOpen flips
+  // true, which happens AFTER openCanvas() dispatches 'trainable:canvas-
+  // opened'. So on the first auto-open (file_created etc.) the listener
+  // above isn't registered in time and the picker never runs. Run it
+  // once on mount too — same guard, picks the right default tab.
+  useEffect(() => {
+    if (activeTabId) return;
+    const action = pickDefaultTab();
+    action?.();
+    // Intentionally mount-only — re-running on activeTabId changes would
+    // fight the user's explicit tab choices. The window listener above
+    // handles subsequent canvas-open events.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const closeTab = useCallback((tabId: string) => {
     setOpenTabs((prev) => {
@@ -2418,50 +3230,62 @@ function WorkspaceSidebar({
           </div>
         )}
 
-        {/* Content area */}
-        <div className="flex-1 overflow-hidden">
-          {activeTab?.type === 'file' ? (
-            <FileViewer filePath={activeTab.id} sessionId={sessionId} />
-          ) : activeTab?.type === 'report' && canvasContent ? (
-            <div className="h-full overflow-y-auto p-6 bg-black">
-              <div className="markdown-content">
-                <ReactMarkdown
-                  remarkPlugins={[remarkGfm]}
-                  components={{
-                    img: ({ src, alt }) => {
-                      let imgSrc = src || '';
-                      if (imgSrc.startsWith('/data/')) {
-                        imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
-                      } else if (imgSrc && !imgSrc.startsWith('http')) {
-                        const workspace = `/sessions/${sessionId}/eda`;
-                        imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
-                      }
-                      return (
-                        <img
-                          src={imgSrc}
-                          alt={alt || ''}
-                          className="max-w-full rounded-lg shadow-md my-4"
-                        />
-                      );
-                    },
-                  }}
-                >
-                  {canvasContent}
-                </ReactMarkdown>
+        {/* Content area — every opened tab stays mounted so scroll position,
+            fetched file content, legend toggles, lineage pan/zoom, and chart
+            animations all persist when switching tabs. The MRU mountedTabIds
+            list bounds memory by evicting the oldest non-active tab past the
+            cap. */}
+        <div className="flex-1 overflow-hidden relative">
+          {openTabs.map((tab) => {
+            if (!mountedTabIds.includes(tab.id)) return null;
+            // Report tab can be open but content-less while waiting for an
+            // agent to render it — skip the wrapper so the shared empty
+            // state below renders instead.
+            if (tab.type === 'report' && !canvasContent) return null;
+            const isActive = tab.id === activeTabId;
+            return (
+              <div key={tab.id} className={`h-full ${isActive ? 'block' : 'hidden'}`}>
+                {tab.type === 'file' ? (
+                  <FileViewer filePath={tab.id} sessionId={sessionId} />
+                ) : tab.type === 'report' ? (
+                  <ReportMarkdown content={canvasContent || ''} sessionId={sessionId} />
+                ) : tab.type === 'metrics' ? (
+                  <div className="h-full overflow-hidden bg-black">
+                    <MetricsTab
+                      metricPoints={metricPoints}
+                      chartConfig={chartConfig}
+                      logEvents={logEvents}
+                      state={sessionState}
+                    />
+                  </div>
+                ) : tab.type === 'lineage' ? (
+                  <div className="h-full overflow-hidden relative bg-white">
+                    <LineageGraph
+                      data={lineageData}
+                      loading={lineageLoading}
+                      height="100%"
+                      onNodeClick={handleLineageNodeClick}
+                    />
+                    {lineageNode ? (
+                      <NodeMetadataPanel
+                        node={lineageNode}
+                        data={lineageData}
+                        onClose={handleLineageNodeClose}
+                      />
+                    ) : null}
+                  </div>
+                ) : tab.type === 'html' ? (
+                  <HtmlPanel artifact={tab.htmlKey ? htmlArtifacts.get(tab.htmlKey) : undefined} />
+                ) : null}
               </div>
-            </div>
-          ) : activeTab?.type === 'metrics' ? (
-            <div className="h-full overflow-hidden bg-black">
-              <MetricsTab
-                metricPoints={metricPoints}
-                chartConfig={chartConfig}
-                state={sessionState}
-              />
-            </div>
-          ) : (
+            );
+          })}
+          {(!activeTab || (activeTab.type === 'report' && !canvasContent)) && (
             <div className="flex flex-col items-center justify-center h-full text-gray-600 bg-black">
               <Code2 className="w-8 h-8 mb-2 text-gray-700" />
-              <p className="text-xs">Select a file to view</p>
+              <p className="text-xs">
+                Workspace is empty — files will appear here as the agent works.
+              </p>
             </div>
           )}
         </div>
@@ -2623,7 +3447,9 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
         <span className={`${inline ? 'text-xs' : 'text-sm'} text-gray-300 flex-1`}>
           {isStart
             ? `${funVerb}...${elapsed > 0 ? ` ${elapsed}s` : ''}`
-            : `${doneLabel} for ${item.meta?.duration || 1}s`}
+            : item.meta?.duration
+              ? `${doneLabel} for ${item.meta.duration}s`
+              : doneLabel}
         </span>
         <ChevronRight
           className={`w-3.5 h-3.5 text-gray-500 transition-transform duration-150 ${
@@ -3043,8 +3869,9 @@ function renderGroupedChatItems(
   let i = 0;
 
   while (i < items.length) {
-    if (isToolItem(items[i])) {
-      // Collect consecutive tool items into a group
+    const cur = items[i];
+
+    if (isToolItem(cur)) {
       const group: ChatItem[] = [];
       while (i < items.length && isToolItem(items[i])) {
         group.push(items[i]);
@@ -3052,12 +3879,157 @@ function renderGroupedChatItems(
       }
       result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
     } else {
-      result.push(renderChatItem(items[i], streamingItemId, sessionId));
+      result.push(renderChatItem(cur, streamingItemId, sessionId));
       i++;
     }
   }
 
   return result;
+}
+
+// ---------------------------------------------------------------------------
+// UserMessageFilePills — collapsed list of file pills inside a user bubble.
+//
+// Bulk uploads (e.g. an image dataset of thousands of files) used to render
+// every filename as a flex-wrapped pill, growing the bubble vertically until
+// it pushed the chat input bar off-screen and the user couldn't type. Cap
+// the visible count, and stash the rest behind a "+N more" toggle so the
+// bubble stays a sensible size.
+// ---------------------------------------------------------------------------
+
+const FILE_PILL_PREVIEW = 6;
+
+function UserMessageFilePills({ files, hasText }: { files: string[]; hasText: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const overflow = files.length - FILE_PILL_PREVIEW;
+  const visible = expanded || overflow <= 0 ? files : files.slice(0, FILE_PILL_PREVIEW);
+  return (
+    <div className={`flex flex-wrap gap-1.5 px-4 ${hasText ? 'pt-3 pb-1' : 'py-3'}`}>
+      {visible.map((f, i) => (
+        <span
+          key={i}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/15 text-xs"
+        >
+          <Paperclip className="w-3 h-3 opacity-70" />
+          <span className="truncate max-w-[150px]">{f}</span>
+        </span>
+      ))}
+      {overflow > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          className="inline-flex items-center px-2 py-0.5 rounded-md bg-white/20 hover:bg-white/30 text-xs transition-colors"
+        >
+          {expanded ? 'show less' : `+${overflow} more`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AttachedFilesPreview — staged-attachment preview that sits above the
+// chat input. Used in both the home (no-session) input and the in-session
+// input. Same goal as UserMessageFilePills: when the user picks a folder
+// of thousands of files, do NOT render every pill — that pushes the
+// input bar off-screen and makes Send unreachable. Cap to a preview of
+// ~6 with a "+N more" toggle and a "clear all" escape hatch. Also nudge
+// the user toward the S3 upload script when the count gets silly.
+// ---------------------------------------------------------------------------
+
+const STAGED_PILL_PREVIEW = 6;
+// Threshold for the "use the script" hint. Browser multipart uploads of
+// many small files are slow on the backend (per-file S3 + Modal Volume
+// round-trips), so steer the user to upload_to_s3.py for big sets.
+const BULK_UPLOAD_HINT_THRESHOLD = 100;
+
+function humanBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function AttachedFilesPreview({
+  files,
+  onRemove,
+  onClearAll,
+  variant,
+}: {
+  files: File[];
+  onRemove: (i: number) => void;
+  onClearAll: () => void;
+  /** "home" = larger pills (above the centered welcome input).
+   *  "session" = compact pills (above the in-session input). */
+  variant: 'home' | 'session';
+}) {
+  const [expanded, setExpanded] = useState(false);
+  if (files.length === 0) return null;
+
+  const overflow = files.length - STAGED_PILL_PREVIEW;
+  const visible = expanded || overflow <= 0 ? files : files.slice(0, STAGED_PILL_PREVIEW);
+  const totalBytes = files.reduce((s, f) => s + f.size, 0);
+  const showHint = files.length >= BULK_UPLOAD_HINT_THRESHOLD;
+
+  const pillCls =
+    variant === 'home'
+      ? 'flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-gray-300'
+      : 'flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-white/[0.06] border border-white/[0.08] text-xs text-gray-300';
+  const wrapCls = variant === 'home' ? 'flex flex-wrap gap-2' : 'flex flex-wrap gap-2 mb-2';
+
+  return (
+    <div className={variant === 'home' ? '' : 'mb-2'}>
+      {/* Summary row: total count + size + clear-all */}
+      <div className="flex items-center justify-between mb-1.5 text-[11px] text-gray-500">
+        <span>
+          {files.length} file{files.length === 1 ? '' : 's'} · {humanBytes(totalBytes)}
+        </span>
+        <button
+          type="button"
+          onClick={onClearAll}
+          className="px-1.5 py-0.5 rounded hover:bg-white/[0.06] text-gray-500 hover:text-gray-300 transition-colors"
+          title="Remove all attached files"
+        >
+          clear all
+        </button>
+      </div>
+
+      {/* Hint for huge folder uploads — browser POST is the slow path */}
+      {showHint && (
+        <div className="mb-1.5 px-2 py-1 rounded text-[11px] text-amber-300/90 bg-amber-500/10 border border-amber-500/20">
+          That&apos;s a lot of files. The browser upload streams each one serially through the
+          backend — for &gt;100 files, you&apos;ll get dramatically faster results from{' '}
+          <code className="bg-black/40 px-1 rounded">upload_to_s3.py</code> + the &quot;Browse
+          S3&quot; attach option.
+        </div>
+      )}
+
+      <div className={wrapCls}>
+        {visible.map((f, i) => (
+          <div key={i} className={pillCls}>
+            <Paperclip className="w-3 h-3 text-gray-500" />
+            <span className="truncate max-w-[160px]">{f.name}</span>
+            <button
+              onClick={() => onRemove(i)}
+              title="Remove file"
+              className="p-0.5 hover:bg-white/[0.1] rounded transition-colors"
+            >
+              <X className="w-3 h-3 text-gray-500" />
+            </button>
+          </div>
+        ))}
+        {overflow > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="inline-flex items-center px-2.5 py-1 rounded-lg bg-white/[0.1] hover:bg-white/[0.15] border border-white/[0.08] text-xs text-gray-300 transition-colors"
+          >
+            {expanded ? 'show less' : `+${overflow} more`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -3079,19 +4051,7 @@ function renderChatItem(
       return (
         <div key={item.id} className="flex justify-end animate-fade-in">
           <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary-600 text-white text-sm overflow-hidden">
-            {hasFiles && (
-              <div className={`flex flex-wrap gap-1.5 px-4 ${hasText ? 'pt-3 pb-1' : 'py-3'}`}>
-                {files.map((f, i) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-white/15 text-xs"
-                  >
-                    <Paperclip className="w-3 h-3 opacity-70" />
-                    <span className="truncate max-w-[150px]">{f}</span>
-                  </span>
-                ))}
-              </div>
-            )}
+            {hasFiles && <UserMessageFilePills files={files} hasText={Boolean(hasText)} />}
             {hasText && (
               <div className="px-4 py-2.5 whitespace-pre-wrap break-words">
                 {tokens

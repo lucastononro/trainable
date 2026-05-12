@@ -1,0 +1,21 @@
+type: object
+properties:
+  notebook_name:
+    type: string
+    description: 'Target notebook (e.g. "data-overview"). Creates the file if it
+
+      doesn''t exist. Defaults to "scratch" if omitted.
+
+      '
+  code:
+    type: string
+    description: Python source to run. Emits outputs via normal print / last-expression
+      rules.
+  after_cell_id:
+    type: string
+    description: Optional — insert after this existing cell.
+  timeout_seconds:
+    type: integer
+    description: Max wall-clock time (default 300, max 1800).
+required:
+- code

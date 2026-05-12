@@ -1,0 +1,36 @@
+# Trainable sandbox compute pricing — USD per second, by provider × GPU type.
+#
+# Today only `modal` is in use (Modal Labs, https://modal.com/pricing).
+# Add new providers as a sibling top-level key (e.g. `runpod:`, `together:`,
+# `aws:`) and keep the GPU keys consistent so reporting stays aggregatable.
+#
+# Lookup chain in services/usage.py:_resolve_compute_rate:
+#   <provider>.<gpu>     ← preferred
+#   <provider>.cpu       ← when gpu is unset / unknown for that provider
+#   (fallback to first provider's cpu)
+#
+# GPU key names must match the consumer enums (schema.yaml,
+# routers/registry.py, services/deploy.py). The old `A100` key silently
+# broke 40GB billing because consumers use `A100-40GB`.
+#
+# `modal` CPU/GPU rates are the per-second container price. Memory and
+# volume are billed separately by Modal and aren't tracked here yet (most
+# sandboxes are GPU-dominated). Reference rates from the Modal pricing
+# page, for when we wire them in:
+#   memory  $0.00000222 / GiB / sec
+#   volume  $0.09       / GiB / mo   (first 1 TiB / mo free)
+#
+# Last reviewed: 2026-05
+
+modal:
+  cpu:            0.0000131    # ~$0.047/CPU-hr (per physical core; min 0.125 cores)
+  T4:             0.000164     # ~$0.59/hr
+  L4:             0.000222     # ~$0.80/hr
+  A10G:           0.000306     # ~$1.10/hr   (also fits "Nvidia A10")
+  L40S:           0.000542     # ~$1.95/hr
+  A100-40GB:      0.000583     # ~$2.10/hr
+  A100-80GB:      0.000694     # ~$2.50/hr
+  RTX-PRO-6000:   0.000842     # ~$3.03/hr
+  H100:           0.001097     # ~$3.95/hr
+  H200:           0.001261     # ~$4.54/hr
+  B200:           0.001736     # ~$6.25/hr

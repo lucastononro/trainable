@@ -5,6 +5,12 @@ asyncpg>=0.30.0
 aiosqlite==0.20.0
 anthropic>=0.42.0
 claude-agent-sdk>=0.1.51
+openai>=1.54.0
+google-genai>=0.3.0
+# litellm: >=1.83.7 covers CVE-2026-42208 (SQL injection in proxy auth,
+# CVSS 9.3, actively exploited). The malicious 1.82.7 / 1.82.8 from the
+# March 2026 PyPI supply-chain compromise are also quarantined upstream.
+litellm>=1.83.7
 modal>=1.2.0
 python-multipart==0.0.12
 python-dotenv==1.0.1
@@ -21,3 +27,20 @@ jupyter_client>=8.6.0
 pytest>=9.0.0
 pytest-asyncio>=1.3.0
 httpx>=0.28.0
+
+# Paper + web search backends
+beautifulsoup4>=4.12.0
+pypdf>=5.0.0
+
+# Observability — OpenTelemetry + structured logging. All exporters
+# gracefully no-op when OTEL_EXPORTER_OTLP_ENDPOINT / SENTRY_DSN are unset,
+# so installing these adds zero runtime overhead in dev.
+structlog>=24.4.0
+opentelemetry-api>=1.27.0
+opentelemetry-sdk>=1.27.0
+opentelemetry-exporter-otlp>=1.27.0
+opentelemetry-instrumentation-fastapi>=0.48b0
+opentelemetry-instrumentation-sqlalchemy>=0.48b0
+opentelemetry-instrumentation-httpx>=0.48b0
+opentelemetry-instrumentation-logging>=0.48b0
+sentry-sdk[fastapi]>=2.18.0

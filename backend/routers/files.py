@@ -10,7 +10,11 @@ import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from services.volume import listdir_async, read_volume_file_async
+from services.volume import (
+    listdir_async,
+    read_volume_file_async,
+    should_ignore_workspace_path,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -44,6 +48,8 @@ async def list_files(path: str = "/"):
         path = _validate_path(path)
         entries = []
         for entry in await listdir_async(path, recursive=False):
+            if should_ignore_workspace_path(entry.path):
+                continue
             entries.append(
                 {
                     "path": entry.path,
@@ -68,14 +74,58 @@ async def read_file(path: str):
         raise HTTPException(status_code=404, detail=str(e))
 
 
+# CSP for served HTML artifacts (rendered inside a sandboxed iframe on
+# the frontend). Allows inline <script>/<style> (Plotly's HTML export
+# relies on it) but blocks any outbound network — `connect-src 'none'`
+# is the belt-and-suspenders defense even if the iframe sandbox is
+# bypassed somehow. CDN allowlist covers the common interactive-viz
+# libraries (Plotly, Bokeh, D3) that agents reach for.
+_HTML_CSP = (
+    "default-src 'none'; "
+    # 'self' lets HTML reference companion JS files saved next to it on
+    # the volume via absolute /api/files/raw?path=… URLs. 'unsafe-inline'
+    # covers <script>…</script> blocks (Plotly's HTML export uses these).
+    # CDN allow-list covers the common interactive-viz libs agents reach for.
+    "script-src 'self' 'unsafe-inline' https://cdn.plot.ly https://cdn.bokeh.org "
+    "https://d3js.org https://cdnjs.cloudflare.com; "
+    "style-src 'self' 'unsafe-inline' https:; "
+    "img-src 'self' data: blob: https:; "
+    "font-src 'self' data: https:; "
+    # connect-src 'none' is the belt+suspenders: even if a script slips
+    # past the allow-list, it cannot fetch/XHR/WebSocket out of the iframe.
+    "connect-src 'none'"
+    # NOTE: deliberately no `frame-ancestors` directive. `'self'` would
+    # resolve to the backend's origin and block embedding from the
+    # frontend (different port/origin in dev, same origin in prod via
+    # reverse proxy). The iframe sandbox + missing `allow-same-origin`
+    # are the actual containment; restricting who can embed serves no
+    # additional purpose for this artifact channel.
+)
+
+
 @router.get("/files/raw")
 async def raw_file(path: str):
-    """Serve a raw file from Modal Volume (images, etc.)."""
+    """Serve a raw file from Modal Volume (images, html artifacts, etc.).
+
+    For text/html responses, attach a strict Content-Security-Policy +
+    X-Content-Type-Options: nosniff so agent-generated HTML rendered in
+    a sandboxed iframe cannot beacon out to arbitrary hosts and a
+    misclassified `.html` cannot be re-interpreted as a different MIME.
+    """
     try:
         path = _validate_path(path)
         data = await read_volume_file_async(path)
         mime, _ = mimetypes.guess_type(path)
-        return Response(content=data, media_type=mime or "application/octet-stream")
+        headers: dict[str, str] = {}
+        if mime == "text/html":
+            headers["Content-Security-Policy"] = _HTML_CSP
+            headers["X-Content-Type-Options"] = "nosniff"
+            headers["Referrer-Policy"] = "no-referrer"
+        return Response(
+            content=data,
+            media_type=mime or "application/octet-stream",
+            headers=headers or None,
+        )
     except Exception as e:
         logger.error(f"raw_file error: {e}")
         raise HTTPException(status_code=404, detail=str(e))
@@ -87,6 +137,12 @@ async def file_tree(root: str = "/"):
 
     The root is typically /sessions/{uuid}. We unwrap wrapper directories
     so the UI sees eda/, prep/, train/ at the top level.
+
+    A brand-new session won't have a workspace directory until the first
+    agent run creates one — `listdir_async` raises FileNotFoundError in
+    that case. Return an empty tree (200) instead of a 500 so the
+    frontend's session-load path doesn't have to special-case "not yet
+    populated" sessions.
     """
     try:
         root = _validate_path(root)
@@ -95,6 +151,13 @@ async def file_tree(root: str = "/"):
         tree = _unwrap_tree(tree)
         tree["name"] = "workspace"
         return tree
+    except FileNotFoundError:
+        return {
+            "name": "workspace",
+            "path": root,
+            "type": "directory",
+            "children": [],
+        }
     except Exception as e:
         logger.error(f"file_tree error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -111,6 +174,8 @@ def _build_tree(root: str, entries) -> dict:
     }
 
     for entry in entries:
+        if should_ignore_workspace_path(entry.path):
+            continue
         rel = entry.path.lstrip("/")
         if rel.startswith(root_clean + "/"):
             rel = rel[len(root_clean) + 1 :]

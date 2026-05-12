@@ -165,6 +165,180 @@ async def test_delete_experiment_not_found(client):
 
 
 @pytest.mark.asyncio
+async def test_delete_experiment_with_usage_events(
+    client, sample_csv, default_project_id
+):
+    """Regression: deleting a chat (experiment) whose sessions emitted
+    usage_events used to fail on a FK violation against usage_events.session_id.
+    The FK now CASCADEs, and the Session.usage_events relationship cleans up."""
+    from sqlalchemy import select
+
+    from db import async_session
+    from models import Session as SessionModel, UsageEvent
+
+    with open(sample_csv, "rb") as f:
+        create_resp = await client.post(
+            "/api/experiments",
+            data={
+                "project_id": default_project_id,
+                "name": "Errored Chat",
+                "description": "",
+                "instructions": "",
+            },
+            files={"files": ("data.csv", f, "text/csv")},
+        )
+    exp_id = create_resp.json()["id"]
+
+    # Find the auto-created session and seed a usage_events row, mirroring
+    # what services.usage.record_llm_usage writes after an LLM call.
+    async with async_session() as db:
+        sess = (
+            await db.execute(
+                select(SessionModel).where(SessionModel.experiment_id == exp_id)
+            )
+        ).scalar_one()
+        db.add(
+            UsageEvent(
+                session_id=sess.id,
+                project_id=default_project_id,
+                kind="llm",
+                provider="openai",
+                model="gpt-4o-mini",
+                input_tokens=100,
+                output_tokens=50,
+                cost_usd=0.01,
+                is_error=True,
+            )
+        )
+        await db.commit()
+        sess_id = sess.id
+
+    resp = await client.delete(f"/api/experiments/{exp_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] is True
+
+    # The cascade should have wiped the usage_events row alongside the session.
+    async with async_session() as db:
+        remaining = (
+            (
+                await db.execute(
+                    select(UsageEvent).where(UsageEvent.session_id == sess_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert remaining == [], "usage_events not cascaded on session delete"
+
+
+@pytest.mark.asyncio
+async def test_delete_experiment_with_registered_model(
+    client, sample_csv, default_project_id
+):
+    """Regression: deleting an experiment that already has a
+    RegisteredModel + RunSnapshot used to fail on FK violation, so the
+    user had to click Delete twice. The cascade now wipes both children
+    in a single transaction."""
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from db import async_session
+    from models import (
+        Experiment,
+        ExperimentState,
+        RegisteredModel,
+        RunSnapshot,
+        Session as SessionModel,
+    )
+
+    # Create experiment + session via the legacy route so we have a real
+    # FK chain to delete.
+    with open(sample_csv, "rb") as f:
+        create_resp = await client.post(
+            "/api/experiments",
+            data={
+                "project_id": default_project_id,
+                "name": "to-delete",
+                "description": "",
+                "instructions": "",
+            },
+            files={"files": ("data.csv", f, "text/csv")},
+        )
+    exp_id = create_resp.json()["id"]
+    sid = create_resp.json()["session_id"]
+
+    # Seed a RegisteredModel + RunSnapshot pointing at this experiment,
+    # mirroring what register_model_declared / take_snapshot would write.
+    async with async_session() as db:
+        # Mark the experiment as trained so the model-row state matches.
+        exp = (
+            await db.execute(select(Experiment).where(Experiment.id == exp_id))
+        ).scalar_one()
+        exp.state = ExperimentState.TRAINED.value
+        db.add(
+            RegisteredModel(
+                id=str(_uuid.uuid4()),
+                project_id=default_project_id,
+                experiment_id=exp_id,
+                name="m",
+                version=1,
+                source_session_id=sid,
+                artifact_uri="/x.pkl",
+                framework="xgb",
+            )
+        )
+        db.add(
+            RunSnapshot(
+                experiment_id=exp_id,
+                session_id=sid,
+                dataset_hash="d" * 64,
+                code_hash="c" * 64,
+            )
+        )
+        await db.commit()
+
+    # First delete should succeed in one shot.
+    resp = await client.delete(f"/api/experiments/{exp_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] is True
+
+    # Confirm the cascade actually wiped the children.
+    async with async_session() as db:
+        m = (
+            (
+                await db.execute(
+                    select(RegisteredModel).where(
+                        RegisteredModel.experiment_id == exp_id
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        s = (
+            (
+                await db.execute(
+                    select(RunSnapshot).where(RunSnapshot.experiment_id == exp_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        e = (
+            await db.execute(select(Experiment).where(Experiment.id == exp_id))
+        ).scalar_one_or_none()
+        sess = (
+            await db.execute(select(SessionModel).where(SessionModel.id == sid))
+        ).scalar_one_or_none()
+    assert m == []
+    assert s == []
+    assert e is None
+    # Legacy session was a child via Experiment.sessions cascade — also gone.
+    assert sess is None
+
+
+@pytest.mark.asyncio
 async def test_create_experiment_from_s3_invalid_path(client, default_project_id):
     resp = await client.post(
         "/api/experiments/from-s3",
@@ -205,3 +379,171 @@ async def test_experiment_latest_session_tracking(
     assert len(body) == 2
     tracked = next(e for e in body if e["id"] == exp_id)
     assert tracked["latest_session_id"] is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_experiment_with_deployed_model(
+    client, sample_csv, default_project_id
+):
+    """Regression: deleting an experiment whose RegisteredModel has a
+    `deployments` row used to raise ForeignKeyViolationError because the
+    RegisteredModel→Deployment relationship was missing a cascade. The
+    ORM now selectinloads both and SQLAlchemy flushes deletes in order."""
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from db import async_session
+    from models import Deployment, Experiment, ExperimentState, RegisteredModel
+
+    with open(sample_csv, "rb") as f:
+        create_resp = await client.post(
+            "/api/experiments",
+            data={
+                "project_id": default_project_id,
+                "name": "to-delete-with-deployment",
+                "description": "",
+                "instructions": "",
+            },
+            files={"files": ("data.csv", f, "text/csv")},
+        )
+    exp_id = create_resp.json()["id"]
+    sid = create_resp.json()["session_id"]
+    model_id = str(_uuid.uuid4())
+
+    async with async_session() as db:
+        exp = (
+            await db.execute(select(Experiment).where(Experiment.id == exp_id))
+        ).scalar_one()
+        exp.state = ExperimentState.TRAINED.value
+        db.add(
+            RegisteredModel(
+                id=model_id,
+                project_id=default_project_id,
+                experiment_id=exp_id,
+                name="m",
+                version=1,
+                source_session_id=sid,
+                artifact_uri="/x.pkl",
+                framework="xgb",
+            )
+        )
+        db.add(
+            Deployment(
+                id=str(_uuid.uuid4()),
+                model_id=model_id,
+                status="live",
+                endpoint_url="https://example.modal.run/x",
+                modal_app="trainable-model-x",
+                modal_function="predict",
+                compute="cpu",
+            )
+        )
+        await db.commit()
+
+    resp = await client.delete(f"/api/experiments/{exp_id}")
+    assert resp.status_code == 200, resp.text
+
+    async with async_session() as db:
+        deps = (
+            (
+                await db.execute(
+                    select(Deployment).where(Deployment.model_id == model_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        models = (
+            (
+                await db.execute(
+                    select(RegisteredModel).where(RegisteredModel.id == model_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert deps == []
+    assert models == []
+
+
+@pytest.mark.asyncio
+async def test_delete_project_with_deployed_model(
+    client, sample_csv, default_project_id
+):
+    """Regression: deleting a project whose model had a `deployments` row
+    used to fail with ForeignKeyViolationError mid-cascade — the user saw
+    the project still in the sidebar and a 500 in the backend logs. The
+    cascade now flows project → registered_models → deployments."""
+    import uuid as _uuid
+
+    from sqlalchemy import select
+
+    from db import async_session
+    from models import Deployment, Experiment, ExperimentState, RegisteredModel
+
+    with open(sample_csv, "rb") as f:
+        create_resp = await client.post(
+            "/api/experiments",
+            data={
+                "project_id": default_project_id,
+                "name": "deployed",
+                "description": "",
+                "instructions": "",
+            },
+            files={"files": ("data.csv", f, "text/csv")},
+        )
+    exp_id = create_resp.json()["id"]
+    sid = create_resp.json()["session_id"]
+    model_id = str(_uuid.uuid4())
+    dep_id = str(_uuid.uuid4())
+
+    async with async_session() as db:
+        exp = (
+            await db.execute(select(Experiment).where(Experiment.id == exp_id))
+        ).scalar_one()
+        exp.state = ExperimentState.TRAINED.value
+        db.add(
+            RegisteredModel(
+                id=model_id,
+                project_id=default_project_id,
+                experiment_id=exp_id,
+                name="m",
+                version=1,
+                source_session_id=sid,
+                artifact_uri="/x.pkl",
+                framework="xgb",
+            )
+        )
+        db.add(
+            Deployment(
+                id=dep_id,
+                model_id=model_id,
+                status="live",
+                endpoint_url="https://example.modal.run/x",
+                compute="cpu",
+            )
+        )
+        await db.commit()
+
+    resp = await client.delete(f"/api/projects/{default_project_id}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["deleted"] is True
+
+    async with async_session() as db:
+        deps = (
+            (await db.execute(select(Deployment).where(Deployment.id == dep_id)))
+            .scalars()
+            .all()
+        )
+        models = (
+            (
+                await db.execute(
+                    select(RegisteredModel).where(RegisteredModel.id == model_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+    assert deps == []
+    assert models == []
