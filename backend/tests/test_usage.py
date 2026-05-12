@@ -51,5 +51,5 @@ def test_compute_sandbox_cost_cpu_default():
 
 def test_compute_sandbox_cost_gpu_more_expensive():
     cpu = compute_sandbox_cost(60.0, gpu="cpu")
-    gpu = compute_sandbox_cost(60.0, gpu="A100")
+    gpu = compute_sandbox_cost(60.0, gpu="A100-40GB")
     assert gpu > cpu * 10
