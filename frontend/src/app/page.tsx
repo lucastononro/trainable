@@ -66,6 +66,7 @@ import {
   GitBranch,
   Globe,
   ExternalLink,
+  Download,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Notebook from '@/components/notebook/Notebook';
@@ -3136,6 +3137,21 @@ function WorkspaceSidebar({
             >
               <BarChart3 className="w-3 h-3 text-gray-600" />
             </button>
+            <a
+              // Browser-native streamed zip download — Content-Disposition on
+              // the backend picks the filename. Routed through Next's /api
+              // rewrite so dev and prod both work with no host hard-coding.
+              href={sessionId ? `/api/sessions/${sessionId}/download` : undefined}
+              aria-disabled={!sessionId}
+              className={`p-1 rounded transition-colors ${
+                sessionId
+                  ? 'hover:bg-white/[0.06] cursor-pointer'
+                  : 'opacity-40 pointer-events-none'
+              }`}
+              title="Download workspace as zip"
+            >
+              <Download className="w-3 h-3 text-gray-600" />
+            </a>
             <button
               onClick={onClose}
               className="p-1 hover:bg-white/[0.06] rounded transition-colors"
