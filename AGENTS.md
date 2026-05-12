@@ -58,6 +58,7 @@ frontend (Next.js)  ─ SSE ─►  backend (FastAPI)  ──►  Modal sandboxe
 - **Don't ship multi-provider scaffolding that doesn't work end-to-end.** If only Claude works today, the OpenAI/Gemini providers should either work or not be in the model picker. Half-wired providers confuse users and waste their API keys.
 - **Don't trust `gh pr edit` silently.** After updating a PR body, fetch it back and diff. Several silently-failed edits cost us real time.
 - **Don't squash legitimate features into a single mega-commit.** OTel + provider factory + UI polish in one 5000-line PR makes bisecting regressions impossible.
+- **Module docstrings describe what the module *is*, not what it isn't.** Skip the "kept separate from X so they don't tangle" justification — the file path already says where the code lives. Lead with the responsibility (e.g. "Canvas HTML/JS artifact publishing.") and leave architectural rationale for the PR description or AGENTS.md.
 
 ## Working with the codebase as an AI agent
 

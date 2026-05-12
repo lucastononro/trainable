@@ -10,7 +10,11 @@ import re
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
-from services.volume import listdir_async, read_volume_file_async
+from services.volume import (
+    listdir_async,
+    read_volume_file_async,
+    should_ignore_workspace_path,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -44,6 +48,8 @@ async def list_files(path: str = "/"):
         path = _validate_path(path)
         entries = []
         for entry in await listdir_async(path, recursive=False):
+            if should_ignore_workspace_path(entry.path):
+                continue
             entries.append(
                 {
                     "path": entry.path,
@@ -168,6 +174,8 @@ def _build_tree(root: str, entries) -> dict:
     }
 
     for entry in entries:
+        if should_ignore_workspace_path(entry.path):
+            continue
         rel = entry.path.lstrip("/")
         if rel.startswith(root_clean + "/"):
             rel = rel[len(root_clean) + 1 :]

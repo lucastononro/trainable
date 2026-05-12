@@ -27,7 +27,6 @@ import type {
   DeploymentRow,
   RunSnapshotRow,
   DatasetVersionRow,
-  CompareResponse,
   LineageGraph,
   DatasetVersionDetail,
   SessionRow,
@@ -184,10 +183,6 @@ export const api = {
   takeSnapshot: (sessionId: string) =>
     fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`, { method: 'POST' }),
   getSnapshot: (sessionId: string) => fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`),
-
-  // Compare
-  compareSessions: (sessionIds: string[]) =>
-    fetchJSON<CompareResponse>(`/compare?sessions=${sessionIds.join(',')}`),
 
   // Dataset versions
   projectDatasetVersions: (projectId: string) =>

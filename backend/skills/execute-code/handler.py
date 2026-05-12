@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import time
 
+import modal.exception as modal_exc
+
 from services.sandbox import run_code
 from services.skills.state import (
     _known_files,
@@ -110,6 +112,34 @@ def create_handler(
                 agent_type=_agent_type,
                 agent_id=_agent_id,
             )
+        except (modal_exc.SandboxTimeoutError, modal_exc.TimeoutError) as e:
+            # Modal killed the sandbox at its configured timeout. Surface this
+            # as a *tool_output* with is_error=True (not a session crash) so
+            # the model recognises the timeout and can decide: stop, retry
+            # with a smaller chunk, escalate to a heavier profile, or pivot.
+            elapsed = round(time.time() - start, 1)
+            error_msg = (
+                f"Sandbox timed out after {elapsed}s "
+                f"(profile={profile_key}, configured timeout={timeout or 'default'}s). "
+                f"The Python process was killed mid-execution and partial "
+                f"output (if any) is lost. Options: (a) split the work into "
+                f"smaller chunks, (b) reduce data size or iterations, "
+                f"(c) re-run with heavy=true for the GPU/training profile. "
+                f"Underlying error: {e.__class__.__name__}"
+            )
+            logger.warning("Sandbox timeout (session=%s): %s", session_id, e)
+            await publish_fn(
+                session_id,
+                "tool_end",
+                {
+                    "tool": "execute_code",
+                    "output": error_msg,
+                    "duration": elapsed,
+                    "timed_out": True,
+                },
+                role="tool",
+            )
+            return {"content": [{"type": "text", "text": error_msg}], "is_error": True}
         except Exception as e:
             error_msg = f"Sandbox error: {e}"
             await publish_fn(

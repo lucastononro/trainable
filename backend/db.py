@@ -259,7 +259,7 @@ def _run_migrations(connection):
                     )
                 )
             except Exception as e:
-                logger.debug("[DB] dataset_ref nullability already loosened: %s", e)
+                logger.warning("[DB] dataset_ref nullability already loosened: %s", e)
 
     if insp.has_table("sessions"):
         scols = [c["name"] for c in insp.get_columns("sessions")]
@@ -292,7 +292,7 @@ def _run_migrations(connection):
                     )
                 )
             except Exception as e:
-                logger.debug(
+                logger.warning(
                     "[DB] sessions.experiment_id nullability already loosened: %s", e
                 )
 
@@ -324,7 +324,7 @@ def _run_migrations(connection):
                     )
                 )
             except Exception as e:
-                logger.debug(
+                logger.warning(
                     "[DB] registered_models.source_session_id nullability already loosened: %s",
                     e,
                 )
@@ -404,7 +404,9 @@ def _run_migrations(connection):
                     )
                 )
             except Exception as e:
-                logger.debug("[DB] run_snapshots session_id unique drop skipped: %s", e)
+                logger.warning(
+                    "[DB] run_snapshots session_id unique drop skipped: %s", e
+                )
 
     # ------------------------------------------------------------------
     # Indexes on hot FK columns. `CREATE INDEX IF NOT EXISTS` is supported

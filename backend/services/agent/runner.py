@@ -28,8 +28,7 @@ from services.volume import (
 )
 
 from observability import agent_span, bind_log_context, clear_log_context
-from services.broadcaster import broadcaster
-from services.usage import compute_llm_cost, record_llm_usage
+from services.usage import record_llm_usage
 
 from .agents import (
     get_agent_default_model,
@@ -460,6 +459,7 @@ async def _drive_provider(
     agent_models: dict,
     publish,
     agent_span,
+    thinking_level: str | None = None,
 ) -> str:
     """Drive one agent run via the LLM factory.
 
@@ -586,7 +586,32 @@ async def _drive_provider(
         except Exception as e:
             logger.warning("record_llm_usage failed: %s", e)
 
+    # Wall-clock cap hint for providers/SDKs. The runner no longer wraps its
+    # own loop with `asyncio.timeout(timeout_s)` — that competed with the
+    # per-sandbox timeout configured per project and could kill a session
+    # mid-tool-call without surfacing the failure to the model. The single
+    # governing timeout is the sandbox's own (`sandbox_timeout`, override
+    # per project via the agent's `default`/`training` profile). When it
+    # fires, Modal kills the container and the execute-code handler returns
+    # an `is_error` tool_result so the model can recognise the timeout and
+    # adapt (smaller chunk, different approach) or stop. The value below is
+    # still passed as a hint to provider SDKs that accept one.
     timeout_s = settings.agent_timeout_seconds
+
+    # Translate the resolved thinking level into provider-shaped kwargs once
+    # so both run-paths spread the same config. OpenAI consumes
+    # `reasoning_effort`; Claude/Gemini accept the kwargs and currently
+    # ignore them (extending those providers is tracked separately).
+    thinking_kwargs: dict = {}
+    if thinking_level:
+        try:
+            from services.llm.thinking import to_provider_config
+
+            thinking_kwargs = to_provider_config(
+                provider_id, thinking_level, model_id=model
+            )
+        except Exception as e:
+            logger.debug("thinking config build failed: %s", e)
 
     # ---- Claude / MCP path -------------------------------------------------
     if caps.supports_mcp:
@@ -616,47 +641,47 @@ async def _drive_provider(
         )
         prefixed_tool_names = [f"mcp__trainable__{s}" for s in claude_skills]
 
-        async with asyncio.timeout(timeout_s):
-            async for event in provider.run(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                model=model,
-                tools=prefixed_tool_names,
-                mcp_servers={"trainable": mcp_server},
-                max_turns=settings.agent_max_turns,
-                timeout_seconds=timeout_s,
-                env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
-            ):
-                if event.kind == "text":
-                    await _persist_text(event.data.get("text", ""))
-                elif event.kind == "tool_call":
-                    await _persist_tool_call(
-                        event.data.get("tool_name", ""),
-                        event.data.get("tool_call_id", ""),
-                        event.data.get("arguments", {}) or {},
-                    )
-                elif event.kind == "tool_result":
-                    await _persist_tool_result(
-                        event.data.get("tool_call_id", ""),
-                        event.data.get("content"),
-                        bool(event.data.get("is_error")),
-                    )
-                elif event.kind == "usage":
-                    # Partial events are per-AssistantMessage deltas the
-                    # provider emits for live cost feedback; don't write
-                    # a DB row for those (would double-count against the
-                    # final ResultMessage aggregate). Final events have
-                    # `partial=False` (default) and are recorded.
-                    if event.data.get("partial"):
-                        continue
-                    await _record_usage(
-                        event.data.get("model") or model,
-                        event.data.get("usage") or {},
-                        is_error=False,
-                        total_cost=event.data.get("total_cost_usd"),
-                    )
-                elif event.kind == "error":
-                    logger.warning("Provider error: %s", event.data.get("message"))
+        async for event in provider.run(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=model,
+            tools=prefixed_tool_names,
+            mcp_servers={"trainable": mcp_server},
+            max_turns=settings.agent_max_turns,
+            timeout_seconds=timeout_s,
+            env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
+            **thinking_kwargs,
+        ):
+            if event.kind == "text":
+                await _persist_text(event.data.get("text", ""))
+            elif event.kind == "tool_call":
+                await _persist_tool_call(
+                    event.data.get("tool_name", ""),
+                    event.data.get("tool_call_id", ""),
+                    event.data.get("arguments", {}) or {},
+                )
+            elif event.kind == "tool_result":
+                await _persist_tool_result(
+                    event.data.get("tool_call_id", ""),
+                    event.data.get("content"),
+                    bool(event.data.get("is_error")),
+                )
+            elif event.kind == "usage":
+                # Partial events are per-AssistantMessage deltas the
+                # provider emits for live cost feedback; don't write
+                # a DB row for those (would double-count against the
+                # final ResultMessage aggregate). Final events have
+                # `partial=False` (default) and are recorded.
+                if event.data.get("partial"):
+                    continue
+                await _record_usage(
+                    event.data.get("model") or model,
+                    event.data.get("usage") or {},
+                    is_error=False,
+                    total_cost=event.data.get("total_cost_usd"),
+                )
+            elif event.kind == "error":
+                logger.warning("Provider error: %s", event.data.get("message"))
         return collected_text
 
     # ---- Non-Claude / runner-managed tool loop -----------------------------
@@ -676,116 +701,114 @@ async def _drive_provider(
     skill_specs: list[dict] = []
     skill_handlers: dict = {}
 
-    async with asyncio.timeout(timeout_s):
-        for turn in range(settings.agent_max_turns):
-            effective_skills = _resolve_effective_skills(
-                base_skills=base_agent_skills,
-                session_id=session_id,
-                agent_id=agent_id,
-            )
-            if effective_skills != _cached_skills:
-                skill_specs = _record_skill_specs(agent_type, effective_skills)
-                entries = _build_skill_entries_for(effective_skills)
-                skill_handlers = {slug: e["handler"] for slug, e in entries.items()}
-                _cached_skills = effective_skills
+    for turn in range(settings.agent_max_turns):
+        effective_skills = _resolve_effective_skills(
+            base_skills=base_agent_skills,
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+        if effective_skills != _cached_skills:
+            skill_specs = _record_skill_specs(agent_type, effective_skills)
+            entries = _build_skill_entries_for(effective_skills)
+            skill_handlers = {slug: e["handler"] for slug, e in entries.items()}
+            _cached_skills = effective_skills
 
-            pending_calls: list[dict] = []
-            assistant_text: list[str] = []
+        pending_calls: list[dict] = []
+        assistant_text: list[str] = []
 
-            async for event in provider.run(
-                prompt=prompt,
-                system_prompt=system_prompt,
-                model=model,
-                tools=skill_specs,
-                max_turns=1,
-                timeout_seconds=timeout_s,
-                messages=messages,
-            ):
-                if event.kind == "text":
-                    text = event.data.get("text", "")
-                    if text:
-                        assistant_text.append(text)
-                        await _persist_text(text)
-                elif event.kind == "tool_call":
-                    name = event.data.get("tool_name", "")
-                    call_id = (
-                        event.data.get("tool_call_id") or f"call_{uuid.uuid4().hex[:8]}"
-                    )
-                    args = event.data.get("arguments", {}) or {}
-                    # Opaque per-provider continuation metadata (e.g. Gemini
-                    # 3's thought_signature). The runner doesn't read it —
-                    # we just preserve it on the assistant message so the
-                    # provider can restore it on the next turn.
-                    pmeta = event.data.get("provider_metadata")
-                    pending_calls.append(
-                        {"id": call_id, "name": name, "args": args, "pmeta": pmeta}
-                    )
-                    await _persist_tool_call(name, call_id, args)
-                elif event.kind == "usage":
-                    # Partial events are per-AssistantMessage deltas the
-                    # provider emits for live cost feedback; don't write
-                    # a DB row for those (would double-count against the
-                    # final ResultMessage aggregate). Final events have
-                    # `partial=False` (default) and are recorded.
-                    if event.data.get("partial"):
-                        continue
-                    await _record_usage(
-                        event.data.get("model") or model,
-                        event.data.get("usage") or {},
-                        is_error=False,
-                        total_cost=event.data.get("total_cost_usd"),
-                    )
-                elif event.kind == "error":
-                    logger.warning("Provider error: %s", event.data.get("message"))
-
-            # Append assistant turn to message history.
-            assistant_msg: dict = {
-                "role": "assistant",
-                "content": "\n".join(assistant_text) or None,
-            }
-            if pending_calls:
-                assistant_msg["tool_calls"] = [
-                    {
-                        "id": c["id"],
-                        "type": "function",
-                        "function": {
-                            "name": c["name"],
-                            "arguments": json.dumps(c["args"]),
-                        },
-                        # `_provider_metadata` is namespaced with an
-                        # underscore so providers that don't use it (OpenAI,
-                        # LiteLLM) can ignore the unknown key safely.
-                        **(
-                            {"_provider_metadata": c["pmeta"]} if c.get("pmeta") else {}
-                        ),
-                    }
-                    for c in pending_calls
-                ]
-            messages.append(assistant_msg)
-
-            if not pending_calls:
-                break  # provider produced text only; conversation done.
-
-            # Dispatch each tool call against the skill handler.
-            for call in pending_calls:
-                handler = skill_handlers.get(call["name"])
-                if handler is None:
-                    text = f"Unknown skill: {call['name']}"
-                    is_error = True
-                else:
-                    try:
-                        result = await handler(call["args"])
-                        text, is_error = _normalize_handler_text(result)
-                    except Exception as e:
-                        logger.exception("Skill handler %s failed", call["name"])
-                        text = f"Skill {call['name']} raised: {e}"
-                        is_error = True
-                if is_error:
-                    text = f"[ERROR] {text}"
-                await _persist_tool_result(call["id"], text, is_error)
-                messages.append(
-                    {"role": "tool", "tool_call_id": call["id"], "content": text}
+        async for event in provider.run(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=model,
+            tools=skill_specs,
+            max_turns=1,
+            timeout_seconds=timeout_s,
+            messages=messages,
+            **thinking_kwargs,
+        ):
+            if event.kind == "text":
+                text = event.data.get("text", "")
+                if text:
+                    assistant_text.append(text)
+                    await _persist_text(text)
+            elif event.kind == "tool_call":
+                name = event.data.get("tool_name", "")
+                call_id = (
+                    event.data.get("tool_call_id") or f"call_{uuid.uuid4().hex[:8]}"
                 )
+                args = event.data.get("arguments", {}) or {}
+                # Opaque per-provider continuation metadata (e.g. Gemini
+                # 3's thought_signature). The runner doesn't read it —
+                # we just preserve it on the assistant message so the
+                # provider can restore it on the next turn.
+                pmeta = event.data.get("provider_metadata")
+                pending_calls.append(
+                    {"id": call_id, "name": name, "args": args, "pmeta": pmeta}
+                )
+                await _persist_tool_call(name, call_id, args)
+            elif event.kind == "usage":
+                # Partial events are per-AssistantMessage deltas the
+                # provider emits for live cost feedback; don't write
+                # a DB row for those (would double-count against the
+                # final ResultMessage aggregate). Final events have
+                # `partial=False` (default) and are recorded.
+                if event.data.get("partial"):
+                    continue
+                await _record_usage(
+                    event.data.get("model") or model,
+                    event.data.get("usage") or {},
+                    is_error=False,
+                    total_cost=event.data.get("total_cost_usd"),
+                )
+            elif event.kind == "error":
+                logger.warning("Provider error: %s", event.data.get("message"))
+
+        # Append assistant turn to message history.
+        assistant_msg: dict = {
+            "role": "assistant",
+            "content": "\n".join(assistant_text) or None,
+        }
+        if pending_calls:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": c["id"],
+                    "type": "function",
+                    "function": {
+                        "name": c["name"],
+                        "arguments": json.dumps(c["args"]),
+                    },
+                    # `_provider_metadata` is namespaced with an
+                    # underscore so providers that don't use it (OpenAI,
+                    # LiteLLM) can ignore the unknown key safely.
+                    **({"_provider_metadata": c["pmeta"]} if c.get("pmeta") else {}),
+                }
+                for c in pending_calls
+            ]
+        messages.append(assistant_msg)
+
+        if not pending_calls:
+            break  # provider produced text only; conversation done.
+
+        # Dispatch each tool call against the skill handler.
+        for call in pending_calls:
+            handler = skill_handlers.get(call["name"])
+            if handler is None:
+                text = f"Unknown skill: {call['name']}"
+                is_error = True
+            else:
+                try:
+                    result = await handler(call["args"])
+                    text, is_error = _normalize_handler_text(result)
+                except Exception as e:
+                    logger.exception("Skill handler %s failed", call["name"])
+                    text = f"Skill {call['name']} raised: {e}"
+                    is_error = True
+            if is_error:
+                text = f"[ERROR] {text}"
+            await _persist_tool_result(call["id"], text, is_error)
+            messages.append(
+                {"role": "tool", "tool_call_id": call["id"], "content": text}
+            )
 
     return collected_text
 
@@ -850,130 +873,6 @@ async def run_agent(
         )
 
     collected_text = ""
-
-    # Per-turn usage accumulator. claude-agent-sdk yields usage in two
-    # different shapes depending on the surface:
-    #   - AssistantMessage.usage  → snake_case (input_tokens, output_tokens,
-    #     cache_*_input_tokens) — Anthropic API raw shape.
-    #   - ResultMessage.model_usage[model] → camelCase (inputTokens,
-    #     outputTokens, cacheReadInputTokens, cacheCreationInputTokens,
-    #     costUSD).
-    # We normalize to snake_case so the rest of the cost path is uniform
-    # regardless of provider/SDK convention.
-    _accumulated_usage: dict[str, dict] = {}
-
-    # camelCase → snake_case key map covering Anthropic + claude-agent-sdk
-    # variants. Add entries here when a new provider lands with a different
-    # casing convention; the rest of the stack stays unchanged.
-    _USAGE_KEY_ALIASES: dict[str, str] = {
-        "inputTokens": "input_tokens",
-        "outputTokens": "output_tokens",
-        "cacheReadInputTokens": "cache_read_input_tokens",
-        "cacheCreationInputTokens": "cache_creation_input_tokens",
-        "promptTokens": "input_tokens",
-        "completionTokens": "output_tokens",
-        "prompt_tokens": "input_tokens",
-        "completion_tokens": "output_tokens",
-        "costUSD": "cost_usd",
-    }
-
-    def _normalize_usage(u: dict | None) -> dict:
-        """Coerce a usage dict into snake_case Anthropic-shaped keys."""
-        if not isinstance(u, dict):
-            return {}
-        out: dict = {}
-        for k, v in u.items():
-            target = _USAGE_KEY_ALIASES.get(k, k)
-            try:
-                if target == "cost_usd":
-                    out[target] = float(v or 0.0)
-                else:
-                    out[target] = int(v or 0)
-            except (TypeError, ValueError):
-                continue
-        return out
-
-    def _bump_usage(model_name: str, turn_usage: dict | None) -> None:
-        norm = _normalize_usage(turn_usage)
-        if not norm:
-            return
-        bucket = _accumulated_usage.setdefault(model_name, {})
-        for k in (
-            "input_tokens",
-            "output_tokens",
-            "cache_creation_input_tokens",
-            "cache_read_input_tokens",
-        ):
-            v = norm.get(k, 0)
-            try:
-                bucket[k] = bucket.get(k, 0) + int(v)
-            except (TypeError, ValueError):
-                continue
-
-    # Live LLM cost feedback. claude-agent-sdk only fires ResultMessage at the
-    # END of an agent run, so without these per-turn broadcasts the LLM-cost
-    # tile in the badge sits at 0 for the entire run while the user watches
-    # `execute-code` rack up sandbox time. We broadcast a synthetic
-    # `usage_event` per AssistantMessage with that turn's usage delta. The
-    # canonical DB row still gets written at ResultMessage time via
-    # record_llm_usage(broadcast=False) — no double-count.
-    #
-    # Dedupe: the SDK occasionally emits AssistantMessage twice for one turn
-    # (streaming partial + complete). message_id is stable per turn; fall
-    # back to a usage-tuple key when missing.
-    _seen_partial_keys: set = set()
-
-    async def _broadcast_partial_llm(
-        message_obj,
-        turn_model: str,
-        norm_usage: dict,
-    ) -> None:
-        in_tok = int(norm_usage.get("input_tokens", 0) or 0)
-        out_tok = int(norm_usage.get("output_tokens", 0) or 0)
-        cache_r = int(norm_usage.get("cache_read_input_tokens", 0) or 0)
-        cache_w = int(norm_usage.get("cache_creation_input_tokens", 0) or 0)
-        if in_tok == 0 and out_tok == 0 and cache_r == 0 and cache_w == 0:
-            return  # nothing to report
-
-        mid = getattr(message_obj, "message_id", None) or getattr(
-            message_obj, "uuid", None
-        )
-        dedupe_key = mid or (turn_model, in_tok, out_tok, cache_r, cache_w)
-        if dedupe_key in _seen_partial_keys:
-            return
-        _seen_partial_keys.add(dedupe_key)
-
-        cost = compute_llm_cost(
-            model=turn_model,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            cache_read_input_tokens=cache_r,
-            cache_creation_input_tokens=cache_w,
-        )
-
-        try:
-            await broadcaster.publish(
-                session_id,
-                {
-                    "type": "usage_event",
-                    "data": {
-                        "kind": "llm",
-                        "agent_type": agent_type,
-                        "agent_id": agent_id,
-                        "provider": "claude",
-                        "model": turn_model,
-                        "input_tokens": in_tok,
-                        "output_tokens": out_tok,
-                        "cache_read_input_tokens": cache_r,
-                        "cache_creation_input_tokens": cache_w,
-                        "sandbox_seconds": 0.0,
-                        "cost_usd": cost,
-                        "is_partial": True,
-                    },
-                },
-            )
-        except Exception as e:
-            logger.debug("Partial usage broadcast failed: %s", e)
 
     bind_log_context(
         session_id=session_id,
@@ -1146,6 +1045,7 @@ async def run_agent(
             agent_models=agent_models or {},
             publish=_publish,
             agent_span=_agent_span,
+            thinking_level=thinking_level,
         )
         collected_text += drive_text
 
@@ -1162,18 +1062,29 @@ async def run_agent(
         )
 
     except TimeoutError:
-        logger.error(
-            "Agent %s timed out after %ds for session %s",
+        # Defense in depth. The runner no longer wraps its own loop with an
+        # outer timeout — the sandbox's own (per-project-profile) timeout is
+        # the single governing cap, and execute-code surfaces it as a
+        # tool_output. Reaching here means a provider SDK itself raised
+        # TimeoutError (e.g. network stall). Persist a clear note so the
+        # user can resume rather than losing the session.
+        logger.warning(
+            "Provider raised TimeoutError for agent %s session %s",
             agent_type,
-            settings.agent_timeout_seconds,
             session_id,
         )
         await _publish(
-            "agent_error",
-            {"error": f"Agent timed out after {settings.agent_timeout_seconds}s"},
+            "agent_timeout",
+            {
+                "error": (
+                    "Provider call timed out at the SDK level. The "
+                    "conversation history is preserved — send a new message "
+                    "to continue."
+                )
+            },
             role="system",
         )
-        await _publish("state_change", {"state": "failed"}, role="system")
+        await _publish("state_change", {"state": "timed_out"}, role="system")
 
     except asyncio.CancelledError:
         silent = session_id in _silent_aborts

@@ -15,6 +15,38 @@ logger = logging.getLogger(__name__)
 
 _volume = None
 
+# Path segments hidden from user-facing file listings (tree route, S3 browser,
+# list-session-files skill). The agent still writes them via execute-code; we
+# just don't surface them. Match by whole segment, not glob suffix.
+WORKSPACE_IGNORE_SEGMENTS: frozenset[str] = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".mypy_cache",
+        ".ipynb_checkpoints",
+        ".DS_Store",
+        ".git",
+    }
+)
+WORKSPACE_IGNORE_SUFFIXES: tuple[str, ...] = (".pyc", ".pyo", ".pyd", ".egg-info")
+
+
+def should_ignore_workspace_path(path: str) -> bool:
+    """Return True if `path` is build noise the user should not see.
+
+    Splits on `/` and checks every segment. A path is ignored if any segment
+    matches `WORKSPACE_IGNORE_SEGMENTS` or its basename ends with any
+    `WORKSPACE_IGNORE_SUFFIXES`.
+    """
+    if not path:
+        return False
+    parts = [p for p in path.split("/") if p]
+    if any(p in WORKSPACE_IGNORE_SEGMENTS for p in parts):
+        return True
+    basename = parts[-1] if parts else ""
+    return basename.endswith(WORKSPACE_IGNORE_SUFFIXES)
+
 
 def get_volume():
     """Return a lazily-initialized Modal Volume."""
@@ -165,19 +197,39 @@ async def ensure_session_workspace(session_id: str) -> None:
     await asyncio.get_running_loop().run_in_executor(None, _sync)
 
 
-async def write_to_volume(content: str, remote_path: str):
-    """Write text content directly to the Modal Volume (non-blocking)."""
+async def write_to_volume(content: str | bytes, remote_path: str):
+    """Write file content directly to the Modal Volume (non-blocking).
+
+    Accepts both `str` (text) and `bytes`. Every model-promotion caller hands
+    in bytes from `read_volume_file_async`; the original `mode="w"` raised
+    `TypeError` on every such call, which was swallowed by
+    `register_model_declared`'s best-effort copy block — so the advertised
+    `/projects/{pid}/models/.../v{N}/model.{ext}` registry artifact never
+    actually landed.
+    """
     vol = get_volume()
+    is_bytes = isinstance(content, (bytes, bytearray, memoryview))
 
     def _sync_write():
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as f:
-            f.write(content)
-            tmp = f.name
+        if is_bytes:
+            f = tempfile.NamedTemporaryFile(mode="wb", suffix=".bin", delete=False)
+            payload = bytes(content)
+        else:
+            f = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".py", delete=False, encoding="utf-8"
+            )
+            payload = content
         try:
+            with f:
+                f.write(payload)
+                tmp = f.name
             with vol.batch_upload(force=True) as batch:
                 batch.put_file(tmp, remote_path)
         finally:
-            os.unlink(tmp)
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
     await asyncio.get_running_loop().run_in_executor(None, _sync_write)
     logger.info("Wrote %dB -> %s", len(content), remote_path)

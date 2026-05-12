@@ -393,7 +393,7 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
             )
             art = (await db.execute(q)).scalars().first()
             if art:
-                report_raw = _read_volume_file_safe(art.path)
+                report_raw = await _read_volume_file_safe(art.path)
     except Exception:
         pass
     if report_raw is None:

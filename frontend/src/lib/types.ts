@@ -450,38 +450,6 @@ export interface DatasetVersionRow {
   created_at: string;
 }
 
-export interface CompareResponse {
-  sessions: Array<{
-    id: string;
-    experiment_id?: string;
-    experiment_name?: string;
-    state?: string;
-    model?: string | null;
-    created_at?: string;
-    missing: boolean;
-  }>;
-  metrics: Record<
-    string,
-    Array<{
-      session_id: string;
-      points: Array<{ step: number; value: number; stage: string }>;
-    }>
-  >;
-  feature_overlap?: {
-    common: string[];
-    per_session: Record<string, string[]>;
-  };
-  totals: Record<
-    string,
-    {
-      cost_usd: number;
-      input_tokens: number;
-      output_tokens: number;
-      sandbox_seconds: number;
-    }
-  >;
-}
-
 // ---------------------------------------------------------------------------
 // Lineage graph + agent-declared experiment surfaces
 // ---------------------------------------------------------------------------
