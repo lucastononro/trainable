@@ -780,9 +780,7 @@ async def _drive_provider(
                     # `_provider_metadata` is namespaced with an
                     # underscore so providers that don't use it (OpenAI,
                     # LiteLLM) can ignore the unknown key safely.
-                    **(
-                        {"_provider_metadata": c["pmeta"]} if c.get("pmeta") else {}
-                    ),
+                    **({"_provider_metadata": c["pmeta"]} if c.get("pmeta") else {}),
                 }
                 for c in pending_calls
             ]

@@ -55,8 +55,7 @@ async def list_objects(bucket: str, prefix: Optional[str] = ""):
                 "last_modified": obj["LastModified"].isoformat(),
             }
             for obj in response.get("Contents", [])
-            if obj["Key"] != prefix
-            and not should_ignore_workspace_path(obj["Key"])
+            if obj["Key"] != prefix and not should_ignore_workspace_path(obj["Key"])
         ]
 
         return {"bucket": bucket, "prefix": prefix, "folders": folders, "files": files}
