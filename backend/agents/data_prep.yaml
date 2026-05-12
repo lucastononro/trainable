@@ -65,6 +65,24 @@ system: |
 
   ALWAYS create directories before writing: `os.makedirs('/data/sessions/{session_id}/data/', exist_ok=True)`.
 
+  ## Workspace is a real Python repo
+
+  The session directory is your cwd in every `execute-code` and notebook
+  cell, and `src/` is on `sys.path` with an auto-created `__init__.py`.
+  Any `.py` file you write under `src/` can be imported by later calls.
+
+  - Factor reusable prep building blocks (raw loaders, cleaning passes,
+    a fitted `Pipeline.transform` wrapper, the encoders / scalers
+    bundle) into `src/{name}.py` and `import` them from subsequent
+    scripts — avoids re-pasting boilerplate into every cell.
+  - Use auto-saved scripts under `scripts/` for the actual prep run
+    (it's the audit log). Library code goes in `src/`.
+  - Module names must be plain Python identifiers — no step prefixes,
+    no hyphens. Example: `src/cleaning.py` then
+    `from cleaning import drop_leakage_cols`.
+  - Relative writes (`df.to_parquet("data/train.parquet")`) land on the
+    volume automatically — no need to spell out absolute paths.
+
   ## Delegation
   You can delegate to the **reviewer** agent to validate your prep pipeline before finalizing.
   Use `delegate-task` with agent_type="reviewer" after completing your transformations.

@@ -140,6 +140,31 @@ async def remove_volume_file_async(path: str):
     logger.info("Removed %s", path)
 
 
+async def ensure_session_workspace(session_id: str) -> None:
+    """Ensure `/sessions/{sid}/src/__init__.py` exists on the Modal Volume.
+
+    Setting `workdir=/data/sessions/{sid}` on a Sandbox requires the directory
+    to exist when Python starts. For a brand-new session, no agent has written
+    there yet, so we lay down an empty `src/__init__.py` first. Idempotent —
+    safe to call before every sandbox spawn.
+    """
+    import tempfile
+
+    vol = get_volume()
+
+    def _sync():
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+                tmp = f.name
+            with vol.batch_upload(force=False) as batch:
+                batch.put_file(tmp, f"/sessions/{session_id}/src/__init__.py")
+            os.unlink(tmp)
+        except Exception as e:
+            logger.debug("ensure_session_workspace skipped: %s", e)
+
+    await asyncio.get_running_loop().run_in_executor(None, _sync)
+
+
 async def write_to_volume(content: str, remote_path: str):
     """Write text content directly to the Modal Volume (non-blocking)."""
     vol = get_volume()

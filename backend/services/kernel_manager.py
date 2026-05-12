@@ -25,7 +25,7 @@ import modal
 from services import notebook_store
 from services.broadcaster import broadcaster
 from services.sandbox import SDK_PREAMBLE, build_sdk_preamble, get_app, get_image
-from services.volume import get_volume
+from services.volume import ensure_session_workspace, get_volume
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +304,13 @@ class KernelManager:
             session_id,
             {"type": "notebook.kernel.state", "data": {"state": "starting"}},
         )
+        # Lay down /sessions/{sid}/src/__init__.py so `workdir=` below has a
+        # real directory on the first kernel of a fresh session. Same pattern
+        # as run_code in sandbox.py.
+        try:
+            await ensure_session_workspace(session_id)
+        except Exception as e:
+            logger.debug("kernel workspace ensure skipped: %s", e)
         sb = await modal.Sandbox.create.aio(
             "python",
             "-u",
@@ -312,6 +319,9 @@ class KernelManager:
             image=get_image(),
             volumes={"/data": get_volume()},
             timeout=KERNEL_MAX_LIFETIME_S,
+            # Anchor cwd to the session workspace so notebook cells that use
+            # relative paths (`open("data/x.parquet")`) land on the volume.
+            workdir=f"/data/sessions/{session_id}",
             app=await get_app(),
         )
         handle = KernelHandle(session_id=session_id, sandbox=sb)

@@ -174,6 +174,12 @@ system: |
     outputs freely. Soft conventions: `report.md` at the top level, `figures/`
     for plots, `data/` for datasets, `models/` for trained models, `scripts/`
     is managed by execute_code (auto-saved).
+  - The session workspace behaves like a real Python repo: it's the cwd of
+    every `execute-code` call and notebook cell, and `src/` is on `sys.path`.
+    Anything you write to `src/{name}.py` is importable from later calls
+    (`from features import build_X`). Use `src/` for reusable code; use
+    `scripts/` (auto-managed) as the one-shot audit log. Module names must
+    be plain Python identifiers — no hyphens, no step prefixes.
 
   ## Environment
   - `execute-code` runs Python in an isolated sandbox with pandas, numpy, matplotlib,
