@@ -8,7 +8,9 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import time
 import urllib.request
+import webbrowser
 from pathlib import Path
 
 REPO = "lucastononro/trainable"
@@ -259,55 +261,49 @@ def prompt_litellm_keys() -> dict[str, str]:
     return out
 
 
-def prompt_extra_providers(*, include_claude: bool = False) -> dict[str, str]:
-    """Multi-select provider picker.
+def prompt_providers(*, required: bool) -> dict[str, str]:
+    """Multi-select LLM provider picker.
 
-    From a fresh install, `prompt_claude_auth()` runs separately (Claude is
-    mandatory) and this picker only offers OpenAI / Gemini / LiteLLM behind
-    a y/N gate. From the "add to existing config" flow, Claude is included
-    so the user can replace it without redoing the whole wizard, and the
-    y/N gate is skipped (the user already said yes).
+    The backend treats Claude / OpenAI / Gemini / LiteLLM as equal peers, so
+    the wizard offers them as one flat list. When `required` is True (fresh
+    install or full-replace flow) the prompt loops until the user picks at
+    least one; otherwise (the "add to existing config" flow) zero picks is
+    fine — the existing keys stay.
     """
-    if not include_claude:
-        print()
-        answer = (
-            input(
-                f"  Configure additional LLM providers (OpenAI / Gemini / LiteLLM)?"
-                f" {DIM}[y/N]{RESET}: "
-            )
-            .strip()
-            .lower()
-        )
-        if answer not in ("y", "yes"):
-            return {}
-
-    print("\n  Select providers to configure (space-separated numbers, blank to skip):")
-    options: list[tuple[str, str]] = []
-    if include_claude:
-        options.append(("claude", "Claude (Anthropic API key or subscription OAuth)"))
-    options += [
+    options = [
+        ("claude", "Claude (Anthropic API key or subscription OAuth)"),
         ("openai", "OpenAI (API key)"),
         ("gemini", "Gemini (API key)"),
         ("litellm", "LiteLLM (catch-all: Groq, Mistral, DeepSeek, etc.)"),
     ]
-    for i, (_, label) in enumerate(options, 1):
-        print(f"    {BOLD}{i}{RESET}) {label}")
-    raw = input(f"  {DIM}Choices [1-{len(options)}]{RESET}: ").strip()
-    selected: list[str] = []
-    for tok in raw.replace(",", " ").split():
-        if tok.isdigit() and 1 <= int(tok) <= len(options):
-            selected.append(options[int(tok) - 1][0])
-
     handlers = {
         "claude": prompt_claude_auth,
         "openai": prompt_openai_auth,
         "gemini": prompt_gemini_auth,
         "litellm": prompt_litellm_keys,
     }
-    out: dict[str, str] = {}
-    for key in selected:
-        out.update(handlers[key]())
-    return out
+    hint = "at least one required" if required else "blank to skip"
+
+    while True:
+        print("\n  Select providers to configure (space-separated numbers):")
+        for i, (_, label) in enumerate(options, 1):
+            print(f"    {BOLD}{i}{RESET}) {label}")
+        raw = input(f"  {DIM}Choices [1-{len(options)}] ({hint}){RESET}: ").strip()
+        selected: list[str] = []
+        for tok in raw.replace(",", " ").split():
+            if tok.isdigit() and 1 <= int(tok) <= len(options):
+                selected.append(options[int(tok) - 1][0])
+
+        if not selected:
+            if required:
+                warn("Need at least one LLM provider — pick one or more above.")
+                continue
+            return {}
+
+        out: dict[str, str] = {}
+        for key in selected:
+            out.update(handlers[key]())
+        return out
 
 
 def _existing_config_choice(existing: dict[str, str]) -> str:
@@ -372,7 +368,7 @@ def cmd_init():
             config = dict(existing)
             print()
             print("  Pick what to add or replace; existing keys are preserved.")
-            config.update(prompt_extra_providers(include_claude=True))
+            config.update(prompt_providers(required=False))
             # Modal — only re-prompt if missing.
             if not (config.get("MODAL_TOKEN_ID") and config.get("MODAL_TOKEN_SECRET")):
                 print()
@@ -383,8 +379,7 @@ def cmd_init():
                 config["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
         else:  # replace
             config = {}
-            config.update(prompt_claude_auth())
-            config.update(prompt_extra_providers())
+            config.update(prompt_providers(required=True))
             print()
             print(
                 f"  {DIM}Get your Modal tokens from https://modal.com/settings{RESET}\n"
@@ -394,8 +389,7 @@ def cmd_init():
     else:
         # Fresh install path
         config = {}
-        config.update(prompt_claude_auth())
-        config.update(prompt_extra_providers())
+        config.update(prompt_providers(required=True))
         print()
         print(f"  {DIM}Get your Modal tokens from https://modal.com/settings{RESET}\n")
         config["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
@@ -459,14 +453,52 @@ def _require_config():
         sys.exit(1)
 
 
+FRONTEND_URL = "http://localhost:3000"
+
+
+def _wait_and_open_browser(url: str, timeout: float = 60.0) -> None:
+    """Poll `url` until it responds, then open it. Silent on failure — the
+    user has the URL printed in the parent and can open it manually."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=2) as r:
+                if r.status < 500:
+                    webbrowser.open(url)
+                    return
+        except Exception:
+            time.sleep(0.5)
+
+
+def _maybe_spawn_browser_opener(url: str) -> None:
+    """Fork a child that opens `url` once it's reachable. The parent then
+    execs into `docker compose up` so log streaming and Ctrl+C behavior are
+    unchanged. No-op on platforms without fork (Windows) or when the user
+    opts out."""
+    if "--no-browser" in sys.argv or os.environ.get("TRAINABLE_NO_BROWSER"):
+        return
+    if not hasattr(os, "fork"):
+        return
+    try:
+        pid = os.fork()
+    except OSError:
+        return
+    if pid == 0:
+        try:
+            _wait_and_open_browser(url)
+        finally:
+            os._exit(0)
+
+
 def cmd_up():
     _require_config()
 
     print(f"\n{GREEN}{BOLD}Starting trainable...{RESET}")
-    print(f"{DIM}  Frontend:      http://localhost:3000")
+    print(f"{DIM}  Frontend:      {FRONTEND_URL}")
     print("  Backend API:   http://localhost:8000")
     print(f"  MinIO Console: http://localhost:9001{RESET}\n")
 
+    _maybe_spawn_browser_opener(FRONTEND_URL)
     os.execvp("docker", _compose_args(["up"]))
 
 
@@ -482,6 +514,8 @@ USAGE = f"""\
   trainable init           First-time setup wizard (writes config to ~/.trainable)
   trainable reconfigure    Add or replace LLM providers without losing existing keys
   trainable up             Start all services (works from any directory)
+                           Opens {FRONTEND_URL} in your browser once ready.
+                           Pass --no-browser (or set TRAINABLE_NO_BROWSER=1) to skip.
   trainable down           Stop all services
 
 {BOLD}Quick start:{RESET}

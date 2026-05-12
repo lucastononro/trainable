@@ -36,10 +36,12 @@ The wizard, in order:
 
 1. **Check prereqs.** Docker installed and running. Print actionable error if not.
 2. **Pull images.** `ghcr.io/lucastononro/trainable-backend:latest` + `:frontend:latest`. Multi-arch manifest handles the platform.
-3. **Collect credentials.**
-   - One of: `ANTHROPIC_API_KEY` *or* `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` to get the latter).
-   - Optional: `OPENAI_API_KEY`, `GEMINI_API_KEY` — wizard offers but doesn't require.
-   - Required: `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`.
+3. **Collect credentials.** The backend treats Claude / OpenAI / Gemini / LiteLLM as equal peers (`backend/services/llm/factory.py`), so the wizard presents them as a flat multi-select and requires *at least one* on fresh install or full replace.
+   - Claude: `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` for the latter).
+   - OpenAI: `OPENAI_API_KEY`.
+   - Gemini: `GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
+   - LiteLLM: free-form add-loop for backend-specific keys (`GROQ_API_KEY`, `MISTRAL_API_KEY`, etc.).
+   - Required regardless: `MODAL_TOKEN_ID`, `MODAL_TOKEN_SECRET`.
 4. **Write `~/.trainable/.env`** with permissions `0600`.
 5. **Write `~/.trainable/docker-compose.yml`** (the production compose file).
 6. **Launch.** `docker compose -f ~/.trainable/docker-compose.yml up -d`.
