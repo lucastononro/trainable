@@ -63,6 +63,7 @@ async def test_session_zip_contains_workspace_and_synthetic_files():
     # Synthetic entries at the zip root.
     assert "README.md" in names
     assert "requirements.txt" in names
+    assert "trainable.py" in names
     assert "trainable_local.py" in names
 
     # No noise.
@@ -71,7 +72,8 @@ async def test_session_zip_contains_workspace_and_synthetic_files():
 
     # Content sanity.
     assert zf.read("src/data.py") == b"import pandas as pd\nprint('hi')\n"
-    assert b"trainable" in zf.read("trainable_local.py")
+    assert b"trainable" in zf.read("trainable.py")
+    assert zf.read("trainable.py") == zf.read("trainable_local.py")
     assert b"pip install -r requirements.txt" in zf.read("README.md")
 
 
@@ -89,8 +91,8 @@ async def test_session_zip_is_well_formed_when_workspace_is_empty():
 
     zf = zipfile.ZipFile(io.BytesIO(body))
     names = set(zf.namelist())
-    # Empty session still ships the three synthetic files (issue acceptance).
-    assert names == {"README.md", "requirements.txt", "trainable_local.py"}
+    # Empty session still ships the synthetic runnability files.
+    assert names == {"README.md", "requirements.txt", "trainable.py", "trainable_local.py"}
 
 
 @pytest.mark.asyncio
@@ -120,6 +122,7 @@ async def test_project_zip_namespaces_each_session():
     # Synthetic entries appear exactly once at the project root.
     assert "README.md" in names
     assert "requirements.txt" in names
+    assert "trainable.py" in names
     assert "trainable_local.py" in names
     assert sum(1 for n in names if n == "README.md") == 1
 
@@ -180,12 +183,56 @@ async def test_export_caps_uncompressed_bytes_and_emits_truncated_marker():
     assert 0 < len(data_files) < 10
 
 
-def test_local_shim_imports_and_logs(tmp_path: Path):
-    """The shipped trainable_local.py must work on a vanilla Python install."""
+@pytest.mark.asyncio
+async def test_oversized_file_is_skipped_without_being_read():
+    small_path = "/sessions/cap/data/small.txt"
+    big_path = "/sessions/cap/data/big.bin"
+    vol = MockVolume(
+        {
+            small_path: b"small",
+            big_path: b"x" * (10 * 1024),
+        }
+    )
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.workspace_export"):
+            stack.enter_context(p)
+
+        from services.workspace_export import stream_session_zip
+
+        body = await _drain(stream_session_zip("cap", max_bytes=1024))
+
+    zf = zipfile.ZipFile(io.BytesIO(body))
+    names = set(zf.namelist())
+    assert "data/small.txt" in names
+    assert "data/big.bin" not in names
+    assert "data/big.bin" in zf.read("__truncated.txt").decode("utf-8")
+    assert vol.read_paths == [small_path]
+
+
+@pytest.mark.asyncio
+async def test_stream_can_be_closed_mid_download_without_runtime_error():
+    vol = MockVolume({"/sessions/cancel/data/file.bin": b"x" * (2 * 1024 * 1024)})
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.workspace_export"):
+            stack.enter_context(p)
+
+        from services.workspace_export import stream_session_zip
+
+        stream = stream_session_zip("cancel")
+        first = await anext(stream)
+        assert first
+        await stream.aclose()
+
+
+def test_local_trainable_module_imports_and_logs(tmp_path: Path):
+    """Unchanged scripts with `from trainable import log` must work locally."""
     from services.trainable_sdk import LOCAL_SHIM
 
     shim_dir = tmp_path / "pkg"
     shim_dir.mkdir()
+    (shim_dir / "trainable.py").write_text(LOCAL_SHIM)
     (shim_dir / "trainable_local.py").write_text(LOCAL_SHIM)
 
     # Point the shim's output dir at the test's tmp path.
@@ -202,10 +249,9 @@ def test_local_shim_imports_and_logs(tmp_path: Path):
             """
             import sys
             sys.path.insert(0, %r)
-            import trainable_local  # registers ./trainable_out-style module
-            import trainable
-            trainable.log(1, {"loss": 0.5})
-            trainable.log(2, {"loss": 0.25, "acc": 0.9})
+            from trainable import log
+            log(1, {"loss": 0.5})
+            log(2, {"loss": 0.25, "acc": 0.9})
             """
         )
         % str(shim_dir)
@@ -255,6 +301,7 @@ async def test_session_download_endpoint_returns_zip(client, default_project_id)
     zf = zipfile.ZipFile(io.BytesIO(resp.content))
     names = set(zf.namelist())
     assert "src/data.py" in names
+    assert "trainable.py" in names
     assert "trainable_local.py" in names
 
 
@@ -265,6 +312,6 @@ async def test_session_download_404_when_session_missing(client):
 
 
 @pytest.mark.asyncio
-async def test_project_download_404_when_no_sessions(client, default_project_id):
+async def test_project_download_422_when_no_sessions(client, default_project_id):
     resp = await client.get(f"/api/projects/{default_project_id}/download")
-    assert resp.status_code == 404
+    assert resp.status_code == 422

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import textwrap
 import time
+from importlib import resources
 
 import modal
 
@@ -45,226 +47,50 @@ async def get_app():
 _get_app = get_app
 
 
-# SDK injected at the top of every sandbox execution.
-# Creates a `trainable` module so agent code can do:
-#   from trainable import log, configure_dashboard, log_image, log_table, ...
-#
-# Used two ways:
-#   1. execute_code scripts — built per-session in run_code() with the session_id baked in
-#   2. notebook kernels     — sent to ipykernel as a silent preamble cell at boot
-#                             (see kernel_manager.py — also session-aware)
-#
-# `session_id` is interpolated into the file paths used by the rich helpers
-# (log_image / log_images / log_figure) so binary artifacts land at
-# /data/sessions/{sid}/figures/{key}/{step}.png and are addressable by the
-# frontend via /files/raw?path=/sessions/{sid}/figures/{key}/{step}.png.
+def _read_trainable_runtime() -> str:
+    return (
+        resources.files("services")
+        .joinpath("trainable_runtime.py")
+        .read_text(encoding="utf-8")
+    )
+
+
+_TRAINABLE_RUNTIME_SOURCE = _read_trainable_runtime()
+_TRAINABLE_RUNTIME_PREAMBLE_SOURCE = textwrap.indent(_TRAINABLE_RUNTIME_SOURCE, "    ")
+
+# SDK injected at the top of every sandbox execution. The public API lives in
+# services/trainable_runtime.py; this preamble only selects the sandbox sink and
+# then executes that same runtime source.
+SDK_PREAMBLE_TEMPLATE = f'''\
+import os as _trn_os
+_SID = "__SESSION_ID__"
+_VOL_ROOT = "/data"
+_TRAINABLE_ENV_KEYS = (
+    "TRAINABLE_RUNTIME_MODE",
+    "TRAINABLE_SESSION_ID",
+    "TRAINABLE_VOLUME_ROOT",
+)
+_TRAINABLE_OLD_ENV = {{key: _trn_os.environ.get(key) for key in _TRAINABLE_ENV_KEYS}}
+try:
+    _trn_os.environ["TRAINABLE_RUNTIME_MODE"] = "sandbox"
+    _trn_os.environ["TRAINABLE_SESSION_ID"] = _SID
+    _trn_os.environ["TRAINABLE_VOLUME_ROOT"] = _VOL_ROOT
+{_TRAINABLE_RUNTIME_PREAMBLE_SOURCE}
+finally:
+    for _trn_key, _trn_value in _TRAINABLE_OLD_ENV.items():
+        if _trn_value is None:
+            _trn_os.environ.pop(_trn_key, None)
+        else:
+            _trn_os.environ[_trn_key] = _trn_value
+'''
+
+
 def build_sdk_preamble(session_id: str) -> str:
     return SDK_PREAMBLE_TEMPLATE.replace("__SESSION_ID__", session_id)
 
 
-SDK_PREAMBLE_TEMPLATE = '''\
-import types as _trn_types, json as _trn_json, sys as _trn_sys, os as _trn_os, re as _trn_re
-_m = _trn_types.ModuleType("trainable")
-_SID = "__SESSION_ID__"
-# Volume mount inside the sandbox is /data; the frontend addresses files
-# by their volume-relative path (no /data prefix), e.g. /sessions/{sid}/...
-_VOL_ROOT = "/data"
-_FIG_BASE = _trn_os.path.join(_VOL_ROOT, "sessions", _SID, "figures")
-_TABLE_ROW_LIMIT = 1000  # truncated server-side too; UI never needs more
-
-# --- Session repo bootstrap -------------------------------------------------
-# Make /data/sessions/{sid}/src/ a proper Python package and put it FIRST on
-# sys.path so the agent can `import data` / `from features import build_X`
-# from any subsequent execute_code call or notebook cell.
-#
-# Why this matters: each execute_code call spawns a fresh sandbox whose cwd
-# defaults to /root and whose sys.path doesn't include the session workspace.
-# Without this, an agent that writes utils.py in one call hits ModuleNotFoundError
-# on `import utils` in the next call. With this, the session feels like a repo.
-_SESSION_SRC = _trn_os.path.join(_VOL_ROOT, "sessions", _SID, "src")
-try:
-    _trn_os.makedirs(_SESSION_SRC, exist_ok=True)
-    _init_py = _trn_os.path.join(_SESSION_SRC, "__init__.py")
-    if not _trn_os.path.exists(_init_py):
-        with open(_init_py, "w") as _fh:
-            _fh.write("")
-    if _SESSION_SRC not in _trn_sys.path:
-        _trn_sys.path.insert(0, _SESSION_SRC)
-except Exception:
-    # Best-effort: a misconfigured volume mount shouldn't kill the run.
-    pass
-# ---------------------------------------------------------------------------
-
-def _safe_key(key):
-    # `key` may include slashes (e.g. "val/predictions") — keep the slash
-    # as a subdir separator but scrub anything else risky.
-    return _trn_re.sub(r"[^A-Za-z0-9_./-]", "_", str(key)).strip("/") or "log"
-
-def _vol_path(local_path):
-    if local_path.startswith(_VOL_ROOT):
-        return local_path[len(_VOL_ROOT):]
-    return local_path
-
-def _emit(envelope):
-    print(_trn_json.dumps(envelope), flush=True)
-
-def _save_image(img, dest_path):
-    """Normalize an image-ish object to PNG at dest_path. Accepts:
-    - str/PathLike: an existing file path (just copies if needed)
-    - PIL.Image.Image
-    - numpy.ndarray (HxW, HxWx3, HxWx4; uint8 or float-in-[0,1])
-    - torch.Tensor (CxHxW or HxW or HxWxC)
-    """
-    _trn_os.makedirs(_trn_os.path.dirname(dest_path), exist_ok=True)
-    # path passthrough
-    if isinstance(img, (str, bytes, _trn_os.PathLike)):
-        src = _trn_os.fspath(img)
-        if src == dest_path:
-            return
-        with open(src, "rb") as r, open(dest_path, "wb") as w:
-            w.write(r.read())
-        return
-    # PIL
-    try:
-        from PIL import Image as _PILImage
-        if isinstance(img, _PILImage.Image):
-            img.convert("RGB").save(dest_path, format="PNG")
-            return
-    except Exception:
-        pass
-    # torch — convert to numpy
-    try:
-        import torch as _torch
-        if isinstance(img, _torch.Tensor):
-            arr = img.detach().cpu().numpy()
-            # CxHxW -> HxWxC
-            if arr.ndim == 3 and arr.shape[0] in (1, 3, 4) and arr.shape[2] not in (1, 3, 4):
-                arr = arr.transpose(1, 2, 0)
-            img = arr
-    except Exception:
-        pass
-    # numpy
-    try:
-        import numpy as _np
-        if isinstance(img, _np.ndarray):
-            from PIL import Image as _PILImage
-            arr = img
-            if arr.dtype != _np.uint8:
-                a = arr.astype(_np.float32)
-                if a.max() <= 1.0 + 1e-6:
-                    a = a * 255.0
-                arr = a.clip(0, 255).astype(_np.uint8)
-            if arr.ndim == 2:
-                _PILImage.fromarray(arr, mode="L").save(dest_path, format="PNG")
-            elif arr.ndim == 3 and arr.shape[2] == 4:
-                _PILImage.fromarray(arr, mode="RGBA").save(dest_path, format="PNG")
-            else:
-                _PILImage.fromarray(arr).convert("RGB").save(dest_path, format="PNG")
-            return
-    except Exception:
-        pass
-    raise TypeError("log_image: unsupported image type %r" % (type(img),))
-
-def _log(step, metrics, run=None):
-    p = {"step": int(step), "metrics": {k: float(v) for k, v in metrics.items()}}
-    if run: p["run"] = str(run)
-    _emit(p)
-
-def _cfg(charts):
-    _emit({"chart_config": {"charts": charts}})
-
-def _log_event(event_type, step, key, data, run=None):
-    payload = {"type": event_type, "step": int(step), "key": _safe_key(key), "data": data}
-    if run: payload["run"] = str(run)
-    _emit({"log": payload})
-
-def _log_image(step, key, image, caption=None, run=None):
-    safe = _safe_key(key)
-    fname = "{}.png".format(int(step))
-    dest = _trn_os.path.join(_FIG_BASE, safe, fname)
-    _save_image(image, dest)
-    item = {"path": _vol_path(dest)}
-    if caption: item["caption"] = str(caption)
-    _log_event("image", step, key, {"items": [item]}, run=run)
-
-def _log_images(step, key, images, captions=None, run=None):
-    safe = _safe_key(key)
-    items = []
-    for i, img in enumerate(images):
-        dest = _trn_os.path.join(_FIG_BASE, safe, "{}_{}.png".format(int(step), i))
-        _save_image(img, dest)
-        item = {"path": _vol_path(dest)}
-        if captions and i < len(captions) and captions[i] is not None:
-            item["caption"] = str(captions[i])
-        items.append(item)
-    _log_event("image_grid", step, key, {"items": items}, run=run)
-
-def _log_figure(step, key, fig, run=None):
-    """Save a matplotlib Figure to PNG and emit an image event."""
-    safe = _safe_key(key)
-    dest = _trn_os.path.join(_FIG_BASE, safe, "{}.png".format(int(step)))
-    _trn_os.makedirs(_trn_os.path.dirname(dest), exist_ok=True)
-    try:
-        fig.savefig(dest, format="png", bbox_inches="tight", dpi=120)
-    except Exception as e:
-        raise TypeError("log_figure: object is not a matplotlib Figure (%s)" % e)
-    _log_event("image", step, key, {"items": [{"path": _vol_path(dest)}]}, run=run)
-
-def _log_table(step, key, columns, rows, run=None):
-    cols = [str(c) for c in columns]
-    rs = list(rows)[:_TABLE_ROW_LIMIT]
-    norm = []
-    for r in rs:
-        row = list(r) if not isinstance(r, dict) else [r.get(c) for c in cols]
-        norm.append([(None if v is None else (float(v) if isinstance(v, bool) is False and isinstance(v, (int, float)) else str(v))) for v in row])
-    _log_event(
-        "table",
-        step,
-        key,
-        {"columns": cols, "rows": norm, "truncated": len(list(rows)) > _TABLE_ROW_LIMIT},
-        run=run,
-    )
-
-def _log_confusion_matrix(step, key, y_true, y_pred, labels=None, run=None):
-    """Compute the confusion matrix server-side-free using sklearn if
-    available; otherwise hand-roll it."""
-    try:
-        from sklearn.metrics import confusion_matrix as _cm
-        import numpy as _np
-        labs = list(labels) if labels is not None else sorted(set(list(y_true) + list(y_pred)))
-        m = _cm(y_true, y_pred, labels=labs).tolist()
-    except Exception:
-        labs = list(labels) if labels is not None else sorted(set(list(y_true) + list(y_pred)))
-        idx = {l: i for i, l in enumerate(labs)}
-        m = [[0] * len(labs) for _ in labs]
-        for t, p in zip(y_true, y_pred):
-            if t in idx and p in idx:
-                m[idx[t]][idx[p]] += 1
-    _log_event(
-        "confusion_matrix",
-        step,
-        key,
-        {"labels": [str(l) for l in labs], "matrix": m},
-        run=run,
-    )
-
-_m.log = _log
-_m.configure_dashboard = _cfg
-_m.log_image = _log_image
-_m.log_images = _log_images
-_m.log_figure = _log_figure
-_m.log_table = _log_table
-_m.log_confusion_matrix = _log_confusion_matrix
-_trn_sys.modules["trainable"] = _m
-del _m
-'''
-
-
-# Back-compat alias: kernel_manager.py and tests imported the constant by
-# name. It now defaults to a no-session preamble (still works, but the
-# rich helpers will write to /data/sessions/None/...). Kernel/code paths
-# that know the session should call build_sdk_preamble(session_id).
-SDK_PREAMBLE = SDK_PREAMBLE_TEMPLATE.replace("__SESSION_ID__", "")
+# Back-compat alias: kernel_manager.py and tests import this constant by name.
+SDK_PREAMBLE = build_sdk_preamble("")
 
 
 def get_image():

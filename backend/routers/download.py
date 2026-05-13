@@ -65,7 +65,7 @@ async def download_project(project_id: str, db: AsyncSession = Depends(get_db)):
     rows = sessions_result.all()
     if not rows:
         raise HTTPException(
-            status_code=404,
+            status_code=422,
             detail="Project has no sessions to export",
         )
     sessions = [(row[0], row[1]) for row in rows]

@@ -205,9 +205,10 @@ def sample_metadata_json():
 class MockVolumeEntry:
     """Mimics a Modal Volume directory entry."""
 
-    def __init__(self, path: str, is_file: bool = True):
+    def __init__(self, path: str, is_file: bool = True, size: int = 0):
         self.path = path
         self.type = SimpleNamespace(name="FILE" if is_file else "DIRECTORY")
+        self.size = size
 
 
 class MockVolume:
@@ -215,25 +216,38 @@ class MockVolume:
 
     def __init__(self, files: dict[str, bytes]):
         self._files = files
+        self.read_paths: list[str] = []
 
     def reload(self):
         pass
 
     def read_file(self, path: str):
         if path in self._files:
+            self.read_paths.append(path)
             return [self._files[path]]
         raise FileNotFoundError(f"Mock volume: {path} not found")
 
     def read_file_bytes(self, path: str) -> bytes:
         if path in self._files:
+            self.read_paths.append(path)
             return self._files[path]
         raise FileNotFoundError(f"Mock volume: {path} not found")
+
+    async def read_file_chunks(self, path: str, *, chunk_size: int = 1024 * 1024):
+        if path not in self._files:
+            raise FileNotFoundError(f"Mock volume: {path} not found")
+        self.read_paths.append(path)
+        payload = self._files[path]
+        for i in range(0, len(payload), chunk_size):
+            yield payload[i : i + chunk_size]
 
     def listdir(self, prefix: str, recursive: bool = False):
         entries = []
         for path in self._files:
             if path.startswith(prefix + "/") or path == prefix:
-                entries.append(MockVolumeEntry(path, is_file=True))
+                entries.append(
+                    MockVolumeEntry(path, is_file=True, size=len(self._files[path]))
+                )
         return entries
 
 
@@ -263,6 +277,14 @@ def mock_volume_patches(vol: MockVolume, *modules: str):
                 f"{mod}.read_volume_file_async",
                 new_callable=AsyncMock,
                 side_effect=vol.read_file_bytes,
+                create=True,
+            )
+        )
+        patches.append(
+            patch(
+                f"{mod}.iter_volume_file_chunks_async",
+                side_effect=vol.read_file_chunks,
+                create=True,
             )
         )
     return patches

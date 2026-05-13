@@ -7,8 +7,9 @@ buffer that we drain after every write — so the response body trickles
 out to the client without ever materializing the full archive in RAM or
 on disk.
 
-After the workspace files, three synthetic entries (`README.md`,
-`requirements.txt`, `trainable_local.py`) are appended at the zip root.
+After the workspace files, synthetic entries (`README.md`,
+`requirements.txt`, `trainable.py`, `trainable_local.py`) are appended
+at the zip root.
 For a project export they appear once at the top level, and each
 session's files are namespaced under `sessions/{slug}/`.
 
@@ -31,8 +32,8 @@ from typing import AsyncIterator, Sequence
 
 from services.trainable_sdk import LOCAL_REQUIREMENTS, LOCAL_SHIM, render_readme
 from services.volume import (
+    iter_volume_file_chunks_async,
     listdir_async,
-    read_volume_file_async,
     reload_volume_async,
     should_ignore_workspace_path,
 )
@@ -63,8 +64,8 @@ def _slug(name: str, fallback: str) -> str:
     return cleaned or fallback
 
 
-async def _iter_files(root: str) -> AsyncIterator[tuple[str, str]]:
-    """Yield (volume_path, archive_relative_path) for every file under `root`.
+async def _iter_files(root: str) -> AsyncIterator[tuple[str, str, int | None]]:
+    """Yield file metadata for every file under `root`.
 
     Skips entries that match `should_ignore_workspace_path` so the zip
     doesn't ship `__pycache__/`, `.DS_Store`, etc.
@@ -94,7 +95,7 @@ async def _iter_files(root: str) -> AsyncIterator[tuple[str, str]]:
         rel = rel.lstrip("/")
         if not rel:
             continue
-        yield entry.path, rel
+        yield entry.path, rel, getattr(entry, "size", None)
 
 
 class _StreamingZipBuffer(io.RawIOBase):
@@ -161,27 +162,46 @@ async def _stream_workspace_zip(
     written_bytes = 0
     file_count = 0
     truncated_paths: list[str] = []
+    zf_closed = False
 
     try:
         for volume_root, archive_prefix in sources:
             prefix = archive_prefix.strip("/")
-            async for volume_path, rel in _iter_files(volume_root):
+            async for volume_path, rel, file_size in _iter_files(volume_root):
                 arcname = f"{prefix}/{rel}" if prefix else rel
+                if file_size is None:
+                    logger.warning(
+                        "workspace_export: skipping %s because size metadata is missing",
+                        volume_path,
+                    )
+                    truncated_paths.append(f"{arcname} (unknown size)")
+                    continue
+
+                if written_bytes + file_size > max_bytes:
+                    truncated_paths.append(arcname)
+                    # Keep walking so the truncated.txt is complete. The
+                    # size check happens before opening the file, so an
+                    # oversized file is not loaded into backend memory.
+                    continue
+
                 try:
-                    payload = await read_volume_file_async(volume_path)
+                    with zf.open(arcname, "w", force_zip64=True) as dest:
+                        async for chunk in iter_volume_file_chunks_async(
+                            volume_path, chunk_size=READ_CHUNK_BYTES
+                        ):
+                            if not chunk:
+                                continue
+                            dest.write(chunk)
+                            out = buf.drain()
+                            if out:
+                                yield out
                 except Exception as exc:
                     logger.warning(
                         "workspace_export: skipping unreadable %s: %s", volume_path, exc
                     )
                     continue
 
-                if written_bytes + len(payload) > max_bytes:
-                    truncated_paths.append(arcname)
-                    # Keep walking so the truncated.txt is complete.
-                    continue
-
-                zf.writestr(arcname, payload)
-                written_bytes += len(payload)
+                written_bytes += file_size
                 file_count += 1
                 chunk = buf.drain()
                 if chunk:
@@ -197,6 +217,7 @@ async def _stream_workspace_zip(
         )
         zf.writestr("README.md", readme)
         zf.writestr("requirements.txt", LOCAL_REQUIREMENTS)
+        zf.writestr("trainable.py", LOCAL_SHIM)
         zf.writestr("trainable_local.py", LOCAL_SHIM)
 
         if truncated_paths:
@@ -218,11 +239,15 @@ async def _stream_workspace_zip(
         if chunk:
             yield chunk
 
-    finally:
         zf.close()
+        zf_closed = True
         chunk = buf.drain()
         if chunk:
             yield chunk
+
+    finally:
+        if not zf_closed:
+            zf.close()
 
     logger.info(
         "workspace_export %s/%s done: %d files, %d bytes (%d truncated)",
