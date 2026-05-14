@@ -199,6 +199,7 @@ async def _stream_workspace_zip(
                     logger.warning(
                         "workspace_export: skipping unreadable %s: %s", volume_path, exc
                     )
+                    truncated_paths.append(f"{arcname} (read error)")
                     continue
 
                 written_bytes += file_size

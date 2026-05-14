@@ -44,7 +44,7 @@ class TestSdkPreambleRepoBootstrap:
         assert f'_SID = "{session_id}"' in src
         assert '_trn_os.environ["TRAINABLE_RUNTIME_MODE"] = "sandbox"' in src
         assert "_bootstrap_session_repo()" in src
-        assert "session_src = _VOL_ROOT / \"sessions\" / _SID / \"src\"" in src
+        assert 'session_src = _VOL_ROOT / "sessions" / _SID / "src"' in src
         assert "session_src.mkdir(parents=True, exist_ok=True)" in src
         assert "sys.path.insert(0, src)" in src
         assert "__init__.py" in src

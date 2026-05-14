@@ -214,8 +214,11 @@ class MockVolumeEntry:
 class MockVolume:
     """Mock Modal Volume backed by an in-memory file dict."""
 
-    def __init__(self, files: dict[str, bytes]):
+    def __init__(
+        self, files: dict[str, bytes], read_error_paths: set[str] | None = None
+    ):
         self._files = files
+        self._read_error_paths = read_error_paths or set()
         self.read_paths: list[str] = []
 
     def reload(self):
@@ -240,6 +243,8 @@ class MockVolume:
         payload = self._files[path]
         for i in range(0, len(payload), chunk_size):
             yield payload[i : i + chunk_size]
+            if path in self._read_error_paths:
+                raise OSError(f"Mock volume read failed for {path}")
 
     def listdir(self, prefix: str, recursive: bool = False):
         entries = []

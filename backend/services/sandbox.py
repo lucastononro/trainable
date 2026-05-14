@@ -61,7 +61,7 @@ _TRAINABLE_RUNTIME_PREAMBLE_SOURCE = textwrap.indent(_TRAINABLE_RUNTIME_SOURCE, 
 # SDK injected at the top of every sandbox execution. The public API lives in
 # services/trainable_runtime.py; this preamble only selects the sandbox sink and
 # then executes that same runtime source.
-SDK_PREAMBLE_TEMPLATE = f'''\
+SDK_PREAMBLE_TEMPLATE = f"""\
 import os as _trn_os
 _SID = "__SESSION_ID__"
 _VOL_ROOT = "/data"
@@ -82,7 +82,7 @@ finally:
             _trn_os.environ.pop(_trn_key, None)
         else:
             _trn_os.environ[_trn_key] = _trn_value
-'''
+"""
 
 
 def build_sdk_preamble(session_id: str) -> str:

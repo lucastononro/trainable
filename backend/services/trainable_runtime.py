@@ -17,7 +17,9 @@ _VOL_ROOT = pathlib.Path(os.environ.get("TRAINABLE_VOLUME_ROOT", "/data"))
 if _MODE == "sandbox":
     _OUT = _VOL_ROOT / "sessions" / _SID
 else:
-    _OUT = pathlib.Path(os.environ.get("TRAINABLE_LOCAL_OUT", "./trainable_out")).resolve()
+    _OUT = pathlib.Path(
+        os.environ.get("TRAINABLE_LOCAL_OUT", "./trainable_out")
+    ).resolve()
     _OUT.mkdir(parents=True, exist_ok=True)
 
 _FIG_BASE = _OUT / "figures"
@@ -86,10 +88,15 @@ def _save_image(img, dest_path: pathlib.Path) -> None:
 
         if isinstance(img, _torch.Tensor):
             arr = img.detach().cpu().numpy()
-            if arr.ndim == 3 and arr.shape[0] in (1, 3, 4) and arr.shape[2] not in (
-                1,
-                3,
-                4,
+            if (
+                arr.ndim == 3
+                and arr.shape[0] in (1, 3, 4)
+                and arr.shape[2]
+                not in (
+                    1,
+                    3,
+                    4,
+                )
             ):
                 arr = arr.transpose(1, 2, 0)
             img = arr

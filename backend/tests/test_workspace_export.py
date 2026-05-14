@@ -92,7 +92,12 @@ async def test_session_zip_is_well_formed_when_workspace_is_empty():
     zf = zipfile.ZipFile(io.BytesIO(body))
     names = set(zf.namelist())
     # Empty session still ships the synthetic runnability files.
-    assert names == {"README.md", "requirements.txt", "trainable.py", "trainable_local.py"}
+    assert names == {
+        "README.md",
+        "requirements.txt",
+        "trainable.py",
+        "trainable_local.py",
+    }
 
 
 @pytest.mark.asyncio
@@ -208,6 +213,28 @@ async def test_oversized_file_is_skipped_without_being_read():
     assert "data/big.bin" not in names
     assert "data/big.bin" in zf.read("__truncated.txt").decode("utf-8")
     assert vol.read_paths == [small_path]
+
+
+@pytest.mark.asyncio
+async def test_mid_read_error_is_listed_in_truncated_marker():
+    broken_path = "/sessions/readerr/data/broken.bin"
+    vol = MockVolume(
+        {broken_path: b"x" * (2 * 1024 * 1024)},
+        read_error_paths={broken_path},
+    )
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.workspace_export"):
+            stack.enter_context(p)
+
+        from services.workspace_export import stream_session_zip
+
+        body = await _drain(stream_session_zip("readerr"))
+
+    zf = zipfile.ZipFile(io.BytesIO(body))
+    assert "__truncated.txt" in zf.namelist()
+    truncated_blob = zf.read("__truncated.txt").decode("utf-8")
+    assert "data/broken.bin (read error)" in truncated_blob
 
 
 @pytest.mark.asyncio
