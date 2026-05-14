@@ -13,6 +13,7 @@ from observability import init_telemetry
 from routers import (
     compare,
     data_explorer,
+    download,
     experiments,
     files,
     lineage,
@@ -94,6 +95,7 @@ app.include_router(registry.router, prefix="/api")
 app.include_router(compare.router, prefix="/api")
 app.include_router(snapshots.router, prefix="/api")
 app.include_router(lineage.router, prefix="/api")
+app.include_router(download.router, prefix="/api")
 
 
 @app.get("/api/health")

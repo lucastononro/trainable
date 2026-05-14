@@ -18,6 +18,7 @@ import {
   X,
   Box,
   FlaskConical,
+  Download,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
@@ -337,6 +338,17 @@ function ProjectSection({
         >
           <Settings className="w-3 h-3 text-gray-500" />
         </button>
+        <a
+          // Browser-native streamed zip download — Content-Disposition on the
+          // backend picks the filename. Going through Next's /api rewrite
+          // keeps this working in dev and prod without an extra env var.
+          href={`/api/projects/${project.id}/download`}
+          onClick={(e) => e.stopPropagation()}
+          className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
+          title="Download project workspace (zip)"
+        >
+          <Download className="w-3 h-3 text-gray-500" />
+        </a>
         <button
           onClick={onDelete}
           className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
