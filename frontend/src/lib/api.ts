@@ -31,6 +31,7 @@ import type {
   DatasetVersionDetail,
   SessionRow,
   ExperimentFullDetail,
+  CompareResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -307,6 +308,13 @@ export const api = {
   // Models
   listModels: () => fetchJSON<ModelInfo[]>('/models'),
   listProviders: () => fetchJSON<ProviderInfo[]>('/providers'),
+
+  // Session comparison — metrics + feature overlap + cost totals across
+  // up to 8 sessions in one round-trip (backend routers/compare.py).
+  compare: (sessionIds: string[]) => {
+    const qs = new URLSearchParams({ sessions: sessionIds.join(',') });
+    return fetchJSON<CompareResponse>(`/compare?${qs.toString()}`);
+  },
 
   // Usage / cost
   usageSummary: () => fetchJSON<UsageSummary>(`/usage/summary`),

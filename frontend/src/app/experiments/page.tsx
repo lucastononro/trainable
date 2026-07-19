@@ -23,12 +23,16 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  Trophy,
 } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
 import Sidebar from '@/components/Sidebar';
 import type { Experiment, ExperimentFullDetail, Project } from '@/lib/types';
+
+// The /compare backend endpoint caps a comparison at 8 sessions.
+const COMPARE_LIMIT = 8;
 
 const STATE_TONE: Record<string, string> = {
   created: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
@@ -69,6 +73,9 @@ export default function ExperimentsListPage() {
   const [error, setError] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(false);
   const [query, setQuery] = useState('');
+  // Session ids picked for comparison (checkbox column). Only rows with a
+  // session can be compared — /compare aggregates per-session.
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
 
   const fetchExperiments = useCallback(async () => {
     setLoading(true);
@@ -176,6 +183,29 @@ export default function ExperimentsListPage() {
     router.push(`/experiments/${r.id}`);
   };
 
+  const toggleSelected = (sessionId: string) => {
+    setSelectedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else if (next.size < COMPARE_LIMIT) next.add(sessionId);
+      return next;
+    });
+  };
+
+  const openCompare = () => {
+    const ids = Array.from(selectedSessions);
+    if (ids.length < 2) return;
+    // Scope the leaderboard to a project when the selection is homogeneous.
+    const projectIds = new Set(
+      rows
+        .filter((r) => r.session_id && selectedSessions.has(r.session_id))
+        .map((r) => r.project_id),
+    );
+    const qs = new URLSearchParams({ sessions: ids.join(',') });
+    if (projectIds.size === 1) qs.set('project', Array.from(projectIds)[0]);
+    router.push(`/compare?${qs.toString()}`);
+  };
+
   return (
     <div className="h-screen flex bg-black" id="main-content">
       <Sidebar />
@@ -185,6 +215,21 @@ export default function ExperimentsListPage() {
           <h1 className="text-sm font-semibold text-white">Experiments</h1>
           {hydrating ? <Loader2 className="w-3 h-3 text-gray-500 animate-spin" /> : null}
           <div className="flex-1" />
+          {selectedSessions.size > 0 ? (
+            <button
+              onClick={openCompare}
+              disabled={selectedSessions.size < 2}
+              className="inline-flex items-center gap-1.5 rounded-md text-xs font-medium px-2.5 py-1 transition-colors border border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={
+                selectedSessions.size < 2
+                  ? 'Select at least 2 experiments to compare'
+                  : `Compare ${selectedSessions.size} sessions on the leaderboard`
+              }
+            >
+              <Trophy className="w-3.5 h-3.5" />
+              Compare selected ({selectedSessions.size}/{COMPARE_LIMIT})
+            </button>
+          ) : null}
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
@@ -246,6 +291,7 @@ export default function ExperimentsListPage() {
                   <table className="w-full text-sm">
                     <thead className="text-gray-500 text-[11px] uppercase tracking-wide">
                       <tr className="border-b border-surface-border">
+                        <th className="w-8 px-3 py-2" title="Select for comparison"></th>
                         <th className="text-left px-4 py-2 font-medium">Name</th>
                         <th className="text-left px-4 py-2 font-medium">State</th>
                         <th className="text-left px-4 py-2 font-medium">
@@ -270,6 +316,28 @@ export default function ExperimentsListPage() {
                           onClick={() => openLineage(r)}
                           className="border-b border-surface-border last:border-b-0 hover:bg-white/[0.04] cursor-pointer text-gray-300"
                         >
+                          <td
+                            className="px-3 py-2.5 text-center"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={r.session_id ? selectedSessions.has(r.session_id) : false}
+                              disabled={
+                                !r.session_id ||
+                                (!selectedSessions.has(r.session_id) &&
+                                  selectedSessions.size >= COMPARE_LIMIT)
+                              }
+                              onChange={() => r.session_id && toggleSelected(r.session_id)}
+                              className="accent-amber-400 cursor-pointer disabled:cursor-not-allowed"
+                              title={
+                                !r.session_id
+                                  ? 'No session yet — nothing to compare'
+                                  : 'Select for comparison'
+                              }
+                              aria-label={`Select ${r.name} for comparison`}
+                            />
+                          </td>
                           <td className="px-4 py-2.5">
                             <div className="font-medium text-gray-100">{r.name}</div>
                             {r.hypothesis ? (

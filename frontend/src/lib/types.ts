@@ -621,6 +621,57 @@ export type TaskUpdatePayload = Partial<TaskCreatePayload>;
 // Task dict — UI just upserts by id.
 export type TaskEventData = Task;
 
+// ---------------------------------------------------------------------------
+// /compare — session comparison payload (routers/compare.py)
+// ---------------------------------------------------------------------------
+
+// Session + experiment header row. When a requested id doesn't exist the
+// backend still returns a stub with `missing: true` so the UI can keep the
+// user-supplied ordering.
+export interface CompareSessionInfo {
+  id: string;
+  missing: boolean;
+  experiment_id?: string;
+  experiment_name?: string;
+  state?: string;
+  model?: string | null;
+  created_at?: string;
+}
+
+export interface CompareMetricSample {
+  step: number;
+  value: number;
+  stage?: string | null;
+}
+
+// One series per session for a given metric name.
+export interface CompareMetricSeries {
+  session_id: string;
+  points: CompareMetricSample[];
+}
+
+export interface CompareFeatureOverlap {
+  common: string[];
+  per_session: Record<string, string[]>;
+}
+
+export interface CompareSessionTotals {
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  sandbox_seconds: number;
+}
+
+export interface CompareResponse {
+  sessions: CompareSessionInfo[];
+  // metric name → per-session series (points ordered by step)
+  metrics: Record<string, CompareMetricSeries[]>;
+  // Backend quirk: initialized as an empty list and only replaced with the
+  // overlap object when at least one session has a prep summary.
+  feature_overlap: CompareFeatureOverlap | [];
+  totals: Record<string, CompareSessionTotals>;
+}
+
 // Structured search result emitted by web-search and papers-search(search)
 // alongside the markdown text output. Used by the chat to render a rich
 // ChatGPT-style source-card panel.
