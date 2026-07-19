@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from auth import BearerTokenAuthMiddleware
 from config import settings
 from db import init_db
 from errors import generic_exception_handler
@@ -70,6 +71,13 @@ app = FastAPI(title="Trainable v2", lifespan=lifespan)
 # — exporter is a no-op in that case.
 init_telemetry(app)
 app.add_exception_handler(Exception, generic_exception_handler)
+
+# Opt-in bearer-token auth. No-op when API_AUTH_TOKEN is unset (the default) —
+# added before CORSMiddleware so CORS is the outer layer and preflight
+# requests are answered before auth runs.
+if settings.api_auth_token:
+    logger.info("API_AUTH_TOKEN set — bearer-token auth enabled on /api/*")
+    app.add_middleware(BearerTokenAuthMiddleware, token=settings.api_auth_token)
 
 app.add_middleware(
     CORSMiddleware,

@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     sse_keepalive_seconds: float = 30.0
     broadcaster_max_queue_size: int = 1000
 
+    # -- API auth --
+    # Opt-in bearer-token auth (env: API_AUTH_TOKEN). When unset (default),
+    # every endpoint is open — unchanged behavior. When set, /api/* requires
+    # `Authorization: Bearer <token>` (health/readyz exempt; the SSE stream
+    # endpoint also accepts ?token= since EventSource can't send headers).
+    api_auth_token: Optional[str] = None
+
     # -- CORS --
     cors_origins: list[str] = ["*"]
 
