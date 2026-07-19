@@ -4,8 +4,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/AppContext';
 import { SSEStreamProvider } from '@/lib/SSEStreamContext';
 import { api } from '@/lib/api';
-import type { Mention, Draft, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
-import { draftToWire, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
+import type { EdaFinding, Mention, Draft, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
+import {
+  appendTextToDraft,
+  draftToWire,
+  isDraftEmpty,
+  draftToPlainText,
+} from '@/lib/mentions';
 import {
   ImperativePanelHandle,
   Panel,
@@ -113,6 +118,7 @@ function HomePageContent() {
     generatedFiles,
     fileTree,
     htmlArtifacts,
+    edaFindings,
     metricPoints,
     chartConfig,
     logEvents,
@@ -237,6 +243,19 @@ function HomePageContent() {
       addItem({ type: 'error', content: `Failed to stop: ${e.message}` });
     }
   };
+
+  // "Apply in prep" (issue #111): turn a structured EDA finding into a
+  // data_prep instruction and pre-fill the chat input with it. The user
+  // reviews/edits, then sends — routing through the orchestrator as usual.
+  // Multiple clicks stack instructions line-by-line into one prompt.
+  const handleApplyInPrep = useCallback((finding: EdaFinding) => {
+    const cols =
+      finding.columns.length > 0
+        ? ` on ${finding.columns.map((c) => `\`${c}\``).join(', ')}`
+        : '';
+    const line = `In data prep, address the EDA finding [${finding.finding_type}]${cols}: ${finding.recommendation}`;
+    setDraft((prev) => appendTextToDraft(prev, isDraftEmpty(prev) ? line : `\n${line}`));
+  }, []);
 
   // Resume / retry an interrupted session. The chat feedback (status bubble +
   // spinner) comes back over SSE via the `session_resumed` event, so this
@@ -743,6 +762,8 @@ function HomePageContent() {
                     chartConfig={chartConfig}
                     logEvents={logEvents}
                     htmlArtifacts={htmlArtifacts}
+                    edaFindings={edaFindings}
+                    onApplyInPrep={handleApplyInPrep}
                     sessionState={sessionState}
                     onClose={collapseCanvas}
                   />
