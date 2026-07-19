@@ -362,6 +362,24 @@ export interface SessionResumedData {
   mode?: 'resume' | 'retry';
   prior_state?: string;
 }
+export type ApprovalKind = 'target_column' | 'prep_plan' | 'model_shortlist' | 'other';
+export interface ApprovalRequestData {
+  approval_id?: string;
+  title?: string;
+  /** The proposed decision (markdown). */
+  content?: string;
+  kind?: ApprovalKind;
+  context?: string;
+  asker_agent_id?: string;
+  asker_agent_type?: string;
+  depth?: number;
+}
+export interface ApprovalResolvedData {
+  approval_id?: string;
+  decision?: 'approve' | 'edit' | 'timeout' | 'cancelled';
+  answer?: string;
+  answered_by?: string;
+}
 
 // Discriminated union of every SSE event the frontend understands. Narrow on
 // `event.type` (a plain switch/if works — each member's `type` is a string
@@ -392,6 +410,8 @@ export type SSEEvent =
   | { type: 'subagent_end'; data: SubAgentEndData }
   | { type: 'clarification_request'; data: ClarificationRequestData }
   | { type: 'clarification_resolved'; data: ClarificationResolvedData }
+  | { type: 'approval_request'; data: ApprovalRequestData }
+  | { type: 'approval_resolved'; data: ApprovalResolvedData }
   | { type: 'agent_tool_call'; data: AgentToolCallData }
   | { type: 'clarification_exchange'; data: ClarificationExchangeData }
   | { type: 'notebook.created'; data: NotebookCreatedData }

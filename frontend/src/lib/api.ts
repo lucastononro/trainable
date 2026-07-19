@@ -245,6 +245,7 @@ export const api = {
     agentModels?: Record<string, string>,
     mentions?: Mention[],
     agentThinking?: Record<string, string>,
+    approvals?: boolean,
   ) =>
     fetchJSON<Message>(`/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -258,6 +259,9 @@ export const api = {
           ? { agent_thinking: agentThinking }
           : {}),
         ...(mentions && mentions.length > 0 ? { mentions } : {}),
+        // Only serialized when the HITL toggle is ON — the default wire
+        // payload is byte-identical to the pre-#108 one.
+        ...(approvals ? { approvals: true } : {}),
       }),
     }),
 
@@ -305,6 +309,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ answer }),
     }),
+
+  // HITL approval gates (issue #108): unblock a waiting agent with the
+  // user's verdict. `edits` is required (non-empty) when decision='edit'.
+  replyApproval: (
+    sessionId: string,
+    approvalId: string,
+    decision: 'approve' | 'edit',
+    edits?: string,
+  ) =>
+    fetchJSON<{ status: string; decision: string }>(
+      `/sessions/${sessionId}/approvals/${approvalId}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ decision, ...(edits ? { edits } : {}) }),
+      },
+    ),
 
   // Files
   getFileTree: (sessionId: string) =>

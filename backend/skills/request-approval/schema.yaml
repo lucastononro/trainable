@@ -1,0 +1,27 @@
+type: object
+properties:
+  title:
+    type: string
+    description: Short label for the approval card, e.g. "Target column".
+  decision:
+    type: string
+    description: >
+      The concrete decision you propose, stated so the user can approve it
+      as-is (e.g. "Predict `churned` as a binary target; drop `customer_id`
+      and `signup_date` as leakage."). Markdown allowed.
+  kind:
+    type: string
+    enum:
+      - target_column
+      - prep_plan
+      - model_shortlist
+      - other
+    description: What class of decision this gates. Drives the card's badge.
+  context:
+    type: string
+    description: >
+      Optional supporting context — why you chose this, alternatives you
+      considered and rejected.
+required:
+  - title
+  - decision

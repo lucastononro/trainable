@@ -55,6 +55,14 @@ function HomePageContent() {
   }, [agentThinking]);
 
   const [draft, setDraft] = useState<Draft>([]);
+  // HITL approval gates (issue #108). Opt-in per session; OFF by default so
+  // legacy behavior is unchanged. Sent with every run-triggering message —
+  // the backend re-asserts the per-session flag from it on each launch.
+  const [approvalsEnabled, setApprovalsEnabled] = useState(false);
+  const approvalsEnabledRef = useRef(false);
+  useEffect(() => {
+    approvalsEnabledRef.current = approvalsEnabled;
+  }, [approvalsEnabled]);
   // Derive the displayed experiment name from the experiments list (single
   // source of truth) so a rename in the sidebar updates the header without
   // needing a session reload.
@@ -158,6 +166,7 @@ function HomePageContent() {
           agentModelsRef.current,
           pending.mentions,
           agentThinkingRef.current,
+          approvalsEnabledRef.current,
         )
         .catch((e: any) => {
           addItem({ type: 'error', content: e.message });
@@ -198,6 +207,7 @@ function HomePageContent() {
           agentModelsRef.current,
           undefined,
           agentThinkingRef.current,
+          approvalsEnabledRef.current,
         );
       } catch (e: any) {
         addItem({ type: 'error', content: e.message });
@@ -340,6 +350,7 @@ function HomePageContent() {
         agentModelsRef.current,
         mentions,
         agentThinkingRef.current,
+        approvalsEnabledRef.current,
       );
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
@@ -431,6 +442,7 @@ function HomePageContent() {
         agentModelsRef.current,
         draftMentions,
         agentThinkingRef.current,
+        approvalsEnabledRef.current,
       );
     } catch (e: any) {
       addItem({ type: 'error', content: e.message });
@@ -494,6 +506,7 @@ function HomePageContent() {
               agentModelsRef.current,
               undefined,
               agentThinkingRef.current,
+              approvalsEnabledRef.current,
             );
           }
         }
@@ -676,6 +689,8 @@ function HomePageContent() {
                 onStop={handleStop}
                 sessionState={sessionState}
                 onResume={handleResume}
+                approvalsEnabled={approvalsEnabled}
+                onToggleApprovals={() => setApprovalsEnabled((v) => !v)}
                 attachedFiles={attachedFiles}
                 onRemoveAttachedFile={removeAttachedFile}
                 onClearAttachedFiles={() => setAttachedFiles([])}
