@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     aws_access_key_id: str = "test"
     aws_secret_access_key: str = "test"
     aws_region: str = "us-east-1"
+    # Buckets the app provisions at startup and that the S3 browser API is
+    # allowed to touch. Anything else is rejected with a 400.
+    s3_allowed_buckets: list[str] = ["datasets", "experiments"]
 
     # -- Modal --
     modal_app_name: str = "trainable"
