@@ -57,17 +57,28 @@ async def record_upload(
     *,
     project_id: str,
     path: str,
-    content: bytes,
+    content: bytes | None = None,
     name: str | None = None,
     description: str = "",
+    content_hash: str | None = None,
+    size_bytes: int | None = None,
 ) -> dict:
     """Persist (or de-dup) a DatasetVersion row for a raw user upload.
 
     Always writes `kind='raw'` and leaves source_session_id/experiment_id
     NULL — those are reserved for agent-declared processed datasets.
     Re-uploads of the same bytes return the existing row.
+
+    Callers that stream uploads (and never hold the full bytes) can pass a
+    precomputed `content_hash` + `size_bytes` instead of `content`.
     """
-    h = hash_bytes(content)
+    if content_hash is None:
+        if content is None:
+            raise ValueError("record_upload needs content or content_hash")
+        content_hash = hash_bytes(content)
+    if size_bytes is None:
+        size_bytes = len(content) if content is not None else 0
+    h = content_hash
     async with async_session() as db:
         existing = await _existing_version(db, project_id=project_id, hash_hex=h)
         if existing:
@@ -81,7 +92,7 @@ async def record_upload(
             description=description,
             hash=h,
             path=path,
-            size_bytes=len(content),
+            size_bytes=size_bytes,
             parent_id=prior.id if prior else None,
             parent_hash=prior.hash if prior else None,
         )

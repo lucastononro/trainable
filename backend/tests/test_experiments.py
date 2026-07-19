@@ -547,3 +547,73 @@ async def test_delete_project_with_deployed_model(
         )
     assert deps == []
     assert models == []
+
+
+@pytest.mark.asyncio
+async def test_create_experiment_streams_upload_without_retaining_bytes(
+    client, default_project_id
+):
+    """Uploads land in S3 from the staged temp file (upload_file), the staged
+    tuples hold no content bytes, and the dataset-version row still records
+    the right hash + size."""
+    import hashlib
+    from unittest.mock import patch as _patch
+
+    from routers import experiments as experiments_module
+
+    payload = b"x,y\n" + b"1,2\n" * 500
+    staged_seen = {}
+
+    orig_upload_many = experiments_module.upload_many_to_volume
+
+    async def spy_upload_many(pairs):
+        staged_seen["pairs"] = list(pairs)
+        return 0
+
+    with _patch.object(experiments_module, "upload_many_to_volume", spy_upload_many):
+        resp = await client.post(
+            "/api/experiments",
+            data={
+                "project_id": default_project_id,
+                "name": "Streamed",
+                "description": "",
+                "instructions": "",
+            },
+            files={"files": ("data/train.csv", payload, "text/csv")},
+        )
+    assert orig_upload_many is not None
+    assert resp.status_code == 200, resp.text
+
+    # Staged tuples are (tmp_path, remote_path) only — no bytes retained.
+    assert staged_seen["pairs"], "bulk volume upload not invoked"
+    for entry in staged_seen["pairs"]:
+        assert len(entry) == 2
+        assert all(isinstance(part, str) for part in entry)
+
+    # Dataset versioning recorded the streamed hash + size.
+    versions = (
+        await client.get(f"/api/projects/{default_project_id}/dataset-versions")
+    ).json()
+    assert versions, "expected a dataset-version row"
+    assert versions[0]["hash"] == hashlib.sha256(payload).hexdigest()
+    assert versions[0]["size_bytes"] == len(payload)
+
+
+@pytest.mark.asyncio
+async def test_create_experiment_oversize_file_rejected(
+    client, default_project_id, monkeypatch
+):
+    from config import settings
+
+    monkeypatch.setattr(settings, "max_upload_size_bytes", 128)
+    resp = await client.post(
+        "/api/experiments",
+        data={
+            "project_id": default_project_id,
+            "name": "Too big",
+            "description": "",
+            "instructions": "",
+        },
+        files={"files": ("big.bin", b"z" * 4096, "application/octet-stream")},
+    )
+    assert resp.status_code == 413

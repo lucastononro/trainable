@@ -1,6 +1,7 @@
 """Experiment CRUD routes."""
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -172,7 +173,7 @@ async def create_experiment(
     # See attach_data for the rationale: defer the Modal Volume push to a
     # single batch so a folder upload of 1k+ files takes one round-trip
     # rather than one per file.
-    staged: list[tuple[str, str, bytes]] = []  # (tmp_path, remote_path, content)
+    staged: list[tuple[str, str]] = []  # (tmp_path, remote_path)
     try:
         for f in files:
             # The browser may send a relative path for folder uploads (e.g.
@@ -182,40 +183,42 @@ async def create_experiment(
             rel_path = _safe_relative_path(raw_name)
             key = _dataset_s3_key(project_id, rel_path)
 
-            content = b""
-            chunk = await f.read(1024 * 1024)
-            while chunk:
-                content += chunk
-                if len(content) > settings.max_upload_size_bytes:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"File '{rel_path}' exceeds max upload size of {settings.max_upload_size_bytes // (1024 * 1024)}MB",
-                    )
-                chunk = await f.read(1024 * 1024)
-            logger.info("Read %s: %d bytes", rel_path, len(content))
-
-            # Upload to S3 (for browser / S3 explorer). boto3 is synchronous —
-            # run it in a worker thread to keep the event loop free.
-            await asyncio.to_thread(
-                s3.put_object,
-                Bucket="datasets",
-                Key=key,
-                Body=content,
-                ContentType=f.content_type or "application/octet-stream",
-            )
-
-            # Stash for the bulk Modal Volume upload below.
+            # Stream the body straight to a temp file in bounded 1 MB chunks —
+            # never accumulate the whole file (let alone the whole folder) in
+            # memory. Hash + count incrementally for dataset versioning.
+            # Registering the temp path in `staged` up front means the
+            # `finally` below cleans it up even on a mid-stream failure.
+            hasher = hashlib.sha256()
+            size = 0
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(content)
                 tmp_path = tmp.name
-            staged.append(
-                (tmp_path, _dataset_volume_path(project_id, rel_path), content)
+                staged.append((tmp_path, _dataset_volume_path(project_id, rel_path)))
+                chunk = await f.read(1024 * 1024)
+                while chunk:
+                    size += len(chunk)
+                    if size > settings.max_upload_size_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File '{rel_path}' exceeds max upload size of {settings.max_upload_size_bytes // (1024 * 1024)}MB",
+                        )
+                    hasher.update(chunk)
+                    tmp.write(chunk)
+                    chunk = await f.read(1024 * 1024)
+            logger.info("Read %s: %d bytes", rel_path, size)
+
+            # Upload to S3 (for browser / S3 explorer) from the temp file —
+            # boto3 streams it from disk, in a worker thread to keep the
+            # event loop free.
+            await asyncio.to_thread(
+                s3.upload_file,
+                tmp_path,
+                "datasets",
+                key,
+                ExtraArgs={"ContentType": f.content_type or "application/octet-stream"},
             )
 
             uploaded_files.append(f"s3://datasets/{key}")
-            logger.info(
-                f"Uploaded {rel_path} ({len(content)} bytes) → S3 (volume pending)"
-            )
+            logger.info(f"Uploaded {rel_path} ({size} bytes) → S3 (volume pending)")
 
             # Record content hash for dataset versioning. Failures here must not
             # block the upload — versioning is observability, not a gate.
@@ -223,20 +226,21 @@ async def create_experiment(
                 await record_dataset_upload(
                     project_id=project_id,
                     path=_dataset_volume_path(project_id, rel_path),
-                    content=content,
+                    content_hash=hasher.hexdigest(),
+                    size_bytes=size,
                 )
             except Exception as e:
                 logger.warning("dataset_versions.record_upload failed: %s", e)
 
         if staged:
             try:
-                await upload_many_to_volume([(p, r) for p, r, _ in staged])
+                await upload_many_to_volume(staged)
             except Exception as e:
                 logger.warning(
                     f"Modal Volume bulk upload failed for {len(staged)} files: {e}"
                 )
     finally:
-        for tmp_path, _, _ in staged:
+        for tmp_path, _ in staged:
             try:
                 os.unlink(tmp_path)
             except FileNotFoundError:
