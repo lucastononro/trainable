@@ -1,0 +1,31 @@
+# Pre-commit hooks for Trainable. See CONTRIBUTING.md.
+# Install: pip install pre-commit && pre-commit install
+# Run manually: pre-commit run --all-files
+# Generated / vendored artifacts: not hand-edited, so keep the hooks off them.
+exclude: |
+  (?x)^(
+    package-lock\.json|
+    frontend/package-lock\.json|
+    frontend/tsconfig\.tsbuildinfo|
+    .*\.excalidraw|
+    sample-data/.*
+  )$
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.22
+    hooks:
+      # Lint (with autofix) the backend Python code using backend/pyproject.toml.
+      - id: ruff
+        args: [--fix]
+        files: ^backend/
+      # Format the backend Python code.
+      - id: ruff-format
+        files: ^backend/
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: detect-private-key
