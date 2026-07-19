@@ -173,6 +173,17 @@ export const api = {
   // new key in plaintext so the user can copy it. Running containers
   // keep the old key cached until cold-start; user can click Redeploy
   // to force cutover.
+  // Prediction playground — the "Test" panel on /models. Schema first
+  // (which features to render inputs for), then predictions through the
+  // backend proxy so the browser never holds the X-API-Key or fights
+  // Modal CORS.
+  getPredictSchema: (modelId: string) =>
+    fetchJSON<import('./types').PredictSchema>(`/models/${modelId}/predict-schema`),
+  predictModel: (modelId: string, records: Record<string, unknown>[]) =>
+    fetchJSON<import('./types').PredictProxyResponse>(`/models/${modelId}/predict`, {
+      method: 'POST',
+      body: JSON.stringify({ records }),
+    }),
   rotateModelKey: (modelId: string) =>
     fetchJSON<{ model_id: string; api_key: string; modal_secret: string; note: string }>(
       `/models/${modelId}/rotate-key`,
