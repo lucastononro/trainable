@@ -28,6 +28,7 @@ import {
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
 import Sidebar from '@/components/Sidebar';
+import SnapshotReproduce from '@/components/experiments/SnapshotReproduce';
 import LineageGraph from '@/components/lineage/LineageGraph';
 import NodeMetadataPanel from '@/components/lineage/NodeMetadataPanel';
 import type {
@@ -329,6 +330,9 @@ export default function ExperimentDetailPage() {
                   </span>
                 </div>
               </div>
+              {detail.snapshot.session_id ? (
+                <SnapshotReproduce sessionId={detail.snapshot.session_id} />
+              ) : null}
             </section>
           ) : null}
         </main>

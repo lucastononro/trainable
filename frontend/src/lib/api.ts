@@ -26,6 +26,7 @@ import type {
   RegisteredModel,
   DeploymentRow,
   RunSnapshotRow,
+  ReproduceReport,
   DatasetVersionRow,
   LineageGraph,
   DatasetVersionDetail,
@@ -183,6 +184,11 @@ export const api = {
   takeSnapshot: (sessionId: string) =>
     fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`, { method: 'POST' }),
   getSnapshot: (sessionId: string) => fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`),
+  reproduceSnapshot: (sessionId: string, tolerance?: number) =>
+    fetchJSON<ReproduceReport>(`/sessions/${sessionId}/snapshot/reproduce`, {
+      method: 'POST',
+      body: JSON.stringify(tolerance !== undefined ? { tolerance } : {}),
+    }),
 
   // Dataset versions
   projectDatasetVersions: (projectId: string) =>

@@ -440,6 +440,43 @@ export interface RunSnapshotRow {
   created_at: string;
 }
 
+// Result of the active "Reproduce" action: the snapshot's captured scripts
+// are re-executed in a sandbox and the resulting metrics diffed vs the
+// original run (POST /sessions/{id}/snapshot/reproduce).
+export interface MetricDiffRow {
+  name: string;
+  original: number | null;
+  reproduced: number | null;
+  abs_diff: number | null;
+  rel_diff: number | null;
+  status: 'match' | 'drift' | 'missing' | 'new';
+}
+
+export interface ReproduceReport {
+  session_id: string;
+  snapshot_id: number;
+  reproduced_at: string;
+  tolerance: number;
+  status: 'match' | 'drift' | 'error';
+  inputs: {
+    dataset_verified: boolean;
+    code_verified: boolean;
+    changed_files: { path: string; expected_sha256: string; actual_sha256: string | null }[];
+  };
+  execution: {
+    returncode: number;
+    scripts: string[];
+    stderr_tail: string;
+  };
+  metrics: {
+    original: Record<string, number>;
+    reproduced: Record<string, number>;
+    rows: MetricDiffRow[];
+    summary: { matched: number; drifted: number; missing: number; new: number };
+    drift_detected: boolean;
+  };
+}
+
 export interface DatasetVersionRow {
   id: number;
   project_id: string;

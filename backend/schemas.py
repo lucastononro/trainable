@@ -89,6 +89,67 @@ class ProjectUpdate(BaseModel):
     sandbox_config: Optional[SandboxConfig] = None
 
 
+class ReproduceRequest(BaseModel):
+    """Optional knobs for the snapshot reproduce action."""
+
+    # Relative+absolute tolerance for "same metric value" (see
+    # services/reproduce.py). Widen for intentionally-stochastic runs.
+    tolerance: float = Field(default=1e-6, ge=0.0, le=1.0)
+
+
+class ChangedFile(BaseModel):
+    path: str
+    expected_sha256: str
+    actual_sha256: Optional[str] = None  # None => file no longer exists
+
+
+class ReproduceInputs(BaseModel):
+    dataset_verified: bool
+    code_verified: bool
+    changed_files: list[ChangedFile]
+
+
+class ReproduceExecution(BaseModel):
+    returncode: int
+    scripts: list[str]
+    stderr_tail: str
+
+
+class MetricDiffRow(BaseModel):
+    name: str
+    original: Optional[float] = None
+    reproduced: Optional[float] = None
+    abs_diff: Optional[float] = None
+    rel_diff: Optional[float] = None
+    status: Literal["match", "drift", "missing", "new"]
+
+
+class MetricDiffSummary(BaseModel):
+    matched: int
+    drifted: int
+    missing: int
+    new: int
+
+
+class ReproduceMetrics(BaseModel):
+    original: dict[str, float]
+    reproduced: dict[str, float]
+    rows: list[MetricDiffRow]
+    summary: MetricDiffSummary
+    drift_detected: bool
+
+
+class ReproduceReport(BaseModel):
+    session_id: str
+    snapshot_id: int
+    reproduced_at: str
+    tolerance: float
+    status: Literal["match", "drift", "error"]
+    inputs: ReproduceInputs
+    execution: ReproduceExecution
+    metrics: ReproduceMetrics
+
+
 class ExperimentUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)

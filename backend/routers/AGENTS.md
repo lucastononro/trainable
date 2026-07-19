@@ -10,7 +10,7 @@ experiments.py    Experiment CRUD + lifecycle (created → prepping → ...)
 projects.py       Project CRUD
 models.py         Available model registry (proxies models.yml to the frontend)
 registry.py       Registered model CRUD
-snapshots.py      Run snapshots
+snapshots.py      Run snapshots + reproduce action (replay scripts, diff metrics)
 compare.py        Multi-experiment compare
 data_explorer.py  Dataset inspection + preview
 lineage.py        Lineage graph endpoints (raw → processed → model)
