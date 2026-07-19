@@ -194,11 +194,6 @@ export interface Mention {
 export type DraftToken = { kind: 'text'; value: string } | { kind: 'mention'; mention: Mention };
 export type Draft = DraftToken[];
 
-export interface SSEEvent {
-  type: string;
-  data: Record<string, unknown>;
-}
-
 export interface ExperimentDetail extends Experiment {
   sessions: Session[];
 }
@@ -230,52 +225,182 @@ export interface AbortResponse {
   status: string;
 }
 
-// SSE event data shapes
-export interface ToolEventData {
-  tool: string;
-  input?: { code?: string };
-  output?: string;
-}
-export interface AgentMessageData {
-  text: string;
-}
-export interface AgentErrorData {
-  error: string;
-}
-export interface StateChangeData {
-  state: string;
-}
-export interface CodeOutputData {
-  text: string;
-  stream: string;
-}
-export interface FileCreatedData {
-  path: string;
-  name: string;
-  type: string;
-  stage: string;
-}
-export interface FilesReadyData {
-  files: Array<{ path: string; type: string }>;
-  stage: string;
-  workspace?: string;
-}
-export interface ReportReadyData {
-  content: string;
-  stage: string;
-}
-export interface MetricEventData {
-  step: number;
-  metrics: Record<string, number>;
-  run?: string;
-}
-export interface ChartConfigEventData {
-  charts: Array<{ title: string; metrics: string[]; type: string }>;
-}
 export interface GeneratedFile {
   path: string;
   type: string;
 }
+
+// ---------------------------------------------------------------------------
+// SSE event data shapes — one per `event.type` the backend publishes on
+// `/api/sessions/{id}/stream`. Field optionality here matches what the
+// handler in `page.tsx`'s `connectSSE` actually defends against (backend
+// payloads aren't schema-validated on the wire), not just what happens to be
+// read today.
+// ---------------------------------------------------------------------------
+
+export interface StateChangeData {
+  state: string;
+  depth?: number;
+}
+export interface AgentMessageData {
+  text: string;
+  agent_type?: string;
+}
+export interface ToolStartData {
+  tool: string;
+  input?: { code?: string };
+}
+export interface ToolEndData {
+  tool: string;
+  output?: string;
+}
+export interface CodeOutputData {
+  text: string;
+  stream?: string;
+}
+export interface AgentErrorData {
+  error: string;
+}
+export interface ReportReadyData {
+  content: string;
+  stage?: string;
+}
+export interface FilesReadyData {
+  files?: GeneratedFile[];
+  stage?: string;
+}
+export interface FileCreatedData {
+  path: string;
+  name: string;
+  stage?: string;
+}
+export interface MetricEventData {
+  step: number;
+  name: string;
+  value: number;
+  stage?: string;
+  run_tag?: string | null;
+}
+export interface MetricsBatchData {
+  items: MetricEventData[];
+}
+// Rich (non-scalar) log payload as it arrives over SSE — same fields as
+// `LogEvent` but all optional, since the handler defensively checks for
+// them before treating the event as well-formed.
+export interface LogEventSSEData {
+  key?: string;
+  step?: number;
+  type?: RichPanelType;
+  stage?: string;
+  run_tag?: string | null;
+  data?: Record<string, unknown>;
+}
+export interface CanvasHtmlData {
+  key?: string;
+  path?: string;
+  title?: string;
+  size?: number;
+  ts?: number;
+  step?: number;
+  stage?: string | null;
+}
+export interface SubAgentStartData {
+  agent_id?: string;
+  agent_type?: string;
+  task?: string;
+  description?: string;
+  model?: string;
+  depth?: number;
+}
+export interface SubAgentEndData {
+  agent_id?: string;
+  agent_type?: string;
+  summary?: string;
+  result?: string;
+}
+export interface ClarificationRequestData {
+  question?: string;
+  question_id?: string;
+  asker_agent_id?: string;
+  asker_agent_type?: string;
+  answerer_agent_id?: string;
+  why_needed?: string;
+  urgency?: string;
+  depth?: number;
+  original_question?: string;
+}
+export interface ClarificationResolvedData {
+  question_id?: string;
+  answer?: string;
+  answered_by?: string;
+}
+export interface AgentToolCallData {
+  call_id?: string;
+  tool_name?: string;
+  asker_agent_type?: string;
+  target_agent_type?: string;
+  answerer_agent_type?: string;
+  depth?: number;
+  duration_s?: number;
+  is_error?: boolean;
+}
+export interface ClarificationExchangeData {
+  call_id?: string;
+  asker_agent_type?: string;
+  answerer_agent_type?: string;
+  depth?: number;
+  duration_s?: number;
+}
+export interface NotebookCreatedData {
+  notebook_name: string;
+  notebook_path: string;
+}
+export interface TaskDeletedData {
+  id: number;
+}
+
+// Discriminated union of every SSE event the frontend understands. Narrow on
+// `event.type` (a plain switch/if works — each member's `type` is a string
+// literal) to get a correctly-typed `event.data` with no `as any` needed.
+// Events the app doesn't act on directly (e.g. the fine-grained
+// `notebook.cell.*` stream, consumed only by `useNotebookSSE` via the
+// shared `SSEStreamContext` bus) aren't modeled here; they still flow
+// through at runtime, just without page-level type narrowing.
+export type SSEEvent =
+  | { type: 'state_change'; data: StateChangeData }
+  | { type: 'agent_token' | 'agent_message'; data: AgentMessageData }
+  | { type: 'tool_start'; data: ToolStartData }
+  | { type: 'tool_end'; data: ToolEndData }
+  | { type: 'code_output'; data: CodeOutputData }
+  | { type: 'agent_error'; data: AgentErrorData }
+  | { type: 'usage_event'; data: UsageEvent }
+  | { type: 'report_ready'; data: ReportReadyData }
+  | { type: 'files_ready'; data: FilesReadyData }
+  | { type: 'file_created'; data: FileCreatedData }
+  | { type: 'agent_aborted'; data: Record<string, unknown> }
+  | { type: 'metrics_batch'; data: MetricsBatchData }
+  | { type: 'metric'; data: MetricEventData }
+  | { type: 'chart_config'; data: ChartConfig }
+  | { type: 'log_event'; data: LogEventSSEData }
+  | { type: 'canvas_html'; data: CanvasHtmlData }
+  | { type: 'subagent_start'; data: SubAgentStartData }
+  | { type: 'subagent_end'; data: SubAgentEndData }
+  | { type: 'clarification_request'; data: ClarificationRequestData }
+  | { type: 'clarification_resolved'; data: ClarificationResolvedData }
+  | { type: 'agent_tool_call'; data: AgentToolCallData }
+  | { type: 'clarification_exchange'; data: ClarificationExchangeData }
+  | { type: 'notebook.created'; data: NotebookCreatedData }
+  | {
+      type:
+        | 'experiment_created'
+        | 'dataset_registered'
+        | 'model_registered'
+        | 'experiment_state_changed'
+        | 'experiments_abandoned';
+      data: Record<string, unknown>;
+    }
+  | { type: 'task_created' | 'task_updated'; data: TaskEventData }
+  | { type: 'task_deleted'; data: TaskDeletedData };
 
 export interface UsageEvent {
   id: number;
