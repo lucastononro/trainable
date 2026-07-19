@@ -7,6 +7,7 @@ scanning /sessions/{session_id} — agents are free to organize their workspace
 however they like.
 """
 
+import asyncio
 import io
 import json
 import logging
@@ -24,6 +25,55 @@ from services.volume import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _read_parquet_df(raw: bytes) -> pd.DataFrame:
+    """Parse parquet bytes into a DataFrame.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    """
+    return pd.read_parquet(io.BytesIO(raw))
+
+
+def _count_nulls(df: pd.DataFrame) -> pd.Series:
+    """Return per-column null counts, filtered to columns with nulls.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    """
+    null_counts = df.isnull().sum()
+    return null_counts[null_counts > 0]
+
+
+def _check_row_overlap(train_df: pd.DataFrame, test_raw: bytes) -> set:
+    """Hash-based row-overlap check between train and test splits.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    Returns the set of overlapping row hashes.
+    """
+    test_df = pd.read_parquet(io.BytesIO(test_raw))
+    # Hash rows for comparison (sample for large datasets)
+    sample_size = min(1000, len(train_df), len(test_df))
+    train_sample = (
+        train_df.sample(n=sample_size, random_state=42)
+        if len(train_df) > sample_size
+        else train_df
+    )
+    test_sample = (
+        test_df.sample(n=sample_size, random_state=42)
+        if len(test_df) > sample_size
+        else test_df
+    )
+    train_hashes = set(pd.util.hash_pandas_object(train_sample).values)
+    test_hashes = set(pd.util.hash_pandas_object(test_sample).values)
+    return train_hashes & test_hashes
+
+
+def _find_constant_columns(df: pd.DataFrame) -> list[str]:
+    """Return columns with zero variance.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    """
+    return [col for col in df.columns if df[col].nunique() <= 1]
 
 
 async def _read_volume_file_safe(path: str):
@@ -131,12 +181,22 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
                     msg += f" (extra: {[c[0] for c in extra]})"
                 results["errors"].append(msg)
 
+    # Parse train.parquet once (off the event loop) and reuse it across
+    # checks 4, 6, and 7 below.
+    train_df: pd.DataFrame | None = None
+    train_read_error: Exception | None = None
+    if "train" in splits:
+        try:
+            train_df = await asyncio.to_thread(_read_parquet_df, splits["train"])
+        except Exception as e:
+            train_read_error = e
+
     # 4. Check for nulls (sample-based for efficiency)
     if "train" in splits:
         try:
-            train_df = pd.read_parquet(io.BytesIO(splits["train"]))
-            null_counts = train_df.isnull().sum()
-            null_cols = null_counts[null_counts > 0]
+            if train_df is None:
+                raise train_read_error  # type: ignore[misc]
+            null_cols = await asyncio.to_thread(_count_nulls, train_df)
             if len(null_cols) == 0:
                 results["passed"].append("No null values in train split")
             else:
@@ -169,23 +229,11 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     # 6. Check for data leakage (hash-based row overlap)
     if "train" in splits and "test" in splits:
         try:
-            train_df = pd.read_parquet(io.BytesIO(splits["train"]))
-            test_df = pd.read_parquet(io.BytesIO(splits["test"]))
-            # Hash rows for comparison (sample for large datasets)
-            sample_size = min(1000, len(train_df), len(test_df))
-            train_sample = (
-                train_df.sample(n=sample_size, random_state=42)
-                if len(train_df) > sample_size
-                else train_df
+            if train_df is None:
+                raise train_read_error  # type: ignore[misc]
+            overlap = await asyncio.to_thread(
+                _check_row_overlap, train_df, splits["test"]
             )
-            test_sample = (
-                test_df.sample(n=sample_size, random_state=42)
-                if len(test_df) > sample_size
-                else test_df
-            )
-            train_hashes = set(pd.util.hash_pandas_object(train_sample).values)
-            test_hashes = set(pd.util.hash_pandas_object(test_sample).values)
-            overlap = train_hashes & test_hashes
             if len(overlap) == 0:
                 results["passed"].append(
                     "No row overlap detected between train and test"
@@ -198,12 +246,9 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
             results["warnings"].append(f"Could not check leakage: {e}")
 
     # 7. Check for constant columns
-    if "train" in splits:
+    if "train" in splits and train_df is not None:
         try:
-            train_df = pd.read_parquet(io.BytesIO(splits["train"]))
-            constant_cols = [
-                col for col in train_df.columns if train_df[col].nunique() <= 1
-            ]
+            constant_cols = await asyncio.to_thread(_find_constant_columns, train_df)
             if constant_cols:
                 results["warnings"].append(
                     f"Constant columns (zero variance): {constant_cols}"
