@@ -518,9 +518,9 @@ export default function Sidebar() {
   }, []);
 
   const handleSaveSandboxConfig = useCallback(
-    async (projectId: string, config: SandboxConfig) => {
+    async (projectId: string, config: SandboxConfig, budgetUsd: number | null) => {
       try {
-        await api.updateProject(projectId, { sandbox_config: config });
+        await api.updateProject(projectId, { sandbox_config: config, budget_usd: budgetUsd });
         await refreshProjects();
       } catch {
         // silent
@@ -921,8 +921,9 @@ export default function Sidebar() {
             isOpen={settingsProjectId !== null}
             projectName={settingsProject?.name ?? ''}
             sandboxConfig={settingsProject?.sandbox_config ?? {}}
-            onSave={(config) => {
-              if (settingsProjectId) handleSaveSandboxConfig(settingsProjectId, config);
+            budgetUsd={settingsProject?.budget_usd ?? null}
+            onSave={(config, budgetUsd) => {
+              if (settingsProjectId) handleSaveSandboxConfig(settingsProjectId, config, budgetUsd);
             }}
             onClose={() => setSettingsProjectId(null)}
           />

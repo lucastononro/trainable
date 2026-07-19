@@ -28,6 +28,7 @@ from services.volume import (
 )
 
 from observability import agent_span, bind_log_context, clear_log_context
+from services.budget import BudgetExceededError, check_budget
 from services.usage import record_llm_usage
 
 from .agents import (
@@ -585,6 +586,11 @@ async def _drive_provider(
             )
         except Exception as e:
             logger.warning("record_llm_usage failed: %s", e)
+        # Budget hard-stop: once the project's accumulated spend crosses its
+        # cap, halt this agent at the very next usage event. Raising here
+        # unwinds the provider loop; run_agent catches BudgetExceededError
+        # and lands the session in a clean `budget_exceeded` terminal state.
+        await check_budget(session_id)
 
     # Wall-clock cap hint for providers/SDKs. The runner no longer wraps its
     # own loop with `asyncio.timeout(timeout_s)` — that competed with the
@@ -890,6 +896,10 @@ async def run_agent(
             sandbox_config,
         ) = await _load_project_context(experiment_id)
 
+        # Budget pre-check: never start a run for a project that has already
+        # spent past its cap. Raises BudgetExceededError (handled below).
+        await check_budget(session_id)
+
         system_prompt = render_agent_system_prompt(
             agent_type,
             experiment_id=experiment_id,
@@ -1085,6 +1095,38 @@ async def run_agent(
             role="system",
         )
         await _publish("state_change", {"state": "timed_out"}, role="system")
+
+    except BudgetExceededError as e:
+        # Clean terminal state — this is the guardrail working, not a
+        # failure. The message tells the user exactly why the agent stopped
+        # and how to resume (raise or clear the cap in Project Settings).
+        st = e.status
+        cap = f"${st.budget_usd:.2f}" if st.budget_usd is not None else "(none)"
+        logger.warning(
+            "Budget exceeded for session %s (project %s): spent=%.4f cap=%s "
+            "— halting agent %s",
+            session_id,
+            st.project_id,
+            st.spent_usd,
+            st.budget_usd,
+            agent_type,
+        )
+        await _publish(
+            "budget_exceeded",
+            {
+                "error": (
+                    f"Budget limit reached: this project has spent "
+                    f"${st.spent_usd:.2f} of its {cap} cap, so the agent was "
+                    "stopped to prevent further spend. Raise or clear the "
+                    "budget in Project Settings to continue."
+                ),
+                "project_id": st.project_id,
+                "budget_usd": st.budget_usd,
+                "spent_usd": st.spent_usd,
+            },
+            role="system",
+        )
+        await _publish("state_change", {"state": "budget_exceeded"}, role="system")
 
     except asyncio.CancelledError:
         silent = session_id in _silent_aborts

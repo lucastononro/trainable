@@ -59,6 +59,7 @@ async def create_project(body: ProjectCreate, db: AsyncSession = Depends(get_db)
         name=body.name or "New project",
         description=body.description or "",
         sandbox_config=body.sandbox_config.model_dump() if body.sandbox_config else {},
+        budget_usd=body.budget_usd,
         created_at=now,
         updated_at=now,
     )
@@ -146,6 +147,10 @@ async def update_project(
         project.description = body.description
     if body.sandbox_config is not None:
         project.sandbox_config = body.sandbox_config.model_dump()
+    # budget_usd supports explicit null-to-clear, so distinguish "field
+    # omitted" from "field set to None" via model_fields_set.
+    if "budget_usd" in body.model_fields_set:
+        project.budget_usd = body.budget_usd
     project.updated_at = _now()
 
     await db.commit()

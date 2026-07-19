@@ -61,7 +61,12 @@ export const api = {
 
   updateProject: (
     id: string,
-    patch: { name?: string; description?: string; sandbox_config?: SandboxConfig },
+    patch: {
+      name?: string;
+      description?: string;
+      sandbox_config?: SandboxConfig;
+      budget_usd?: number | null;
+    },
   ) =>
     fetchJSON<Project>(`/projects/${id}`, {
       method: 'PATCH',

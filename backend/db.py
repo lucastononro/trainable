@@ -86,6 +86,9 @@ def _run_migrations(connection):
                 text("ALTER TABLE projects ADD COLUMN sandbox_config JSON")
             )
             logger.info("[DB] Added sandbox_config column to projects table")
+        if "budget_usd" not in columns:
+            connection.execute(text("ALTER TABLE projects ADD COLUMN budget_usd FLOAT"))
+            logger.info("[DB] Added budget_usd column to projects table")
 
     # ------------------------------------------------------------------
     # Phase A — projects foundation
