@@ -586,16 +586,20 @@ async def _drive_provider(
         except Exception as e:
             logger.warning("record_llm_usage failed: %s", e)
 
-    # Wall-clock cap hint for providers/SDKs. The runner no longer wraps its
+    # Wall-clock cap for provider LLM calls. The runner no longer wraps its
     # own loop with `asyncio.timeout(timeout_s)` — that competed with the
     # per-sandbox timeout configured per project and could kill a session
-    # mid-tool-call without surfacing the failure to the model. The single
-    # governing timeout is the sandbox's own (`sandbox_timeout`, override
-    # per project via the agent's `default`/`training` profile). When it
-    # fires, Modal kills the container and the execute-code handler returns
-    # an `is_error` tool_result so the model can recognise the timeout and
-    # adapt (smaller chunk, different approach) or stop. The value below is
-    # still passed as a hint to provider SDKs that accept one.
+    # mid-tool-call without surfacing the failure to the model. Tool
+    # execution stays governed by the sandbox's own timeout
+    # (`sandbox_timeout`, override per project via the agent's
+    # `default`/`training` profile): when it fires, Modal kills the
+    # container and the execute-code handler returns an `is_error`
+    # tool_result so the model can adapt or stop. The value below is
+    # enforced *inside each provider* around the HTTP call only (SDK
+    # timeout / `enforce_wall_clock`; Claude via API_TIMEOUT_MS), so a
+    # stalled provider request raises TimeoutError — handled by
+    # `run_agent`'s TimeoutError path, which ends the run and frees the
+    # session task — without ever counting tool time (issue #95).
     timeout_s = settings.agent_timeout_seconds
 
     # Translate the resolved thinking level into provider-shaped kwargs once

@@ -19,7 +19,7 @@ from typing import AsyncIterator
 
 from .auth import resolve_credentials
 from .auth._base import ProviderUnavailable
-from .base import LLMEvent, LLMProvider, ProviderCapabilities
+from .base import LLMEvent, LLMProvider, ProviderCapabilities, enforce_wall_clock
 
 logger = logging.getLogger(__name__)
 
@@ -93,12 +93,19 @@ class LiteLLMProvider(LLMProvider):
         ]
 
         try:
-            resp = await litellm.acompletion(
-                model=model,
-                messages=messages,
-                tools=oai_tools or None,
-                stream=False,
-                timeout=timeout_seconds,
+            # `timeout=` is LiteLLM's per-attempt transport timeout;
+            # `enforce_wall_clock` is the hard cap so retries/fallbacks in
+            # the backend can't stretch a stalled call past the budget.
+            resp = await enforce_wall_clock(
+                litellm.acompletion(
+                    model=model,
+                    messages=messages,
+                    tools=oai_tools or None,
+                    stream=False,
+                    timeout=timeout_seconds,
+                ),
+                timeout_seconds,
+                provider="litellm",
             )
 
             choice = resp.choices[0]
@@ -153,6 +160,11 @@ class LiteLLMProvider(LLMProvider):
                     },
                     total_cost_usd=getattr(resp, "_response_cost", None),
                 )
+        except TimeoutError:
+            # Propagate so the runner's TimeoutError handler publishes
+            # `agent_timeout` and frees the session task (issue #95).
+            logger.warning("LiteLLMProvider call exceeded the wall-clock timeout")
+            raise
         except Exception as e:
             logger.exception("LiteLLMProvider.run failed")
             yield LLMEvent.error(str(e))
