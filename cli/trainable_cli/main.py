@@ -200,6 +200,10 @@ def write_env(dest: Path, config: dict[str, str]):
 
     env_path = dest / ENV_FILE
     env_path.write_text("\n".join(lines) + "\n")
+    # Secrets file: restrict to owner-only so other users on a shared machine
+    # can't read the plaintext API keys/tokens. Applied on every (re)write so
+    # a previously world-readable file is tightened.
+    os.chmod(env_path, 0o600)
     success(f"Wrote {ENV_FILE}")
 
 
@@ -358,7 +362,10 @@ def cmd_init():
     banner()
 
     dest = CONFIG_DIR
-    dest.mkdir(parents=True, exist_ok=True)
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # `mode` is ignored when the directory already exists, so chmod explicitly
+    # to tighten a pre-existing loose (e.g. 0755) config dir holding secrets.
+    os.chmod(dest, 0o700)
     print(f"  {DIM}Config directory: {dest}{RESET}")
 
     # Step 1 — check Docker
