@@ -829,8 +829,15 @@ async def run_agent(
     agent_id: str = "root",
     parent_agent_id: str | None = None,
     mentions: list[dict] | None = None,
+    resume_context: str | None = None,
 ):
     """Run an agent. agent_type maps to a YAML in agents/. Falls back to stage name.
+
+    resume_context, when set, marks this run as a resume/retry of an
+    interrupted session: the block (built by services.agent.resume) is
+    appended to the system prompt so the agent can skip steps whose
+    artifacts already exist, and the full prior conversation is injected
+    (a resume has no freshly-persisted user message to exclude).
 
     agent_models is a per-agent model override map: {"eda": "claude-haiku-4-5", ...}
     agent_thinking is the parallel reasoning-level map: {"eda": "high", ...}.
@@ -923,6 +930,11 @@ async def run_agent(
         if "execute-code" in get_agent_skills(agent_type):
             system_prompt += "\n\n" + _format_compute_env(sandbox_config)
 
+        # Resume/retry runs carry the recovered-progress block so the agent
+        # skips steps whose artifacts already exist on the volume.
+        if resume_context:
+            system_prompt += "\n\n" + resume_context
+
         if user_prompt:
             prompt = _apply_mentions(user_prompt, mentions)
         else:
@@ -966,12 +978,16 @@ async def run_agent(
             )
             thinking_level = normalize_level(chosen) if chosen else None
 
-        # Load conversation history for follow-up messages
+        # Load conversation history for follow-up messages. A normal
+        # follow-up excludes the last message (it's the just-persisted user
+        # prompt this run is answering); a resume run has no fresh user
+        # message in the DB, so the full history is injected.
         if user_prompt:
             history = await _load_conversation_history(session_id)
+            history_for_context = history if resume_context else history[:-1]
             if history:
                 context_parts = []
-                for msg in history[:-1]:
+                for msg in history_for_context:
                     prefix = "User" if msg["role"] == "user" else "Assistant"
                     context_parts.append(f"{prefix}: {msg['content']}")
                 if context_parts:

@@ -477,6 +477,23 @@ export function useSessionStream(
               addItem({ type: 'status', content: 'Agent stopped' });
               setIsRunning(false);
               break;
+            case 'session_resumed': {
+              // Backend relaunched the agent with recovered progress (resume/
+              // retry endpoint). The subsequent state_change → *_running event
+              // flips isRunning too, but set it eagerly so the UI reacts even
+              // if that event races the reconnect.
+              const data = event.data;
+              streamingItemIdRef.current = null;
+              addItem({
+                type: 'status',
+                content:
+                  data.mode === 'retry'
+                    ? 'Retrying — continuing from recovered progress'
+                    : 'Resuming — continuing from recovered progress',
+              });
+              setIsRunning(true);
+              break;
+            }
             case 'metrics_batch': {
               const data = event.data;
               const items = data.items || [];

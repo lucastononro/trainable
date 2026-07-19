@@ -228,6 +228,21 @@ function HomePageContent() {
     }
   };
 
+  // Resume / retry an interrupted session. The chat feedback (status bubble +
+  // spinner) comes back over SSE via the `session_resumed` event, so this
+  // handler only fires the request and surfaces failures.
+  const handleResume = useCallback(
+    async (mode: 'resume' | 'retry') => {
+      if (!activeSessionId) return;
+      try {
+        await api.resumeSession(activeSessionId, mode);
+      } catch (e: any) {
+        addItem({ type: 'error', content: `Failed to ${mode}: ${e.message}` });
+      }
+    },
+    [activeSessionId, addItem],
+  );
+
   // Tasks card — user-side CRUD. Optimistic on the wire isn't needed:
   // the backend publishes task_created/task_updated/task_deleted SSE
   // for both REST and skill paths, and the SSE handler upserts by id.
@@ -659,6 +674,8 @@ function HomePageContent() {
                 onDraftChange={setDraft}
                 onSend={handleSend}
                 onStop={handleStop}
+                sessionState={sessionState}
+                onResume={handleResume}
                 attachedFiles={attachedFiles}
                 onRemoveAttachedFile={removeAttachedFile}
                 onClearAttachedFiles={() => setAttachedFiles([])}

@@ -358,6 +358,10 @@ export interface NotebookCreatedData {
 export interface TaskDeletedData {
   id: number;
 }
+export interface SessionResumedData {
+  mode?: 'resume' | 'retry';
+  prior_state?: string;
+}
 
 // Discriminated union of every SSE event the frontend understands. Narrow on
 // `event.type` (a plain switch/if works — each member's `type` is a string
@@ -378,6 +382,7 @@ export type SSEEvent =
   | { type: 'files_ready'; data: FilesReadyData }
   | { type: 'file_created'; data: FileCreatedData }
   | { type: 'agent_aborted'; data: Record<string, unknown> }
+  | { type: 'session_resumed'; data: SessionResumedData }
   | { type: 'metrics_batch'; data: MetricsBatchData }
   | { type: 'metric'; data: MetricEventData }
   | { type: 'chart_config'; data: ChartConfig }

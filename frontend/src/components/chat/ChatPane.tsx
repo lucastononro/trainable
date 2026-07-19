@@ -9,7 +9,17 @@ import {
   type RefObject,
   type SetStateAction,
 } from 'react';
-import { Bot, FolderUp, HardDrive, Loader2, Plus, Send, Square, Upload } from 'lucide-react';
+import {
+  Bot,
+  FolderUp,
+  HardDrive,
+  Loader2,
+  Plus,
+  RotateCcw,
+  Send,
+  Square,
+  Upload,
+} from 'lucide-react';
 import { useApp } from '@/lib/AppContext';
 import { isDraftEmpty } from '@/lib/mentions';
 import type { Draft, Task, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
@@ -38,6 +48,8 @@ export default function ChatPane({
   onDraftChange,
   onSend,
   onStop,
+  sessionState,
+  onResume,
   attachedFiles,
   onRemoveAttachedFile,
   onClearAttachedFiles,
@@ -63,6 +75,10 @@ export default function ChatPane({
   onDraftChange: (draft: Draft) => void;
   onSend: () => void;
   onStop: () => void;
+  /** Session lifecycle state from the stream (e.g. "failed", "cancelled"). */
+  sessionState: string;
+  /** Relaunch an interrupted session with recovered progress (issue #106). */
+  onResume: (mode: 'resume' | 'retry') => void;
   attachedFiles: File[];
   onRemoveAttachedFile: (index: number) => void;
   onClearAttachedFiles: () => void;
@@ -164,6 +180,35 @@ export default function ChatPane({
       {/* Input bar */}
       <div className="bg-black px-4 py-3">
         <div className={`mx-auto ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}>
+          {/* Resume / retry banner — only for interrupted sessions. The
+              backend relaunches the agent with prior tool history, task
+              state, and the workspace file listing so completed steps are
+              skipped instead of redone. */}
+          {!isRunning && ['failed', 'cancelled', 'timed_out'].includes(sessionState) && (
+            <div className="mb-2 flex items-center gap-3 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2 animate-fade-in">
+              <span className="flex-1 text-xs text-amber-200">
+                {sessionState === 'failed'
+                  ? 'The last run failed before finishing.'
+                  : sessionState === 'timed_out'
+                    ? 'The last run timed out before finishing.'
+                    : 'The last run was stopped before finishing.'}{' '}
+                You can pick it up from where it left off — completed steps are skipped.
+              </span>
+              <button
+                onClick={() => onResume(sessionState === 'failed' ? 'retry' : 'resume')}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 px-2.5 py-1 text-xs font-medium text-amber-100 transition-colors shrink-0"
+                title={
+                  sessionState === 'failed'
+                    ? 'Retry the failed run from recovered progress'
+                    : 'Resume from recovered progress'
+                }
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                {sessionState === 'failed' ? 'Retry' : 'Resume'}
+              </button>
+            </div>
+          )}
+
           {/* Attached files preview */}
           <AttachedFilesPreview
             files={attachedFiles}

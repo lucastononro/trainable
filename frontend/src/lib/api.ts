@@ -291,6 +291,15 @@ export const api = {
   abortSession: (sessionId: string) =>
     fetchJSON<AbortResponse>(`/sessions/${sessionId}/abort`, { method: 'POST' }),
 
+  // Relaunch an interrupted (failed / cancelled / timed-out) session. The
+  // backend reloads prior tool history + task state + workspace listing so
+  // completed steps are skipped, not redone.
+  resumeSession: (sessionId: string, mode: 'resume' | 'retry' = 'resume') =>
+    fetchJSON<{ status: string; mode: string; prior_state: string }>(
+      `/sessions/${sessionId}/resume`,
+      { method: 'POST', body: JSON.stringify({ mode }) },
+    ),
+
   replyClarification: (sessionId: string, questionId: string, answer: string) =>
     fetchJSON<{ status: string }>(`/sessions/${sessionId}/clarifications/${questionId}`, {
       method: 'POST',
