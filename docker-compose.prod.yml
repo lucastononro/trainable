@@ -61,6 +61,12 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4317
       OTEL_EXPORTER_OTLP_PROTOCOL: grpc
       OTEL_SERVICE_NAME: trainable-backend
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,7 +82,8 @@ services:
     environment:
       BACKEND_URL: http://backend:8000
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres-data:

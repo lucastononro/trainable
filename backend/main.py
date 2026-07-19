@@ -1,14 +1,17 @@
 """Trainable v2 — FastAPI Backend"""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from auth import BearerTokenAuthMiddleware
 from config import settings
-from db import init_db
+from db import engine, init_db
 from errors import generic_exception_handler
 from observability import init_telemetry
 from routers import (
@@ -115,4 +118,34 @@ app.include_router(lineage.router, prefix="/api")
 
 @app.get("/api/health")
 async def health():
+    """Cheap liveness check — static, no dependencies touched."""
     return {"status": "ok"}
+
+
+@app.get("/api/readyz")
+async def readyz():
+    """Readiness check — pings the DB and S3; 503 if either is down."""
+    checks: dict[str, str] = {}
+
+    try:
+        async with engine.connect() as conn:
+            await conn.execute(text("SELECT 1"))
+        checks["database"] = "ok"
+    except Exception as e:
+        logger.warning("readyz: database check failed: %s", e)
+        checks["database"] = f"error: {e.__class__.__name__}"
+
+    try:
+        # boto3 is sync — run in a thread so we don't block the event loop.
+        # list_buckets is the cheapest call that doesn't assume a bucket exists.
+        await asyncio.to_thread(get_s3_client().list_buckets)
+        checks["s3"] = "ok"
+    except Exception as e:
+        logger.warning("readyz: s3 check failed: %s", e)
+        checks["s3"] = f"error: {e.__class__.__name__}"
+
+    ready = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "not_ready", "checks": checks},
+    )
