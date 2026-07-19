@@ -4,10 +4,10 @@ All values can be overridden via environment variables or a .env file.
 Variable names match the field names in UPPER_CASE (e.g. SANDBOX_TIMEOUT=300).
 """
 
-from typing import Optional
+from typing import Annotated, Optional
 
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode
 
 
 class Settings(BaseSettings):
@@ -63,7 +63,22 @@ class Settings(BaseSettings):
     api_auth_token: Optional[str] = None
 
     # -- CORS --
-    cors_origins: list[str] = ["*"]
+    # Allowed browser origins (env: CORS_ORIGINS, comma-separated, e.g.
+    # `CORS_ORIGINS=https://app.example.com,http://localhost:3000`).
+    # Defaults to the local frontend. `*` is honored but never combined
+    # with credentials (see main.py).
+    cors_origins: Annotated[list[str], NoDecode] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v):
+        """Accept a comma-separated string (env var) or a real list."""
+        if isinstance(v, str):
+            return [origin.strip() for origin in v.split(",") if origin.strip()]
+        return v
 
     # -- Upload limits --
     max_upload_size_bytes: int = 500 * 1024 * 1024  # 500 MB
