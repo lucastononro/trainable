@@ -644,7 +644,7 @@ async def deploy_model(
             await db.commit()
         api_key_value = model.api_key
     try:
-        secret_name = await backend.ensure_secret(model_id, api_key_value)
+        await backend.ensure_secret(model_id, api_key_value)
     except Exception as e:
         # Surface but don't block — the deploy still ships, but
         # without the secret the endpoint will 401 on every request.

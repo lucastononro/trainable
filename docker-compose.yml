@@ -66,6 +66,8 @@ services:
       OTEL_SERVICE_NAME: trainable-backend
     volumes:
       - ./backend:/app
+      # Only needed for COMPUTE_PROVIDER=modal (harmless otherwise) —
+      # RunPod auth is env-var only (RUNPOD_* in .env).
       - ~/.modal.toml:/home/trainable/.modal.toml:ro
       - ~/.claude:/home/trainable/.claude:ro
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]

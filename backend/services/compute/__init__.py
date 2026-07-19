@@ -96,7 +96,9 @@ def get_kernel_transport_factory():
     """Return an async callable `(session_id: str) -> KernelTransport`."""
     provider = _provider()
     if provider == "runpod":
-        from services.compute.runpod_provider.kernel import create_runpod_kernel_transport
+        from services.compute.runpod_provider.kernel import (
+            create_runpod_kernel_transport,
+        )
 
         return create_runpod_kernel_transport
     from services.compute.modal_provider.kernel import create_modal_kernel_transport

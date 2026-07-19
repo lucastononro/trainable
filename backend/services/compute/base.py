@@ -27,6 +27,15 @@ from typing import Any, AsyncIterator, Protocol, runtime_checkable
 # ---------------------------------------------------------------------------
 
 
+class SandboxTimeoutError(TimeoutError):
+    """The provider killed the sandbox at its configured timeout.
+
+    Modal raises its own modal.exception.SandboxTimeoutError; RunPod jobs
+    end with status TIMED_OUT and the handle raises this. Handlers that
+    care about timeouts catch both.
+    """
+
+
 @runtime_checkable
 class SandboxHandle(Protocol):
     """A running one-shot sandbox. `stdout`/`stderr` are async iterators of

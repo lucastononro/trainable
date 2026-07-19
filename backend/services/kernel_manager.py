@@ -22,12 +22,21 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-import modal
+# modal + get_app/get_image/get_volume look unused but are load-bearing:
+# the Modal kernel transport (services/compute/modal_provider/kernel.py)
+# resolves them through THIS module's namespace at call time, and tests
+# patch `km.modal.Sandbox` / `km.get_app` / `km.get_image` / `km.get_volume`.
+import modal  # noqa: F401
 
 from services import notebook_store
 from services.broadcaster import broadcaster
-from services.sandbox import SDK_PREAMBLE, build_sdk_preamble, get_app, get_image
-from services.volume import ensure_session_workspace, get_volume
+from services.sandbox import (  # noqa: F401
+    SDK_PREAMBLE,
+    build_sdk_preamble,
+    get_app,
+    get_image,
+)
+from services.volume import ensure_session_workspace, get_volume  # noqa: F401
 
 logger = logging.getLogger(__name__)
 

@@ -26,7 +26,11 @@ from services.metrics import (
     publish_chart_config,
 )
 from services.usage import record_sandbox_usage
-from services.volume import get_volume
+
+# Looks unused but is load-bearing: the Modal sandbox adapter
+# (services/compute/modal_provider/sandbox.py) resolves get_volume through
+# THIS module's namespace at call time.
+from services.volume import get_volume  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
