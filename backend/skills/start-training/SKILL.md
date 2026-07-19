@@ -23,6 +23,22 @@ sidebar — which is the signal that something went wrong.
 - `experiment_id` (required): from `create-experiment`.
 - `framework` (required): one of `xgboost | lightgbm | sklearn | pytorch | tensorflow | huggingface | other`.
 - `hyperparams` (optional but encouraged): the dict you'll pass to `.fit()`. Saved on the experiment row so the lineage view can show "this model was trained with these hyperparams" without parsing the snapshot manifest.
+- `optimization_metric` (optional): the metric your tuning loop optimizes (e.g. `roc_auc`, `pr_auc`, `f1`, `rmse`).
+- `max_trials` (optional): the number of hyperparameter-search trials you plan to run.
+
+## User training constraints
+
+Projects can carry pre-flight training controls set by the user in Project
+Settings (optimization metric, allowed model families, trial budget,
+wall-clock/cost cap). When set, this skill enforces them:
+
+- `framework` outside the allowed model families → **rejected**.
+- `optimization_metric` that conflicts with the user's metric → **rejected**.
+- `max_trials` above the user's trial budget → **rejected**.
+
+A successful call echoes the active constraints back in `user_constraints` —
+honor them for the whole run. If no constraints are configured, the call
+behaves exactly as before.
 
 ## Returns
 

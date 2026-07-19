@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Generous-but-not-infinite caps to stop runaway inputs from swamping the
 # database or bloating an agent's context window. Calibrated so legitimate
@@ -28,6 +28,66 @@ class SandboxProfile(BaseModel):
 class SandboxConfig(BaseModel):
     default: Optional[SandboxProfile] = None
     training: Optional[SandboxProfile] = None
+
+
+# Model families a user can restrict the trainer to. Mirrors the `framework`
+# vocabulary of the start-training skill (see skills/start-training/schema.yaml).
+KNOWN_MODEL_FAMILIES = (
+    "xgboost",
+    "lightgbm",
+    "sklearn",
+    "pytorch",
+    "tensorflow",
+    "huggingface",
+    "other",
+)
+
+
+class TrainingConfig(BaseModel):
+    """Pre-flight training controls (issue #104).
+
+    Everything is optional — an empty config means the trainer agent keeps
+    full autonomy (today's behavior). Any field the user sets becomes a
+    constraint the orchestrator/trainer must honor: it is injected into the
+    agent system prompt and enforced at the start-training skill boundary.
+    """
+
+    # Metric the tuning loop must optimize (e.g. "roc_auc", "pr_auc", "f1", "rmse").
+    optimization_metric: Optional[str] = Field(default=None, max_length=64)
+    # Allowed model families. Empty/None = agent's choice.
+    model_families: Optional[list[str]] = Field(default=None, max_length=16)
+    # Hard cap on hyperparameter-search trials (Optuna or equivalent).
+    max_trials: Optional[int] = Field(default=None, ge=1, le=1000)
+    # Wall-clock budget for training work, in minutes. Also clamps the
+    # training sandbox profile's per-call timeout.
+    max_wallclock_minutes: Optional[int] = Field(default=None, ge=1, le=1440)
+    # Advisory spend cap for the training run, in USD.
+    max_cost_usd: Optional[float] = Field(default=None, gt=0, le=100_000)
+
+    @field_validator("optimization_metric")
+    @classmethod
+    def _clean_metric(cls, v: Optional[str]) -> Optional[str]:
+        v = (v or "").strip()
+        return v or None
+
+    @field_validator("model_families")
+    @classmethod
+    def _clean_families(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is None:
+            return None
+        cleaned: list[str] = []
+        for fam in v:
+            fam = (fam or "").strip().lower()
+            if not fam:
+                continue
+            if fam not in KNOWN_MODEL_FAMILIES:
+                raise ValueError(
+                    f"Unknown model family '{fam}'. "
+                    f"Valid: {', '.join(KNOWN_MODEL_FAMILIES)}"
+                )
+            if fam not in cleaned:
+                cleaned.append(fam)
+        return cleaned or None
 
 
 class ExperimentCreate(BaseModel):
@@ -81,12 +141,14 @@ class ProjectCreate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
     sandbox_config: Optional[SandboxConfig] = None
+    training_config: Optional[TrainingConfig] = None
 
 
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
     sandbox_config: Optional[SandboxConfig] = None
+    training_config: Optional[TrainingConfig] = None
 
 
 class ExperimentUpdate(BaseModel):

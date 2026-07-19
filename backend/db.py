@@ -86,6 +86,11 @@ def _run_migrations(connection):
                 text("ALTER TABLE projects ADD COLUMN sandbox_config JSON")
             )
             logger.info("[DB] Added sandbox_config column to projects table")
+        if "training_config" not in columns:
+            connection.execute(
+                text("ALTER TABLE projects ADD COLUMN training_config JSON")
+            )
+            logger.info("[DB] Added training_config column to projects table")
 
     # ------------------------------------------------------------------
     # Phase A — projects foundation

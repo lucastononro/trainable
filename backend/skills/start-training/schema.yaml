@@ -9,6 +9,19 @@ properties:
   hyperparams:
     type: object
     description: Hyperparam dict you'll pass to .fit() — frozen for reproducibility.
+  optimization_metric:
+    type: string
+    description: >-
+      Metric your tuning loop optimizes (e.g. roc_auc, pr_auc, f1, rmse).
+      If the project has user training constraints, this must match the
+      user's configured metric — the call is rejected otherwise.
+  max_trials:
+    type: integer
+    minimum: 1
+    description: >-
+      Number of hyperparameter-search trials you plan to run for this
+      experiment. Must not exceed the user's configured trial budget when
+      one is set — the call is rejected otherwise.
 required:
   - experiment_id
   - framework
