@@ -218,6 +218,27 @@ export interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
+/** Per-column quick-profile stats for a raw uploaded dataset. */
+export interface RawColumnProfile {
+  name: string;
+  dtype: string;
+  missing_pct: number;
+  /** Approximate distinct-value count (DuckDB approx_unique). */
+  unique_count: number;
+}
+
+/** Head rows + quick profile of a raw uploaded file, pre-prep. */
+export interface RawDatasetPreview {
+  path: string;
+  name: string;
+  format: 'csv' | 'tsv' | 'parquet';
+  row_count: number;
+  column_count: number;
+  columns: RawColumnProfile[];
+  head_columns: string[];
+  head_rows: Array<Array<string | number | boolean | null>>;
+}
+
 // API response shapes
 export interface CreateExperimentResponse extends Experiment {
   session_id: string;

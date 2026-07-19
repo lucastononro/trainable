@@ -10,8 +10,11 @@ import {
   File as FileIcon,
   FolderOpen,
   AlertTriangle,
+  ArrowLeft,
+  Eye,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { DatasetPreviewPanel } from '@/components/DatasetPreviewPanel';
 
 interface ProjectFile {
   path: string;
@@ -59,12 +62,24 @@ function humanSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+/** Raw-preview support matches the backend's CSV/TSV/Parquet DuckDB scan. */
+function isPreviewable(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.endsWith('.csv') || n.endsWith('.tsv') || n.endsWith('.parquet');
+}
+
 // Per-folder render budget — folders with thousands of files used to render
 // every row eagerly, blowing up DOM size and initial-render time. Cap to
 // this many; the rest collapse behind a "+N more" toggle.
 const FOLDER_FILE_PREVIEW = 50;
 
-function FolderGroup({ group }: { group: { folder: string; files: ProjectFile[] } }) {
+function FolderGroup({
+  group,
+  onPreview,
+}: {
+  group: { folder: string; files: ProjectFile[] };
+  onPreview: (file: ProjectFile) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const overflow = group.files.length - FOLDER_FILE_PREVIEW;
   const visible =
@@ -91,14 +106,16 @@ function FolderGroup({ group }: { group: { folder: string; files: ProjectFile[] 
             group.folder && rel.startsWith(group.folder + '/')
               ? rel.slice(group.folder.length + 1)
               : rel;
-          return (
-            <div
-              key={f.path}
-              className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors"
-              title={notInSandbox ? `${f.path} — not synced to sandbox` : f.path}
-            >
+          // Preview needs the file in the volume — a raw DuckDB scan can't
+          // run against an S3-only upload that never reached the sandbox.
+          const canPreview = isPreviewable(f.name) && !notInSandbox;
+          const rowContent = (
+            <>
               <Icon className={`w-4 h-4 shrink-0 ${color}`} />
-              <span className="text-sm text-gray-300 flex-1 truncate">{subPath}</span>
+              <span className="text-sm text-gray-300 flex-1 truncate text-left">{subPath}</span>
+              {canPreview && (
+                <Eye className="w-3.5 h-3.5 shrink-0 text-gray-600 group-hover:text-emerald-400 transition-colors" />
+              )}
               {notInSandbox && (
                 <span
                   className="text-[10px] text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5 shrink-0"
@@ -110,6 +127,28 @@ function FolderGroup({ group }: { group: { folder: string; files: ProjectFile[] 
               <span className="text-[11px] text-gray-600 shrink-0 tabular-nums">
                 {humanSize(f.size)}
               </span>
+            </>
+          );
+          if (canPreview) {
+            return (
+              <button
+                type="button"
+                key={f.path}
+                onClick={() => onPreview(f)}
+                className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors"
+                title={`${f.path} — click to preview`}
+              >
+                {rowContent}
+              </button>
+            );
+          }
+          return (
+            <div
+              key={f.path}
+              className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors"
+              title={notInSandbox ? `${f.path} — not synced to sandbox` : f.path}
+            >
+              {rowContent}
             </div>
           );
         })}
@@ -136,9 +175,11 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
   const [sandboxMissingCount, setSandboxMissingCount] = useState(0);
   const [sandboxChecked, setSandboxChecked] = useState(true);
   const [s3Error, setS3Error] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<ProjectFile | null>(null);
 
   useEffect(() => {
     if (!isOpen || !projectId) return;
+    setPreviewFile(null);
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -208,12 +249,26 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
       >
         {/* Header */}
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06] shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-            <Database className="w-4 h-4 text-emerald-400" />
-          </div>
+          {previewFile ? (
+            <button
+              onClick={() => setPreviewFile(null)}
+              title="Back to file list"
+              className="p-1.5 rounded-lg hover:bg-white/[0.06] text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          ) : (
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+              <Database className="w-4 h-4 text-emerald-400" />
+            </div>
+          )}
           <div className="flex-1 min-w-0">
-            <h2 className="text-sm font-semibold text-white truncate">Project data</h2>
-            <p className="text-xs text-gray-500 truncate">{projectName}</p>
+            <h2 className="text-sm font-semibold text-white truncate">
+              {previewFile ? previewFile.relative_path || previewFile.name : 'Project data'}
+            </h2>
+            <p className="text-xs text-gray-500 truncate">
+              {previewFile ? 'Raw preview — before any prep' : projectName}
+            </p>
           </div>
           <button
             onClick={onClose}
@@ -226,14 +281,19 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading && (
+          {previewFile && (
+            <DatasetPreviewPanel projectId={projectId} path={previewFile.path} />
+          )}
+          {!previewFile && loading && (
             <div className="flex items-center gap-2 text-sm text-gray-500 py-8 justify-center">
               <Loader2 className="w-4 h-4 animate-spin" />
               Loading files…
             </div>
           )}
-          {error && !loading && <div className="text-sm text-red-400 py-4">Error: {error}</div>}
-          {!loading && !error && s3Error && (
+          {!previewFile && error && !loading && (
+            <div className="text-sm text-red-400 py-4">Error: {error}</div>
+          )}
+          {!previewFile && !loading && !error &&s3Error && (
             <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-300">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
@@ -242,7 +302,7 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               </div>
             </div>
           )}
-          {!loading && !error && files && sandboxChecked && sandboxMissingCount > 0 && (
+          {!previewFile && !loading && !error &&files && sandboxChecked && sandboxMissingCount > 0 && (
             <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
@@ -259,7 +319,7 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               </div>
             </div>
           )}
-          {!loading && !error && files && files.length === 0 && (
+          {!previewFile && !loading && !error &&files && files.length === 0 && (
             <div className="text-center py-12">
               <FolderOpen className="w-10 h-10 text-gray-700 mx-auto mb-3" />
               <p className="text-sm text-gray-400">No data uploaded in this project yet.</p>
@@ -268,10 +328,14 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               </p>
             </div>
           )}
-          {!loading && !error && files && files.length > 0 && (
+          {!previewFile && !loading && !error &&files && files.length > 0 && (
             <div className="space-y-5">
               {groups.map((group) => (
-                <FolderGroup key={group.folder || '__root__'} group={group} />
+                <FolderGroup
+                  key={group.folder || '__root__'}
+                  group={group}
+                  onPreview={setPreviewFile}
+                />
               ))}
             </div>
           )}

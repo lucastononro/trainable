@@ -31,6 +31,7 @@ import type {
   DatasetVersionDetail,
   SessionRow,
   ExperimentFullDetail,
+  RawDatasetPreview,
 } from './types';
 
 const API_BASE = '/api';
@@ -90,6 +91,12 @@ export const api = {
       sandbox_checked?: boolean;
       sandbox_missing_count?: number;
     }>(`/projects/${id}/files`),
+
+  /** Raw (pre-prep) preview + quick profile of an uploaded CSV/TSV/Parquet. */
+  previewProjectDataset: (projectId: string, path: string, limit = 50) =>
+    fetchJSON<RawDatasetPreview>(
+      `/projects/${projectId}/datasets/preview?path=${encodeURIComponent(path)}&limit=${limit}`,
+    ),
 
   // Experiments
   listExperiments: (params?: {

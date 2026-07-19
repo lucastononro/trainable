@@ -194,6 +194,163 @@ async def test_get_prep_metadata_after_extraction(
 
 
 # ---------------------------------------------------------------------------
+# Raw dataset preview (pre-prep)
+# ---------------------------------------------------------------------------
+
+_RAW_CSV = b"a,b,c\n1,x,\n2,,3.5\n3,x,4.5\n4,y,\n"
+
+
+def _make_raw_parquet() -> bytes:
+    import io
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pa.table(
+        {
+            "num": pa.array([1.5, 2.5, None, 4.5]),
+            "cat": pa.array(["a", "b", "a", "b"]),
+        }
+    )
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    return buf.getvalue()
+
+
+def _raw_volume(project_id: str) -> MockVolume:
+    root = f"/projects/{project_id}/datasets"
+    return MockVolume(
+        {
+            f"{root}/data.csv": _RAW_CSV,
+            f"{root}/folder/data.parquet": _make_raw_parquet(),
+            f"{root}/notes.txt": b"not tabular",
+        }
+    )
+
+
+@pytest.mark.asyncio
+async def test_raw_preview_csv_profile(client, default_project_id):
+    vol = _raw_volume(default_project_id)
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "routers.data_explorer"):
+            stack.enter_context(p)
+
+        resp = await client.get(
+            f"/api/projects/{default_project_id}/datasets/preview",
+            params={"path": "data.csv", "limit": 3},
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["name"] == "data.csv"
+    assert body["format"] == "csv"
+    assert body["path"] == f"/projects/{default_project_id}/datasets/data.csv"
+    assert body["row_count"] == 4
+    assert body["column_count"] == 3
+    assert body["head_columns"] == ["a", "b", "c"]
+    assert len(body["head_rows"]) == 3  # limit respected
+
+    cols = {c["name"]: c for c in body["columns"]}
+    assert set(cols) == {"a", "b", "c"}
+    # dtypes inferred by DuckDB
+    assert "INT" in cols["a"]["dtype"].upper()
+    assert cols["b"]["dtype"].upper() == "VARCHAR"
+    # missing % per column
+    assert cols["a"]["missing_pct"] == 0.0
+    assert cols["b"]["missing_pct"] == pytest.approx(25.0)
+    assert cols["c"]["missing_pct"] == pytest.approx(50.0)
+    # cardinality (approx, exact at this scale)
+    assert cols["a"]["unique_count"] == 4
+    assert cols["b"]["unique_count"] == 2
+    # nulls serialize as JSON null in head rows
+    assert body["head_rows"][0][2] is None
+
+
+@pytest.mark.asyncio
+async def test_raw_preview_parquet_absolute_path(client, default_project_id):
+    vol = _raw_volume(default_project_id)
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "routers.data_explorer"):
+            stack.enter_context(p)
+
+        resp = await client.get(
+            f"/api/projects/{default_project_id}/datasets/preview",
+            params={
+                "path": f"/projects/{default_project_id}/datasets/folder/data.parquet"
+            },
+        )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["format"] == "parquet"
+    assert body["row_count"] == 4
+    assert body["column_count"] == 2
+    cols = {c["name"]: c for c in body["columns"]}
+    assert cols["num"]["missing_pct"] == pytest.approx(25.0)
+    assert cols["cat"]["unique_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_raw_preview_rejects_traversal(client, default_project_id):
+    vol = _raw_volume(default_project_id)
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "routers.data_explorer"):
+            stack.enter_context(p)
+
+        resp = await client.get(
+            f"/api/projects/{default_project_id}/datasets/preview",
+            params={"path": "../../other-project/datasets/data.csv"},
+        )
+
+    assert resp.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_raw_preview_unsupported_extension(client, default_project_id):
+    vol = _raw_volume(default_project_id)
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "routers.data_explorer"):
+            stack.enter_context(p)
+
+        resp = await client.get(
+            f"/api/projects/{default_project_id}/datasets/preview",
+            params={"path": "notes.txt"},
+        )
+
+    assert resp.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_raw_preview_file_not_found(client, default_project_id):
+    vol = _raw_volume(default_project_id)
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "routers.data_explorer"):
+            stack.enter_context(p)
+
+        resp = await client.get(
+            f"/api/projects/{default_project_id}/datasets/preview",
+            params={"path": "missing.csv"},
+        )
+
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_raw_preview_project_not_found(client):
+    vol = MockVolume({})
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "routers.data_explorer"):
+            stack.enter_context(p)
+
+        resp = await client.get(
+            "/api/projects/nonexistent/datasets/preview",
+            params={"path": "data.csv"},
+        )
+
+    assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
 

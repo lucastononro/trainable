@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -87,6 +87,29 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
     sandbox_config: Optional[SandboxConfig] = None
+
+
+class RawColumnProfile(BaseModel):
+    """Per-column quick-profile stats for a raw uploaded dataset."""
+
+    name: str
+    dtype: str
+    missing_pct: float = Field(ge=0.0, le=100.0)
+    # Approximate distinct-value count (DuckDB approx_unique / HyperLogLog).
+    unique_count: int = Field(ge=0)
+
+
+class RawDatasetPreview(BaseModel):
+    """Head rows + quick profile of a raw uploaded file, pre-prep."""
+
+    path: str
+    name: str
+    format: Literal["csv", "tsv", "parquet"]
+    row_count: int = Field(ge=0)
+    column_count: int = Field(ge=0)
+    columns: list[RawColumnProfile]
+    head_columns: list[str]
+    head_rows: list[list[Any]]
 
 
 class ExperimentUpdate(BaseModel):
