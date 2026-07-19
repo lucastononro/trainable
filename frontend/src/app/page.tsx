@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/AppContext';
+import { SSEStreamProvider, useSSEStream } from '@/lib/SSEStreamContext';
 import { api } from '@/lib/api';
 import {
   SSEEvent,
@@ -162,7 +163,7 @@ const SUGGESTIONS = [
 // Main page component
 // ---------------------------------------------------------------------------
 
-export default function HomePage() {
+function HomePageContent() {
   const {
     projects,
     experiments,
@@ -180,6 +181,10 @@ export default function HomePage() {
     isRunning,
     setIsRunning,
   } = useApp();
+  // Broadcasts every parsed message from the single connectSSE EventSource
+  // below to any other subscriber (e.g. the notebook) so nobody else has to
+  // open a second EventSource to the same `/api/sessions/{id}/stream`.
+  const { publish } = useSSEStream();
   // Keep a ref for stable access inside async handlers/closures
   const agentModelsRef = useRef<Record<string, string>>({});
   useEffect(() => {
@@ -316,6 +321,10 @@ export default function HomePage() {
         try {
           const event = JSON.parse(e.data) as SSEEvent;
           const data = event.data as any;
+          // Fan out the parsed event to any other subscriber (e.g. the
+          // notebook) before/independent of the switch below — this is the
+          // single EventSource for the session, so everyone shares it.
+          publish(event);
 
           switch (event.type) {
             case 'state_change':
@@ -910,7 +919,7 @@ export default function HomePage() {
       source.onerror = () => setSseConnected(false);
       sseRef.current = source;
     },
-    [addItem, openCanvas, refreshExperiments, setIsRunning],
+    [addItem, openCanvas, publish, refreshExperiments, setIsRunning],
   );
 
   // ---------------------------------------------------------------------------
@@ -2240,6 +2249,17 @@ export default function HomePage() {
         />
       )}
     </div>
+  );
+}
+
+// SSEStreamProvider must sit above HomePageContent so `useSSEStream()` (and
+// anything nested under it, like the notebook) can reach the same
+// publish/subscribe bus that `connectSSE` feeds.
+export default function HomePage() {
+  return (
+    <SSEStreamProvider>
+      <HomePageContent />
+    </SSEStreamProvider>
   );
 }
 
