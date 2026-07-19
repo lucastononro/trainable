@@ -30,6 +30,26 @@ export interface CreateProjectResponse {
   session_id: string;
 }
 
+/** A bundled demo dataset tile (GET /api/samples). */
+export interface SampleDataset {
+  id: string;
+  name: string;
+  /** classification | regression | object-detection */
+  task: string;
+  description: string;
+  suggested_prompt: string;
+  file_count: number;
+  size_bytes: number;
+  /** false when the server deployment doesn't ship sample-data/. */
+  available: boolean;
+}
+
+export interface CreateProjectFromSampleResponse extends CreateProjectResponse {
+  sample_id: string;
+  suggested_prompt: string;
+  uploaded_files: string[];
+}
+
 export interface Experiment {
   id: string;
   project_id: string;

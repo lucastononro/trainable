@@ -21,14 +21,23 @@ import {
   FlaskConical,
   Folder,
   Loader2,
+  MessageSquare,
+  PanelRight,
   RefreshCw,
   Search,
+  Sparkles,
 } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
+import { stashSuggestedPrompt } from '@/lib/suggestedPrompt';
 import Sidebar from '@/components/Sidebar';
-import type { Experiment, ExperimentFullDetail, Project } from '@/lib/types';
+import type {
+  Experiment,
+  ExperimentFullDetail,
+  Project,
+  SampleDataset,
+} from '@/lib/types';
 
 const STATE_TONE: Record<string, string> = {
   created: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
@@ -59,6 +68,182 @@ function formatTopMetric(metrics: Record<string, number> | undefined): string {
   if (!entry) return '';
   const v = typeof entry[1] === 'number' ? entry[1].toFixed(3) : String(entry[1]);
   return `${entry[0]} = ${v}`;
+}
+
+const TASK_TONE: Record<string, string> = {
+  classification: 'bg-sky-500/10 text-sky-300 border-sky-500/30',
+  regression: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+  'object-detection': 'bg-violet-500/10 text-violet-300 border-violet-500/30',
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+const TOUR_STEPS: Array<{ icon: typeof MessageSquare; title: string; body: string }> = [
+  {
+    icon: MessageSquare,
+    title: 'Chat on the left',
+    body: 'Tell the agent what to build — it plans the workflow and runs Python in a sandbox.',
+  },
+  {
+    icon: PanelRight,
+    title: 'Canvas on the right',
+    body: 'Code, live metrics, figures and reports stream into the workspace pane as the agent works.',
+  },
+  {
+    icon: Database,
+    title: 'Your data at /data',
+    body: 'Every file in the project is mounted at /data in the sandbox, ready for the agent to load.',
+  },
+];
+
+/** First-run empty state: one-click "Try a sample dataset" tiles plus a
+ *  short tour of the chat↔canvas split. Rendered only when the gallery has
+ *  nothing to show. */
+function FirstRunSamples() {
+  const router = useRouter();
+  const { refreshProjects, refreshExperiments, setActiveProject, setActiveExperiment } =
+    useApp();
+  const [samples, setSamples] = useState<SampleDataset[]>([]);
+  const [samplesLoading, setSamplesLoading] = useState(true);
+  const [creatingId, setCreatingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSamples()
+      .then((list) => {
+        if (!cancelled) setSamples(list.filter((s) => s.available));
+      })
+      .catch(() => {
+        // No tiles is fine — the plain empty-state copy still shows below.
+      })
+      .finally(() => {
+        if (!cancelled) setSamplesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleTrySample = useCallback(
+    async (sample: SampleDataset) => {
+      if (creatingId) return;
+      setCreatingId(sample.id);
+      setError(null);
+      try {
+        const result = await api.createProjectFromSample(sample.id);
+        await refreshProjects();
+        await refreshExperiments();
+        setActiveProject(result.project.id);
+        setActiveExperiment(result.experiment.id, result.session_id);
+        // Pre-fill the chat input once the studio picks up this session.
+        stashSuggestedPrompt(result.session_id, result.suggested_prompt);
+        router.push('/');
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setCreatingId(null);
+      }
+    },
+    [
+      creatingId,
+      refreshProjects,
+      refreshExperiments,
+      setActiveProject,
+      setActiveExperiment,
+      router,
+    ],
+  );
+
+  if (samplesLoading) {
+    return (
+      <div className="flex items-center justify-center py-20 text-gray-500">
+        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+        Loading sample datasets…
+      </div>
+    );
+  }
+
+  if (samples.length === 0) {
+    // Sample data isn't shipped on this server — fall back to the old copy.
+    return (
+      <div className="text-center py-20 text-gray-500">
+        <FlaskConical className="w-8 h-8 mx-auto mb-2 text-gray-700" />
+        <p className="text-sm">
+          No experiments yet. They&apos;ll appear here once an agent calls create-experiment in
+          any session.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto py-10">
+      <div className="text-center mb-8">
+        <Sparkles className="w-8 h-8 mx-auto mb-3 text-amber-400" />
+        <h2 className="text-lg font-semibold text-white">Start with a sample dataset</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          One click creates a project pre-loaded with data and a suggested first prompt —
+          just hit send and watch the agent work.
+        </p>
+      </div>
+
+      {error ? (
+        <div className="mb-4 rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {samples.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => handleTrySample(s)}
+            disabled={creatingId !== null}
+            className="group text-left rounded-lg border border-surface-border bg-surface p-4 hover:border-amber-500/40 hover:bg-white/[0.03] transition-colors disabled:opacity-60"
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <span
+                className={`text-[11px] px-2 py-0.5 rounded-full border ${
+                  TASK_TONE[s.task] ?? 'bg-white/[0.04] text-gray-400 border-white/[0.08]'
+                }`}
+              >
+                {s.task}
+              </span>
+              <div className="flex-1" />
+              {creatingId === s.id ? (
+                <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+              ) : (
+                <ArrowRight className="w-3.5 h-3.5 text-gray-600 group-hover:text-amber-400 transition-colors" />
+              )}
+            </div>
+            <div className="text-sm font-medium text-gray-100">{s.name}</div>
+            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{s.description}</p>
+            <div className="text-[11px] text-gray-600 mt-2">
+              {s.file_count} {s.file_count === 1 ? 'file' : 'files'} · {formatBytes(s.size_bytes)}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {TOUR_STEPS.map((step) => (
+          <div
+            key={step.title}
+            className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4"
+          >
+            <step.icon className="w-4 h-4 text-gray-500 mb-2" />
+            <div className="text-xs font-medium text-gray-300">{step.title}</div>
+            <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">{step.body}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export default function ExperimentsListPage() {
@@ -219,13 +404,7 @@ export default function ExperimentsListPage() {
               Loading experiments…
             </div>
           ) : rows.length === 0 ? (
-            <div className="text-center py-20 text-gray-500">
-              <FlaskConical className="w-8 h-8 mx-auto mb-2 text-gray-700" />
-              <p className="text-sm">
-                No experiments yet. They&apos;ll appear here once an agent calls create-experiment
-                in any session.
-              </p>
-            </div>
+            <FirstRunSamples />
           ) : (
             <div className="space-y-6">
               {grouped.map(({ project, rows: projectRows }) => (

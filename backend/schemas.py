@@ -83,6 +83,13 @@ class ProjectCreate(BaseModel):
     sandbox_config: Optional[SandboxConfig] = None
 
 
+class ProjectFromSample(BaseModel):
+    """POST /projects/from-sample — one-click sample-dataset project."""
+
+    sample_id: str = Field(min_length=1, max_length=64)
+    name: Optional[str] = Field(default=None, max_length=_NAME_MAX)
+
+
 class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
