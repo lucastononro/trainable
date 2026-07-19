@@ -49,10 +49,12 @@ system: |
     If a file isn't where you expect, either scan `/data/sessions/{session_id}/` or
     use `inspect-agent-context` against the data_prep agent (see `list-session-agents`).
   - Project dataset files (reference only): `/data/projects/{project_id}/datasets/`
-  - ALWAYS set heavy=true on execute_code for training runs, hyperparameter
-    tuning, and large-scale transforms. This activates the project's training
-    sandbox profile (GPU + extended timeout). Use heavy=false only for quick
-    data inspection or plotting.
+  - For training runs, hyperparameter tuning, and large-scale transforms,
+    pick explicit compute: pass a `gpu=` value from the allowed list in your
+    "Compute environment" section, sized to the job (cheapest that fits),
+    plus a `timeout=` when the default is too short. When unsure, fall back
+    to heavy=true (the project's training profile: GPU + extended timeout).
+    Use heavy=false / gpu="cpu" for quick data inspection or plotting.
 
   ## Your workspace
   Your session workspace is `/data/sessions/{session_id}/`. You share this

@@ -244,54 +244,85 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict
     return project_id, project_name, files_listing, sandbox_config
 
 
-def _format_compute_env(sandbox_config: dict) -> str:
-    """Render the project's per-profile sandbox config as a prompt block the
-    agent can read before deciding how to dimension execute-code calls.
+# One-line hardware guidance per canonical label, shown next to each
+# allowed option in the compute-environment prompt block.
+_GPU_BLURBS: dict[str, str] = {
+    "cpu": "CPU only — EDA, plotting, sklearn/xgboost/lightgbm",
+    "T4": "16GB entry GPU — small fine-tunes, light inference",
+    "L4": "24GB — best price/perf for medium GPU work",
+    "A10G": "24GB mid-tier — solid training workhorse",
+    "A100-40GB": "40GB — large models, big batches",
+    "A100-80GB": "80GB — very large models / long contexts",
+    "H100": "80GB top-tier — only when speed or memory demands it",
+}
 
-    Mirrors the runtime fallback in services/sandbox.py:
-      gpu = profile.get("gpu") or None              → CPU only
-      timeout = profile.get("timeout") or settings.sandbox_timeout  (default 600)
+
+def _gpu_hourly_usd(gpu: str) -> float | None:
+    """Approx $/hr for a canonical label on the active provider; None when
+    pricing is unavailable (the prompt then omits prices)."""
+    try:
+        from services.usage import _resolve_compute_rate
+
+        rate = _resolve_compute_rate(settings.compute_provider, gpu)
+        return rate * 3600 if rate > 0 else None
+    except Exception:
+        return None
+
+
+def _format_compute_env(sandbox_config: dict) -> str:
+    """Render the agent's compute allowance as a prompt block: which
+    hardware it may request per execute-code call (`gpu` arg), the max
+    per-call timeout, and how the heavy/default profile fallback works.
+
+    Uses the same resolver as the execute-code handler
+    (services/compute_allowance.py) so the prompt never advertises
+    hardware the handler would reject.
     """
+    from services.compute_allowance import resolve_compute_allowance
+
+    allowance = resolve_compute_allowance(sandbox_config)
     fallback_timeout = settings.sandbox_timeout
 
-    def _profile_line(label: str, profile: dict | None, default_to_used: int) -> str:
-        p = profile or {}
-        gpu = p.get("gpu")
-        timeout = p.get("timeout") or fallback_timeout
-        gpu_part = f"GPU={gpu}" if gpu else "CPU only (no GPU)"
-        timeout_part = f"timeout={timeout}s ({timeout // 60}m{timeout % 60:02d}s)"
-        return f"  - **{label}**: {gpu_part}, {timeout_part}"
+    default_profile = sandbox_config.get("default") or {}
+    training_profile = sandbox_config.get("training") or {}
+    default_gpu = default_profile.get("gpu") or "cpu"
+    training_gpu = training_profile.get("gpu") or "cpu"
+    default_timeout = default_profile.get("timeout") or fallback_timeout
+    training_timeout = training_profile.get("timeout") or fallback_timeout
 
-    default_profile = sandbox_config.get("default")
-    training_profile = sandbox_config.get("training")
+    hw_lines = []
+    for gpu in allowance.allowed_gpus:
+        blurb = _GPU_BLURBS.get(gpu, "")
+        price = _gpu_hourly_usd(gpu)
+        price_part = f" (~${price:.2f}/hr)" if price is not None else ""
+        hw_lines.append(f"  - `{gpu}` — {blurb}{price_part}")
 
     lines = [
         "## Compute environment for `execute-code`",
         "",
-        "Your sandbox is provisioned per call by Modal. Two profiles are",
-        "configured at the project level — pick the right one when you call",
-        "the skill:",
+        "Each call provisions a fresh sandbox. You choose the compute per",
+        "call with the optional `gpu` argument:",
         "",
-        _profile_line(
-            "default profile (`heavy=False`, the default)", default_profile, 600
-        ),
-        _profile_line("training profile (`heavy=True`)", training_profile, 1800),
+        "**Allowed hardware** (values accepted for `gpu`):",
+        *hw_lines,
         "",
-        "Dimension your code to fit:",
-        "- **Timeout is per call**, not per session. If a single fit / sweep",
-        "  would exceed it, split the work across multiple calls (one fold,",
-        "  one trial, one epoch chunk per call) and persist intermediate",
-        "  state to the session workspace between calls.",
-        "- **No GPU configured for a profile** → don't import torch.cuda or",
-        "  rely on `device='cuda'`. Stay on CPU-friendly libraries (xgboost,",
-        "  lightgbm, sklearn) or use small models.",
-        "- **GPU configured** → free to use torch / GPU-accelerated paths.",
-        "  Match batch size and model size to the GPU's memory class.",
-        "- Use `heavy=True` when calling `execute-code` for any work that",
-        "  needs the training profile (long-running fit, hyperparameter sweep,",
-        "  GPU-bound code). The default profile is for inspection / quick checks.",
-        "- The user can change these settings live in the Project Settings",
-        "  modal — your next call will pick up the new values automatically.",
+        f"**Timeout**: pass `timeout` (seconds, per call; max {allowance.max_timeout}s"
+        f" — higher values are clamped). Defaults: {default_timeout}s"
+        f" (default profile) / {training_timeout}s (`heavy=True`).",
+        "",
+        "**How to choose**:",
+        f"- Omit `gpu` → profile fallback: `heavy=False` = default profile"
+        f" ({default_gpu}), `heavy=True` = training profile ({training_gpu}).",
+        "- Prefer the cheapest hardware that fits. CPU for EDA / plots /",
+        "  inspection; small GPUs for modest fine-tunes; big GPUs only when",
+        "  memory or speed demands it. On CPU, don't rely on `device='cuda'`.",
+        "- **Timeout is per call**, not per session — split long fits across",
+        "  calls (one fold / trial / epoch chunk each) and persist state to",
+        "  the session workspace between calls.",
+        "- Requesting hardware outside the list returns an error naming the",
+        "  allowed set.",
+        "- The user can change this allowance in Project Settings — your",
+        "  next call picks up the new values automatically.",
     ]
     return "\n".join(lines)
 

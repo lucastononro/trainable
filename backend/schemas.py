@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 # Generous-but-not-infinite caps to stop runaway inputs from swamping the
 # database or bloating an agent's context window. Calibrated so legitimate
@@ -20,6 +20,21 @@ _UUID_MAX = 64
 _GPU_MAX = 32
 
 
+# Canonical compute labels ("cpu" = no GPU). Must match the rate keys in
+# services/sandbox.yml, the provider GPU mappings
+# (services/compute/runpod_provider/gpu.py) and the execute-code /
+# create-serving-app schema enums.
+CANONICAL_GPUS: tuple[str, ...] = (
+    "cpu",
+    "T4",
+    "L4",
+    "A10G",
+    "A100-40GB",
+    "A100-80GB",
+    "H100",
+)
+
+
 class SandboxProfile(BaseModel):
     gpu: Optional[str] = Field(default=None, max_length=_GPU_MAX)
     timeout: Optional[int] = Field(default=None, ge=10, le=7200)
@@ -28,6 +43,27 @@ class SandboxProfile(BaseModel):
 class SandboxConfig(BaseModel):
     default: Optional[SandboxProfile] = None
     training: Optional[SandboxProfile] = None
+    # GPUs the agent may explicitly request via execute-code's `gpu` arg.
+    # "cpu" and the profiles' GPUs are always implicitly allowed (the
+    # agent can already reach those via heavy=True/False) — this list
+    # widens the choice beyond the profiles. Absent/empty = profiles only.
+    allowed_gpus: Optional[list[str]] = Field(default=None, max_length=16)
+    # Hard cap on any agent-requested per-call timeout (seconds). Absent =
+    # capped at the largest owner-configured profile timeout.
+    max_timeout: Optional[int] = Field(default=None, ge=10, le=7200)
+
+    @field_validator("allowed_gpus")
+    @classmethod
+    def _canonical_gpus(cls, v: Optional[list[str]]) -> Optional[list[str]]:
+        if v is None:
+            return v
+        v = list(dict.fromkeys(v))  # dedupe, preserve order
+        bad = [g for g in v if g not in CANONICAL_GPUS]
+        if bad:
+            raise ValueError(
+                f"Unknown GPU label(s) {bad}; allowed: {list(CANONICAL_GPUS)}"
+            )
+        return v or None  # [] normalizes to "not configured"
 
 
 class ExperimentCreate(BaseModel):

@@ -19,10 +19,20 @@ Use os.makedirs(path, exist_ok=True) before saving.
 Print all results to stdout.
 Each execution has a 10-minute timeout by default.
 
-Set heavy=true for GPU-intensive workloads (model training,
-hyperparameter tuning, large-scale data processing). This uses the
-project's training sandbox profile which may have a GPU attached
-and a longer timeout.
+Choosing compute — three levers, in precedence order:
+
+- `gpu` (optional): explicitly pick hardware for this call from the
+  allowed list shown in your system prompt's "Compute environment"
+  section (e.g. `gpu="cpu"`, `gpu="L4"`). Overrides `heavy`. Values
+  outside the allowance return an error naming the allowed set.
+- `heavy=true`: fall back to the project's training sandbox profile
+  (GPU + extended timeout) for GPU-intensive workloads (model training,
+  hyperparameter tuning, large-scale data processing).
+- `timeout` (optional): per-call timeout in seconds, clamped to the
+  project's max. Use it instead of splitting work when a single fit
+  slightly exceeds the profile default.
+
+Prefer the cheapest hardware that fits the job.
 
 ## When to use
 Run any Python in an isolated Modal sandbox — EDA, modeling, validation.

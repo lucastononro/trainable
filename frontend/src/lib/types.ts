@@ -6,6 +6,11 @@ export interface SandboxProfile {
 export interface SandboxConfig {
   default?: SandboxProfile | null;
   training?: SandboxProfile | null;
+  // GPUs the agent may explicitly request per execute-code call.
+  // "cpu" and the profiles' GPUs are always implicitly allowed.
+  allowed_gpus?: string[] | null;
+  // Hard cap (seconds) on agent-requested per-call timeouts.
+  max_timeout?: number | null;
 }
 
 export interface Project {
