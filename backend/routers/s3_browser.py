@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Optional
 
@@ -54,7 +55,7 @@ class PresignRequest(BaseModel):
 @router.get("/buckets")
 async def list_buckets():
     try:
-        response = get_s3_client().list_buckets()
+        response = await asyncio.to_thread(get_s3_client().list_buckets)
         buckets = [b["Name"] for b in response.get("Buckets", [])]
         return {"buckets": buckets}
     except Exception as e:
@@ -69,7 +70,7 @@ async def list_objects(bucket: str, prefix: Optional[str] = ""):
         if prefix:
             params["Prefix"] = prefix
 
-        response = get_s3_client().list_objects_v2(**params)
+        response = await asyncio.to_thread(get_s3_client().list_objects_v2, **params)
 
         folders = [
             {"name": p["Prefix"].rstrip("/").split("/")[-1], "prefix": p["Prefix"]}
@@ -98,7 +99,8 @@ async def generate_presigned_url(req: PresignRequest):
     _validate_bucket(req.bucket)
     _validate_key(req.key, for_write=True)
     try:
-        url = get_s3_client().generate_presigned_url(
+        url = await asyncio.to_thread(
+            get_s3_client().generate_presigned_url,
             "put_object",
             Params={"Bucket": req.bucket, "Key": req.key},
             ExpiresIn=req.expires_in,
@@ -143,20 +145,27 @@ async def upload_file(bucket: str, key: str, file: UploadFile = File(...)):
 
         if not next_chunk:
             # Fits in a single bounded chunk — plain put_object.
-            s3.put_object(Bucket=bucket, Key=key, Body=chunk, ContentType=content_type)
+            await asyncio.to_thread(
+                s3.put_object,
+                Bucket=bucket,
+                Key=key,
+                Body=chunk,
+                ContentType=content_type,
+            )
             return {"status": "uploaded", "bucket": bucket, "key": key, "size": total}
 
         # Larger body: stream through a multipart upload so we never hold
         # more than two chunks in memory.
-        mpu = s3.create_multipart_upload(
-            Bucket=bucket, Key=key, ContentType=content_type
+        mpu = await asyncio.to_thread(
+            s3.create_multipart_upload, Bucket=bucket, Key=key, ContentType=content_type
         )
         upload_id = mpu["UploadId"]
         try:
             parts = []
             part_number = 1
             while chunk:
-                part = s3.upload_part(
+                part = await asyncio.to_thread(
+                    s3.upload_part,
                     Bucket=bucket,
                     Key=key,
                     PartNumber=part_number,
@@ -167,7 +176,8 @@ async def upload_file(bucket: str, key: str, file: UploadFile = File(...)):
                 part_number += 1
                 chunk = next_chunk
                 next_chunk = await _read_chunk() if chunk else b""
-            s3.complete_multipart_upload(
+            await asyncio.to_thread(
+                s3.complete_multipart_upload,
                 Bucket=bucket,
                 Key=key,
                 UploadId=upload_id,
@@ -175,7 +185,12 @@ async def upload_file(bucket: str, key: str, file: UploadFile = File(...)):
             )
         except BaseException:
             try:
-                s3.abort_multipart_upload(Bucket=bucket, Key=key, UploadId=upload_id)
+                await asyncio.to_thread(
+                    s3.abort_multipart_upload,
+                    Bucket=bucket,
+                    Key=key,
+                    UploadId=upload_id,
+                )
             except Exception as abort_err:  # pragma: no cover - best effort
                 logger.warning(f"S3 abort_multipart_upload: {abort_err}")
             raise
@@ -192,7 +207,8 @@ async def get_download_url(bucket: str, key: str):
     _validate_bucket(bucket)
     _validate_key(key)
     try:
-        url = get_s3_client().generate_presigned_url(
+        url = await asyncio.to_thread(
+            get_s3_client().generate_presigned_url,
             "get_object",
             Params={"Bucket": bucket, "Key": key},
             ExpiresIn=3600,

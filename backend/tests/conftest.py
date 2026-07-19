@@ -85,10 +85,12 @@ async def client():
     ):
         mock_client = MagicMock()
         mock_client.put_object = MagicMock()
-        # Mock get_object to return bytes for from-s3 endpoint
-        mock_body = MagicMock()
-        mock_body.read.return_value = b"col1,col2\n1,2\n"
-        mock_client.get_object.return_value = {"Body": mock_body}
+        # Mock get_object to return bytes for from-s3 endpoint. Use a fresh
+        # BytesIO per call so chunked reads (`body.read(n)`) terminate at EOF
+        # like a real botocore StreamingBody.
+        mock_client.get_object.side_effect = lambda **kwargs: {
+            "Body": io.BytesIO(b"col1,col2\n1,2\n")
+        }
         mock_client.list_objects_v2.return_value = {
             "Contents": [{"Key": "my-data/raw.csv"}]
         }
