@@ -78,6 +78,24 @@ def _run_migrations(connection):
             )
             logger.info("[DB] Added run_tag column to metrics table")
 
+    # Add provider / provider_endpoint_id to deployments if missing
+    if insp.has_table("deployments"):
+        dcols = [c["name"] for c in insp.get_columns("deployments")]
+        if "provider" not in dcols:
+            connection.execute(
+                text(
+                    "ALTER TABLE deployments ADD COLUMN provider VARCHAR(32) DEFAULT 'modal'"
+                )
+            )
+            logger.info("[DB] Added provider column to deployments table")
+        if "provider_endpoint_id" not in dcols:
+            connection.execute(
+                text(
+                    "ALTER TABLE deployments ADD COLUMN provider_endpoint_id VARCHAR(255)"
+                )
+            )
+            logger.info("[DB] Added provider_endpoint_id column to deployments table")
+
     # Add sandbox_config to projects if missing
     if insp.has_table("projects"):
         columns = [c["name"] for c in insp.get_columns("projects")]
