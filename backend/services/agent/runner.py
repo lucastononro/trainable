@@ -333,7 +333,9 @@ def _format_training_constraints(training_config: dict) -> str:
         "",
         "When delegating training work to another agent, restate these",
         "constraints verbatim in the delegation instructions so they are not",
-        "lost. The start-training skill validates its arguments against them.",
+        "lost. The start-training skill validates its arguments against them,",
+        "and REQUIRES you to declare `optimization_metric` and `max_trials`",
+        "explicitly whenever the corresponding constraint is set above.",
     ]
     return "\n".join(lines)
 

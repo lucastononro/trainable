@@ -46,24 +46,36 @@ def _check_constraints(
             f"Pick one of those instead."
         )
 
+    # When the user configured a metric or a trial budget, the agent must
+    # DECLARE those fields — otherwise the constraint could be bypassed by
+    # simply omitting the argument.
     user_metric = cfg.get("optimization_metric")
-    if (
-        user_metric
-        and optimization_metric
-        and _normalize_metric(optimization_metric) != _normalize_metric(user_metric)
-    ):
-        return (
-            f"optimization_metric '{optimization_metric}' conflicts with the "
-            f"user's configured metric '{user_metric}'. You must optimize "
-            f"'{user_metric}'."
-        )
+    if user_metric:
+        if not optimization_metric:
+            return (
+                f"optimization_metric is required: the user configured "
+                f"'{user_metric}' as the metric to optimize. Re-call with "
+                f"optimization_metric='{user_metric}'."
+            )
+        if _normalize_metric(optimization_metric) != _normalize_metric(user_metric):
+            return (
+                f"optimization_metric '{optimization_metric}' conflicts with the "
+                f"user's configured metric '{user_metric}'. You must optimize "
+                f"'{user_metric}'."
+            )
 
     trial_cap = cfg.get("max_trials")
-    if trial_cap and max_trials and max_trials > int(trial_cap):
-        return (
-            f"max_trials={max_trials} exceeds the user's trial budget of "
-            f"{trial_cap}. Re-plan the sweep with at most {trial_cap} trials."
-        )
+    if trial_cap:
+        if max_trials is None:
+            return (
+                f"max_trials is required: the user configured a trial budget of "
+                f"{trial_cap}. Re-call declaring max_trials (at most {trial_cap})."
+            )
+        if max_trials > int(trial_cap):
+            return (
+                f"max_trials={max_trials} exceeds the user's trial budget of "
+                f"{trial_cap}. Re-plan the sweep with at most {trial_cap} trials."
+            )
 
     return None
 

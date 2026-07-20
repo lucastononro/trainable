@@ -34,7 +34,11 @@ wall-clock/cost cap). When set, this skill enforces them:
 
 - `framework` outside the allowed model families → **rejected**.
 - `optimization_metric` that conflicts with the user's metric → **rejected**.
-- `max_trials` above the user's trial budget → **rejected**.
+  When the user configured a metric, `optimization_metric` becomes
+  **required** — omitting it is rejected too.
+- `max_trials` above the user's trial budget → **rejected**. When the user
+  configured a budget, `max_trials` becomes **required** — omitting it is
+  rejected too.
 
 A successful call echoes the active constraints back in `user_constraints` —
 honor them for the whole run. If no constraints are configured, the call

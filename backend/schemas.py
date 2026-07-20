@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
@@ -42,6 +43,11 @@ KNOWN_MODEL_FAMILIES = (
     "other",
 )
 
+# Metric names are rendered verbatim into agent system prompts (inside a
+# backtick fence) — restrict to a plain-identifier charset so a crafted value
+# can't break out of the fence or smuggle prompt directives.
+_METRIC_RE = re.compile(r"^[A-Za-z0-9 _\-./@:()]+$")
+
 
 class TrainingConfig(BaseModel):
     """Pre-flight training controls (issue #104).
@@ -68,7 +74,14 @@ class TrainingConfig(BaseModel):
     @classmethod
     def _clean_metric(cls, v: Optional[str]) -> Optional[str]:
         v = (v or "").strip()
-        return v or None
+        if not v:
+            return None
+        if not _METRIC_RE.fullmatch(v):
+            raise ValueError(
+                "optimization_metric may only contain letters, digits, spaces "
+                "and _-./@:() characters"
+            )
+        return v
 
     @field_validator("model_families")
     @classmethod

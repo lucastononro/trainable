@@ -13,15 +13,16 @@ properties:
     type: string
     description: >-
       Metric your tuning loop optimizes (e.g. roc_auc, pr_auc, f1, rmse).
-      If the project has user training constraints, this must match the
-      user's configured metric — the call is rejected otherwise.
+      If the project has a user-configured metric, this field is REQUIRED
+      and must match it — the call is rejected otherwise.
   max_trials:
     type: integer
     minimum: 1
     description: >-
       Number of hyperparameter-search trials you plan to run for this
-      experiment. Must not exceed the user's configured trial budget when
-      one is set — the call is rejected otherwise.
+      experiment. If the project has a user-configured trial budget, this
+      field is REQUIRED and must not exceed the budget — the call is
+      rejected otherwise.
 required:
   - experiment_id
   - framework
