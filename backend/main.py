@@ -122,27 +122,34 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/api/readyz")
-async def readyz():
-    """Readiness check — pings the DB and S3; 503 if either is down."""
-    checks: dict[str, str] = {}
-
+async def _readyz_check_db() -> str:
     try:
         async with engine.connect() as conn:
+            # Raw SQL on purpose: cheapest possible round-trip; no ORM model
+            # exists (or should) for a connectivity probe.
             await conn.execute(text("SELECT 1"))
-        checks["database"] = "ok"
+        return "ok"
     except Exception as e:
         logger.warning("readyz: database check failed: %s", e)
-        checks["database"] = f"error: {e.__class__.__name__}"
+        return f"error: {e.__class__.__name__}"
 
+
+async def _readyz_check_s3() -> str:
     try:
         # boto3 is sync — run in a thread so we don't block the event loop.
         # list_buckets is the cheapest call that doesn't assume a bucket exists.
         await asyncio.to_thread(get_s3_client().list_buckets)
-        checks["s3"] = "ok"
+        return "ok"
     except Exception as e:
         logger.warning("readyz: s3 check failed: %s", e)
-        checks["s3"] = f"error: {e.__class__.__name__}"
+        return f"error: {e.__class__.__name__}"
+
+
+@app.get("/api/readyz")
+async def readyz():
+    """Readiness check — pings the DB and S3 concurrently; 503 if either is down."""
+    db_status, s3_status = await asyncio.gather(_readyz_check_db(), _readyz_check_s3())
+    checks = {"database": db_status, "s3": s3_status}
 
     ready = all(v == "ok" for v in checks.values())
     return JSONResponse(
