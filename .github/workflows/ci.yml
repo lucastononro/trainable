@@ -23,7 +23,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install ruff
+      # Keep in sync with the ruff-pre-commit rev in .pre-commit-config.yaml.
+      - run: pip install "ruff==0.15.22"
       - run: ruff check .
       - run: ruff format --check .
 
