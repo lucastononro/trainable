@@ -619,6 +619,8 @@ function HomePageContent() {
           // Welcome screen — shown whenever the chat has no user turn yet
           // -------------------------------------------------------------------
           <WelcomeScreen
+            activeProjectId={activeProjectId}
+            experiments={experiments}
             draft={draft}
             onDraftChange={setDraft}
             onSend={handleSend}
@@ -647,6 +649,10 @@ function HomePageContent() {
             {/* Chat panel */}
             <Panel defaultSize={canvasOpen ? 30 : 100} minSize={20}>
               <ChatPane
+                activeSessionId={activeSessionId}
+                activeProjectId={activeProjectId}
+                experiments={experiments}
+                isRunning={isRunning}
                 canvasOpen={canvasOpen}
                 chatItems={chatItems}
                 streamingItemIdRef={streamingItemIdRef}

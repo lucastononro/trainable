@@ -13,9 +13,8 @@ import {
   Terminal,
   Upload,
 } from 'lucide-react';
-import { useApp } from '@/lib/AppContext';
 import { isDraftEmpty } from '@/lib/mentions';
-import type { Draft } from '@/lib/types';
+import type { Draft, Experiment } from '@/lib/types';
 import MentionInput, { MentionInputHandle } from '@/components/MentionInput';
 import AttachedFilesPreview from '@/components/chat/AttachedFilesPreview';
 
@@ -48,6 +47,8 @@ const SUGGESTIONS = [
 // ---------------------------------------------------------------------------
 
 export default function WelcomeScreen({
+  activeProjectId,
+  experiments,
   draft,
   onDraftChange,
   onSend,
@@ -64,6 +65,10 @@ export default function WelcomeScreen({
   onOpenS3Browser,
   sessionAttachedFiles,
 }: {
+  // Passed as props (not read from AppContext) so the component stays
+  // reusable and testable outside the studio page.
+  activeProjectId: string | null;
+  experiments: Experiment[];
   draft: Draft;
   onDraftChange: (draft: Draft) => void;
   onSend: () => void;
@@ -82,7 +87,6 @@ export default function WelcomeScreen({
   onOpenS3Browser: () => void;
   sessionAttachedFiles: { name: string; sandboxPath: string }[];
 }) {
-  const { activeProjectId, experiments } = useApp();
   const inputRef = useRef<MentionInputHandle | null>(null);
 
   // Handle welcome-screen suggestion click
@@ -120,6 +124,7 @@ export default function WelcomeScreen({
             {/* Attach button */}
             <div className="relative" ref={attachMenuRef}>
               <button
+                type="button"
                 onClick={() => setShowAttachMenu(!showAttachMenu)}
                 className={`p-1.5 rounded-xl transition-colors shrink-0 ${
                   showAttachMenu

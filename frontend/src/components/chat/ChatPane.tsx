@@ -10,9 +10,8 @@ import {
   type SetStateAction,
 } from 'react';
 import { Bot, FolderUp, HardDrive, Loader2, Plus, Send, Square, Upload } from 'lucide-react';
-import { useApp } from '@/lib/AppContext';
 import { isDraftEmpty } from '@/lib/mentions';
-import type { Draft, Task, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
+import type { Draft, Experiment, Task, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
 import type { ChatItem } from '@/lib/chatItems';
 import { renderGroupedChatItems } from '@/components/chat/ChatItemView';
 import AttachedFilesPreview from '@/components/chat/AttachedFilesPreview';
@@ -26,6 +25,10 @@ import MentionInput from '@/components/MentionInput';
 // ---------------------------------------------------------------------------
 
 export default function ChatPane({
+  activeSessionId,
+  activeProjectId,
+  experiments,
+  isRunning,
   canvasOpen,
   chatItems,
   streamingItemIdRef,
@@ -51,6 +54,12 @@ export default function ChatPane({
   onOpenS3Browser,
   sessionAttachedFiles,
 }: {
+  // Session-scoped values passed as props (not read from AppContext) so the
+  // component stays reusable and testable outside the studio page.
+  activeSessionId: string | null;
+  activeProjectId: string | null;
+  experiments: Experiment[];
+  isRunning: boolean;
   canvasOpen: boolean;
   chatItems: ChatItem[];
   streamingItemIdRef: MutableRefObject<string | null>;
@@ -78,8 +87,6 @@ export default function ChatPane({
   onOpenS3Browser: () => void;
   sessionAttachedFiles: { name: string; sandboxPath: string }[];
 }) {
-  const { activeSessionId, activeProjectId, experiments, isRunning } = useApp();
-
   const bottomRef = useRef<HTMLDivElement>(null);
   // The actual scrollable chat pane (the `overflow-y-auto` div `bottomRef`
   // sits at the bottom of). Used to measure scroll position for the

@@ -808,6 +808,14 @@ export function useSessionStream(
       source.onerror = () => setSseConnected(false);
       sseRef.current = source;
     },
+    // INVARIANT: every dep here must be referentially stable, because
+    // `connectSSE` is itself a dep of the session-load effect below — a new
+    // identity would re-run that effect, tearing down the EventSource and
+    // reloading the session. Verified stable: `addItem` (useCallback []),
+    // `openCanvas` (page-level useCallback [], per the options contract),
+    // `publish` (SSEStreamContext useCallback []), `refreshExperiments`
+    // (AppContext useCallback []), `setIsRunning` (raw useState setter).
+    // If you add a dep, keep it stable or the invariant breaks silently.
     [addItem, openCanvas, publish, refreshExperiments, setIsRunning],
   );
 
