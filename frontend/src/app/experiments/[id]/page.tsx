@@ -28,7 +28,7 @@ import {
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
 import Sidebar from '@/components/Sidebar';
-import SnapshotReproduce from '@/components/experiments/SnapshotReproduce';
+import { SnapshotReproduce } from '@/components/experiments/SnapshotReproduce';
 import LineageGraph from '@/components/lineage/LineageGraph';
 import NodeMetadataPanel from '@/components/lineage/NodeMetadataPanel';
 import type {

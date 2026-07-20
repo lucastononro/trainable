@@ -97,6 +97,64 @@ def test_build_replay_code_targets_volume_mount():
     compile(code, "<replay>", "exec")  # must be valid python
 
 
+def _runner_for(tmp_path, scripts: dict[str, str]) -> str:
+    """Materialize scripts in tmp_path and return the replay runner with the
+    sandbox's /data prefix rewritten to point at them (regression seam for
+    executing the generated runner outside a sandbox)."""
+    paths = []
+    for name, body in scripts.items():
+        p = tmp_path / name
+        p.write_text(body)
+        paths.append(str(p))
+    return build_replay_code(paths).replace(f"/data{tmp_path}", str(tmp_path))
+
+
+def test_replay_runner_survives_clean_sys_exit(tmp_path, capsys):
+    """Regression: a script ending in sys.exit(0) must not silently abort
+    the remaining scripts (SystemExit escapes runpy.run_path)."""
+    code = _runner_for(
+        tmp_path,
+        {
+            "a_first.py": "import sys\nprint('metric-from-first')\nsys.exit(0)\n",
+            "b_second.py": "print('metric-from-second')\n",
+        },
+    )
+    exec(code, {})  # must not raise SystemExit
+    out = capsys.readouterr().out
+    assert "metric-from-first" in out
+    assert "metric-from-second" in out
+
+
+def test_replay_runner_bare_sys_exit_is_clean(tmp_path, capsys):
+    code = _runner_for(
+        tmp_path,
+        {
+            "a_first.py": "import sys\nsys.exit()\n",  # SystemExit(None)
+            "b_second.py": "print('still-ran')\n",
+        },
+    )
+    exec(code, {})
+    assert "still-ran" in capsys.readouterr().out
+
+
+def test_replay_runner_nonzero_sys_exit_aborts(tmp_path, capsys):
+    """A genuinely failing script must still fail the whole replay with its
+    nonzero code, and later scripts must not run."""
+    code = _runner_for(
+        tmp_path,
+        {
+            "a_first.py": "import sys\nsys.exit(3)\n",
+            "b_second.py": "print('must-not-run')\n",
+        },
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        exec(code, {})
+    assert excinfo.value.code == 3
+    captured = capsys.readouterr()
+    assert "must-not-run" not in captured.out
+    assert "exited nonzero" in captured.err
+
+
 def test_verify_inputs_detects_changed_and_missing_files():
     manifest = {
         "dataset": {
@@ -117,6 +175,31 @@ def test_verify_inputs_detects_changed_and_missing_files():
     changed = {c["path"]: c for c in out["changed_files"]}
     assert changed[f"{WORKSPACE}/src/train.py"]["actual_sha256"] == "MUTATED"
     assert changed[f"{WORKSPACE}/src/gone.py"]["actual_sha256"] is None
+
+
+def test_verify_inputs_detects_added_files():
+    """A file added after the snapshot (e.g. a new module the scripts could
+    import) must flip the section's verified flag."""
+    manifest = {
+        "dataset": {
+            "files": [{"path": f"{WORKSPACE}/data/train.parquet", "sha256": "aaa"}]
+        },
+        "code": {"files": [{"path": f"{WORKSPACE}/src/train.py", "sha256": "bbb"}]},
+    }
+    current_data = [{"path": f"{WORKSPACE}/data/train.parquet", "sha256": "aaa"}]
+    current_code = [
+        {"path": f"{WORKSPACE}/src/train.py", "sha256": "bbb"},
+        {"path": f"{WORKSPACE}/src/sneaky_new_helper.py", "sha256": "ddd"},
+    ]
+    out = verify_inputs(manifest, current_data, current_code)
+    assert out["dataset_verified"] is True
+    assert out["code_verified"] is False
+    (added,) = out["changed_files"]
+    assert added == {
+        "path": f"{WORKSPACE}/src/sneaky_new_helper.py",
+        "expected_sha256": None,
+        "actual_sha256": "ddd",
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,7 @@ function fmt(v: number | null): string {
     : v.toFixed(6).replace(/0+$/, '').replace(/\.$/, '');
 }
 
-export default function SnapshotReproduce({ sessionId }: { sessionId: string }) {
+export function SnapshotReproduce({ sessionId }: { sessionId: string }) {
   const [running, setRunning] = useState(false);
   const [report, setReport] = useState<ReproduceReport | null>(null);
   const [error, setError] = useState<string | null>(null);

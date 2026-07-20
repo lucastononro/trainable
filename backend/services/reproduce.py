@@ -137,10 +137,15 @@ def verify_inputs(
     manifest: dict, current_data: list[dict], current_code: list[dict]
 ) -> dict:
     """Compare the manifest's captured file hashes against the workspace's
-    current files. Returns per-section verified flags + the changed files."""
+    current files. Returns per-section verified flags + the changed files.
+
+    A file counts as changed when it was mutated, deleted, *or added* since
+    the snapshot — a new module the replayed scripts could import means the
+    workspace is no longer the frozen environment the snapshot describes."""
 
     def _section(captured: list[dict], current: list[dict]) -> tuple[bool, list[dict]]:
         cur = {f["path"]: f["sha256"] for f in current}
+        captured_paths = {f["path"] for f in captured}
         changed: list[dict] = []
         for f in captured:
             actual = cur.get(f["path"])
@@ -150,6 +155,15 @@ def verify_inputs(
                         "path": f["path"],
                         "expected_sha256": f["sha256"],
                         "actual_sha256": actual,  # None => file gone
+                    }
+                )
+        for f in current:
+            if f["path"] not in captured_paths:
+                changed.append(
+                    {
+                        "path": f["path"],
+                        "expected_sha256": None,  # None => file added
+                        "actual_sha256": f["sha256"],
                     }
                 )
         return (not changed, changed)
@@ -183,15 +197,26 @@ def build_replay_code(script_paths: list[str]) -> str:
     """Runner executed inside the sandbox: run each captured script as
     ``__main__`` (volume mounts at /data). Metric lines the scripts print
     via the injected `trainable` SDK flow back on stdout; the first failing
-    script aborts the replay with a nonzero exit."""
+    script aborts the replay with a nonzero exit.
+
+    ``SystemExit`` is contained per script: a clean ``sys.exit()`` /
+    ``sys.exit(0)`` (common in ``if __name__ == '__main__':`` blocks) must
+    not abort the remaining scripts or masquerade as a full replay, while a
+    nonzero exit still fails the whole replay."""
     sandbox_paths = [f"/data{p}" for p in script_paths]
     return (
-        "import json as _rj, runpy as _rr, sys as _rs\n"
-        f"_scripts = _rj.loads({json.dumps(json.dumps(sandbox_paths))})\n"
+        "import runpy as _rr, sys as _rs\n"
+        f"_scripts = {json.dumps(sandbox_paths)}\n"
         "for _p in _scripts:\n"
         "    _rs.stderr.write('[reproduce] running %s\\n' % _p)\n"
         "    _rs.stderr.flush()\n"
-        "    _rr.run_path(_p, run_name='__main__')\n"
+        "    try:\n"
+        "        _rr.run_path(_p, run_name='__main__')\n"
+        "    except SystemExit as _e:\n"
+        "        if _e.code not in (None, 0):\n"
+        "            _rs.stderr.write('[reproduce] %s exited nonzero: %r\\n' % (_p, _e.code))\n"
+        "            _rs.stderr.flush()\n"
+        "            raise\n"
     )
 
 
