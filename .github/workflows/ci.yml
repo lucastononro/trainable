@@ -94,7 +94,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          # Match backend/Dockerfile (python:3.13-slim) so the audited
+          # dependency resolution mirrors what actually ships.
+          python-version: "3.13"
           cache: pip
       - run: pip install -r requirements.txt pip-audit
       # Advisory only: known advisories (e.g. transitive starlette/mcp/
@@ -154,7 +156,7 @@ jobs:
       # continue-on-error, or set exit-code back to 1 without the wrapper)
       # once they are.
       - name: Trivy scan
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         continue-on-error: true
         with:
           image-ref: ${{ matrix.image }}:ci-scan
