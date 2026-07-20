@@ -199,10 +199,14 @@ def write_env(dest: Path, config: dict[str, str]):
     ]
 
     env_path = dest / ENV_FILE
-    env_path.write_text("\n".join(lines) + "\n")
     # Secrets file: restrict to owner-only so other users on a shared machine
-    # can't read the plaintext API keys/tokens. Applied on every (re)write so
-    # a previously world-readable file is tightened.
+    # can't read the plaintext API keys/tokens. Create with O_CREAT mode 0o600
+    # so the file is never visible at a looser permission even for an instant
+    # (avoids a TOCTOU window vs. write-then-chmod). The chmod afterwards
+    # tightens pre-existing files, where the O_CREAT mode doesn't apply.
+    fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
     os.chmod(env_path, 0o600)
     success(f"Wrote {ENV_FILE}")
 
