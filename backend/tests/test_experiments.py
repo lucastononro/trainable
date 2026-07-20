@@ -600,6 +600,36 @@ async def test_create_experiment_streams_upload_without_retaining_bytes(
 
 
 @pytest.mark.asyncio
+async def test_create_experiment_multi_chunk_stream_hash_and_size(
+    client, default_project_id
+):
+    """Regression (review on #147): the temp-file write is offloaded via
+    asyncio.to_thread — a payload larger than the 1 MB chunk size exercises
+    the multi-iteration write loop and must still record the right hash+size."""
+    import hashlib
+
+    payload = (b"r" * 1024) * 1536  # 1.5 MB → at least two chunks
+    resp = await client.post(
+        "/api/experiments",
+        data={
+            "project_id": default_project_id,
+            "name": "Chunked",
+            "description": "",
+            "instructions": "",
+        },
+        files={"files": ("chunked.bin", payload, "application/octet-stream")},
+    )
+    assert resp.status_code == 200, resp.text
+
+    versions = (
+        await client.get(f"/api/projects/{default_project_id}/dataset-versions")
+    ).json()
+    assert versions, "expected a dataset-version row"
+    assert versions[0]["hash"] == hashlib.sha256(payload).hexdigest()
+    assert versions[0]["size_bytes"] == len(payload)
+
+
+@pytest.mark.asyncio
 async def test_create_experiment_oversize_file_rejected(
     client, default_project_id, monkeypatch
 ):

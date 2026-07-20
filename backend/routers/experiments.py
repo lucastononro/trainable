@@ -202,7 +202,9 @@ async def create_experiment(
                             detail=f"File '{rel_path}' exceeds max upload size of {settings.max_upload_size_bytes // (1024 * 1024)}MB",
                         )
                     hasher.update(chunk)
-                    tmp.write(chunk)
+                    # Keep the (potentially slow-disk) write off the event
+                    # loop, consistent with the boto3 calls below.
+                    await asyncio.to_thread(tmp.write, chunk)
                     chunk = await f.read(1024 * 1024)
             logger.info("Read %s: %d bytes", rel_path, size)
 

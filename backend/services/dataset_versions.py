@@ -77,7 +77,14 @@ async def record_upload(
             raise ValueError("record_upload needs content or content_hash")
         content_hash = hash_bytes(content)
     if size_bytes is None:
-        size_bytes = len(content) if content is not None else 0
+        if content is None:
+            # A streaming caller passed content_hash without size_bytes —
+            # silently recording 0 would corrupt DatasetVersion.size_bytes.
+            raise ValueError(
+                "record_upload: size_bytes is required when content_hash "
+                "is provided without content"
+            )
+        size_bytes = len(content)
     h = content_hash
     async with async_session() as db:
         existing = await _existing_version(db, project_id=project_id, hash_hex=h)
