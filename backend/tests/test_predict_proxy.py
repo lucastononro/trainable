@@ -138,6 +138,39 @@ async def test_predict_proxy_empty_records_400(client, default_project_id):
     assert resp.status_code == 400
 
 
+async def test_predict_proxy_over_record_cap_400(client, default_project_id):
+    """Batches above PREDICT_PROXY_MAX_RECORDS are rejected before any
+    upstream call — the playground is for smoke tests, not batch scoring."""
+    from services import deploy as deploy_svc
+
+    model_id = await _seed_model(default_project_id)
+    records = [{"x": i} for i in range(deploy_svc.PREDICT_PROXY_MAX_RECORDS + 1)]
+    client_cls, post = _mock_httpx_client(200, {"predictions": []})
+    with patch("services.deploy.httpx.AsyncClient", client_cls):
+        resp = await client.post(
+            f"/api/models/{model_id}/predict", json={"records": records}
+        )
+    assert resp.status_code == 400
+    assert "Too many records" in resp.json()["detail"]
+    post.assert_not_called()
+
+
+async def test_predict_proxy_network_error_502(client, default_project_id):
+    """An unreachable endpoint (timeout, DNS, connection refused) becomes
+    a 502 with the cold-start retry hint, not an unhandled exception."""
+    import httpx as _httpx
+
+    model_id = await _seed_model(default_project_id)
+    client_cls, post = _mock_httpx_client(200, {})
+    post.side_effect = _httpx.ConnectTimeout("timed out")
+    with patch("services.deploy.httpx.AsyncClient", client_cls):
+        resp = await client.post(
+            f"/api/models/{model_id}/predict", json={"records": [{"x": 1}]}
+        )
+    assert resp.status_code == 502
+    assert "Could not reach the deployed endpoint" in resp.json()["detail"]
+
+
 async def test_predict_proxy_passes_upstream_401_through(client, default_project_id):
     """Key drift (rotated key + stale container) surfaces as the
     upstream 401, not a generic proxy error."""

@@ -201,6 +201,10 @@ function coerceCell(v: string): number | string {
 
 // Matches PREDICT_PROXY_MAX_RECORDS on the backend.
 const MAX_TEST_RECORDS = 200;
+// Refuse to read huge files into memory — `file.text()` loads the whole
+// file before the 200-row truncation ever runs. 5 MB is generous for a
+// smoke-test CSV.
+const MAX_CSV_BYTES = 5 * 1024 * 1024;
 
 function TestPanel({ m, onClose }: { m: RegisteredModel; onClose: () => void }) {
   const [schema, setSchema] = useState<PredictSchema | null>(null);
@@ -245,6 +249,13 @@ function TestPanel({ m, onClose }: { m: RegisteredModel; onClose: () => void }) 
     setCsvError(null);
     setCsvRecords(null);
     setCsvName(file.name);
+    if (file.size > MAX_CSV_BYTES) {
+      setCsvError(
+        `File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). The test panel ` +
+          'accepts up to 5 MB — use the endpoint directly for larger batches.'
+      );
+      return;
+    }
     try {
       const records = parseCsv(await file.text());
       if (!records.length) {
