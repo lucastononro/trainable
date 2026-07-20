@@ -11,6 +11,19 @@ Exemptions (always open):
 SSE exception: the browser ``EventSource`` API cannot set an Authorization
 header, so the stream endpoint (``/api/sessions/{id}/stream``) additionally
 accepts the token via a ``?token=<token>`` query parameter.
+
+.. warning::
+    Unlike the Authorization header, a ``?token=`` query parameter is part
+    of the URL and is written verbatim to access logs by uvicorn, nginx,
+    and most proxies/load balancers. When ``API_AUTH_TOKEN`` is set and the
+    stream endpoint is used through such a component, configure log
+    redaction for the ``token`` query parameter (e.g. uvicorn
+    ``--no-access-log`` / a custom access-log format, or nginx log-format
+    masking) or restrict who can read the logs.
+
+WebSocket scopes under ``/api/`` are gated by the same rules (no such
+routes exist today; unauthenticated handshakes are rejected with close
+code 1008 so a future route cannot silently ship open).
 """
 
 import secrets
@@ -30,23 +43,32 @@ class BearerTokenAuthMiddleware:
     def __init__(self, app, token: str):
         self.app = app
         self.token = token
+        # Compare as bytes: secrets.compare_digest raises TypeError on
+        # non-ASCII str inputs, which would turn a garbage token into a 500.
+        self._token_bytes = token.encode("utf-8")
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http":
+        if scope["type"] not in ("http", "websocket"):
             await self.app(scope, receive, send)
             return
 
         path = scope["path"]
         if (
             not path.startswith("/api/")
+            # WebSocket scopes have no "method" key.
             or path in EXEMPT_PATHS
-            or scope["method"] == "OPTIONS"
+            or scope.get("method") == "OPTIONS"
         ):
             await self.app(scope, receive, send)
             return
 
         if self._authorized(scope):
             await self.app(scope, receive, send)
+            return
+
+        if scope["type"] == "websocket":
+            # Reject the handshake before accepting (1008 = policy violation).
+            await send({"type": "websocket.close", "code": 1008})
             return
 
         await send(
@@ -72,7 +94,7 @@ class BearerTokenAuthMiddleware:
                 auth = value.decode("latin-1")
                 scheme, _, credentials = auth.partition(" ")
                 if scheme.lower() == "bearer" and secrets.compare_digest(
-                    credentials.strip(), self.token
+                    credentials.strip().encode("utf-8"), self._token_bytes
                 ):
                     return True
                 break
@@ -81,7 +103,7 @@ class BearerTokenAuthMiddleware:
         if _is_stream_path(scope["path"]):
             query = parse_qs(scope.get("query_string", b"").decode("latin-1"))
             for candidate in query.get("token", []):
-                if secrets.compare_digest(candidate, self.token):
+                if secrets.compare_digest(candidate.encode("utf-8"), self._token_bytes):
                     return True
 
         return False
