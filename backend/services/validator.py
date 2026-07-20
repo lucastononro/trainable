@@ -195,7 +195,7 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     if "train" in splits:
         try:
             if train_df is None:
-                raise train_read_error  # type: ignore[misc]
+                raise train_read_error or RuntimeError("train parquet failed to parse")
             null_cols = await asyncio.to_thread(_count_nulls, train_df)
             if len(null_cols) == 0:
                 results["passed"].append("No null values in train split")
@@ -230,7 +230,7 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     if "train" in splits and "test" in splits:
         try:
             if train_df is None:
-                raise train_read_error  # type: ignore[misc]
+                raise train_read_error or RuntimeError("train parquet failed to parse")
             overlap = await asyncio.to_thread(
                 _check_row_overlap, train_df, splits["test"]
             )
