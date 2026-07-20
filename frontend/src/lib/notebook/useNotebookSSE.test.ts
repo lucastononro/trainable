@@ -121,6 +121,45 @@ describe('useNotebookSSE', () => {
     });
   });
 
+  it('routes notebook.created to onNotebookCreated even when a filter is set', () => {
+    const onNotebookCreated = vi.fn();
+    mountHook('sess-1', true, 'nb-a', { onNotebookCreated });
+
+    latestSource().emit({
+      type: 'notebook.created',
+      data: { notebook_name: 'nb-new', notebook_path: '/notebooks/nb-new.ipynb' },
+    });
+
+    expect(onNotebookCreated).toHaveBeenCalledTimes(1);
+    expect(onNotebookCreated).toHaveBeenCalledWith({
+      notebook_name: 'nb-new',
+      notebook_path: '/notebooks/nb-new.ipynb',
+    });
+  });
+
+  it('applies the latest notebookName filter without re-opening the stream', () => {
+    const onCellStarted = vi.fn();
+    const handlers = { onCellStarted };
+    const { rerender } = mountHook('sess-1', true, 'nb-a', handlers);
+
+    rerender({ sessionId: 'sess-1', enabled: true, notebookName: 'nb-b', handlers });
+
+    // Still the same underlying EventSource — the effect didn't re-run.
+    expect(FakeEventSource.instances).toHaveLength(1);
+
+    latestSource().emit({
+      type: 'notebook.cell.started',
+      data: { notebook_name: 'nb-a', cell_id: 'stale' },
+    });
+    latestSource().emit({
+      type: 'notebook.cell.started',
+      data: { notebook_name: 'nb-b', cell_id: 'fresh' },
+    });
+
+    expect(onCellStarted).toHaveBeenCalledTimes(1);
+    expect(onCellStarted).toHaveBeenCalledWith({ notebook_name: 'nb-b', cell_id: 'fresh' });
+  });
+
   it('ignores events whose type does not start with "notebook."', () => {
     const onCellStarted = vi.fn();
     mountHook('sess-1', true, null, { onCellStarted });
