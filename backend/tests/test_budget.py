@@ -23,7 +23,12 @@ from db import async_session
 from models import Experiment, Message, Project
 from models import Session as SessionModel
 from models import UsageEvent
-from services.budget import BudgetExceededError, check_budget, get_budget_status
+from services.budget import (
+    BudgetExceededError,
+    BudgetStatus,
+    check_budget,
+    get_budget_status,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -303,3 +308,83 @@ async def test_run_agent_halts_midrun_when_cap_crossed(monkeypatch):
     assert len(halted) == 1
     states = await _events_of_type(sid, "state_change")
     assert any((m.metadata_ or {}).get("state") == "budget_exceeded" for m in states)
+
+
+# ---------------------------------------------------------------------------
+# Fail-open: infrastructure errors in the budget check must not fail runs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_budget_failopen_reraises_only_budget_errors(monkeypatch):
+    """_check_budget_failopen swallows arbitrary errors (transient DB
+    hiccups) but re-raises BudgetExceededError so the hard-stop still
+    unwinds to run_agent."""
+    from services.agent import runner
+
+    async def _db_error(_sid):
+        raise RuntimeError("db connection dropped")
+
+    monkeypatch.setattr(runner, "check_budget", _db_error)
+    await runner._check_budget_failopen("sid")  # must not raise
+
+    status = BudgetStatus(project_id="p", budget_usd=1.0, spent_usd=2.0)
+
+    async def _over(_sid):
+        raise BudgetExceededError(status)
+
+    monkeypatch.setattr(runner, "check_budget", _over)
+    with pytest.raises(BudgetExceededError):
+        await runner._check_budget_failopen("sid")
+
+
+@pytest.mark.asyncio
+async def test_transient_budget_check_error_does_not_fail_run(monkeypatch):
+    """A non-budget error from check_budget (e.g. a momentary DB outage
+    during the budget query) must not land the session in `failed` — the
+    guardrail fails open and the run completes normally."""
+    from services.agent import runner
+
+    _pid, eid, sid = await _seed_project(budget_usd=100.0)
+
+    _patch_runner_volume(monkeypatch, runner)
+    monkeypatch.setattr(runner, "record_llm_usage", AsyncMock())
+    monkeypatch.setattr(runner, "create_mcp_server", lambda *a, **k: {"type": "sdk"})
+
+    async def _boom(_sid):
+        raise RuntimeError("db connection dropped")
+
+    monkeypatch.setattr(runner, "check_budget", _boom)
+
+    provider = _FakeProvider(
+        [
+            [
+                _FakeEvent(
+                    "usage",
+                    {"model": "m", "usage": {"input_tokens": 5, "output_tokens": 3}},
+                ),
+                _FakeEvent("text", {"text": "COMPLETED-DESPITE-DB-ERROR"}),
+            ],
+        ],
+        supports_mcp=True,
+    )
+    monkeypatch.setattr(runner.llm_factory, "get_provider", lambda _id: provider)
+
+    await runner.run_agent(
+        session_id=sid,
+        experiment_id=eid,
+        stage="chat",
+        instructions="",
+        user_prompt="hello",
+    )
+
+    # The run completed: the text event AFTER the failing budget check was
+    # still consumed and persisted.
+    messages = await _events_of_type(sid, "agent_message")
+    assert any("COMPLETED-DESPITE-DB-ERROR" in m.content for m in messages)
+
+    # And the session was NOT marked failed.
+    states = await _events_of_type(sid, "state_change")
+    assert not any((m.metadata_ or {}).get("state") == "failed" for m in states)
+    assert await _events_of_type(sid, "agent_error") == []
+    assert await _events_of_type(sid, "budget_exceeded") == []

@@ -55,6 +55,22 @@ _MENTION_SENTINEL_START = "\ue000"
 _MENTION_SENTINEL_END = "\ue001"
 
 
+async def _check_budget_failopen(session_id: str) -> None:
+    """Budget check that lets ONLY BudgetExceededError escape.
+
+    Any other exception (e.g. a transient DB hiccup during the budget
+    query) must not unwind run_agent into its generic handler and mark
+    the session `failed` \u2014 the guardrail fails open with a warning and
+    the next usage event retries the check.
+    """
+    try:
+        await check_budget(session_id)
+    except BudgetExceededError:
+        raise
+    except Exception as e:
+        logger.warning("check_budget failed (fail-open, will retry): %s", e)
+
+
 def _apply_mentions(user_prompt: str, mentions: list[dict] | None) -> str:
     """Strip mention sentinels (\\uE000<index>\\uE001) and append a references block.
 
@@ -590,7 +606,9 @@ async def _drive_provider(
         # cap, halt this agent at the very next usage event. Raising here
         # unwinds the provider loop; run_agent catches BudgetExceededError
         # and lands the session in a clean `budget_exceeded` terminal state.
-        await check_budget(session_id)
+        # Fail-open on any other error so a transient DB hiccup during the
+        # budget query can't land the session in `failed`.
+        await _check_budget_failopen(session_id)
 
     # Wall-clock cap hint for providers/SDKs. The runner no longer wraps its
     # own loop with `asyncio.timeout(timeout_s)` — that competed with the
@@ -897,8 +915,9 @@ async def run_agent(
         ) = await _load_project_context(experiment_id)
 
         # Budget pre-check: never start a run for a project that has already
-        # spent past its cap. Raises BudgetExceededError (handled below).
-        await check_budget(session_id)
+        # spent past its cap. Raises BudgetExceededError (handled below);
+        # any other error fails open rather than failing the run.
+        await _check_budget_failopen(session_id)
 
         system_prompt = render_agent_system_prompt(
             agent_type,
