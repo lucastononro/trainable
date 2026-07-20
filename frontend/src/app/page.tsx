@@ -2385,7 +2385,7 @@ const HtmlPanel = memo(function HtmlPanel({ artifact }: { artifact: HtmlArtifact
     );
   }
 
-  const rawUrl = `/api/files/raw?path=${encodeURIComponent(artifact.path)}`;
+  const rawUrl = api.filesRawUrl(artifact.path);
   const sizeLabel = humanArtifactBytes(artifact.size);
 
   return (
@@ -2531,14 +2531,14 @@ const FileViewer = memo(function FileViewer({
           <div className="p-6 flex items-center justify-center bg-black">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={`/api/files/raw?path=${encodeURIComponent(filePath)}`}
+              src={api.filesRawUrl(filePath)}
               alt={fileName}
               className="max-w-full max-h-[60vh] rounded-lg"
             />
           </div>
         ) : isPdf ? (
           <iframe
-            src={`/api/files/raw?path=${encodeURIComponent(filePath)}#view=FitH`}
+            src={`${api.filesRawUrl(filePath)}#view=FitH`}
             title={fileName}
             className="w-full h-full min-h-[80vh] bg-white border-0"
           />
@@ -2577,10 +2577,10 @@ const FileViewer = memo(function FileViewer({
                 img: ({ src, alt }) => {
                   let imgSrc = src || '';
                   if (imgSrc.startsWith('/data/')) {
-                    imgSrc = `/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+                    imgSrc = api.filesRawUrl(imgSrc);
                   } else if (imgSrc && !imgSrc.startsWith('http')) {
                     const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-                    imgSrc = `/api/files/raw?path=${encodeURIComponent(dir + '/' + imgSrc)}`;
+                    imgSrc = api.filesRawUrl(dir + '/' + imgSrc);
                   }
                   return (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -2626,10 +2626,10 @@ const ReportMarkdown = memo(function ReportMarkdown({
       img: ({ src, alt }: { src?: string; alt?: string }) => {
         let imgSrc = src || '';
         if (imgSrc.startsWith('/data/')) {
-          imgSrc = `/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+          imgSrc = api.filesRawUrl(imgSrc);
         } else if (imgSrc && !imgSrc.startsWith('http')) {
           const workspace = `/sessions/${sessionId}/eda`;
-          imgSrc = `/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
+          imgSrc = api.filesRawUrl(workspace + '/' + imgSrc);
         }
         return (
           // eslint-disable-next-line @next/next/no-img-element

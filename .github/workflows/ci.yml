@@ -75,6 +75,7 @@ jobs:
       - run: npx next lint
       - run: npx tsc --noEmit
       - run: npx prettier --check 'src/**/*.{ts,tsx,css}'
+      - run: npm test
 
   frontend-build:
     name: Frontend Build
