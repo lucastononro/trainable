@@ -104,7 +104,12 @@ async def test_background_agent_error_captured_by_sentry(
     assert task is not None
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
-    except Exception:
-        pass  # the task itself swallows `boom` internally; that's expected
+    except asyncio.TimeoutError:
+        pass  # task takes >5 s in a slow CI environment; still running, wait done
+
+    # _run_followup swallows `boom` internally (it reports to Sentry and marks
+    # the session failed), so the task itself must finish without an exception.
+    assert task.done()
+    assert task.exception() is None
 
     mock_capture.assert_called_once_with(boom)
