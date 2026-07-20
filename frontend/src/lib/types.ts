@@ -148,6 +148,14 @@ export interface ChartConfig {
   charts: ChartConfigEntry[];
 }
 
+// Wire shape of the `chart_config` SSE event. Unlike the app-level
+// `ChartConfig`, `charts` is optional here: the payload is unvalidated
+// backend output, so handlers must guard before promoting it to a
+// `ChartConfig` (see the `chart_config` case in page.tsx).
+export interface ChartConfigSSEData {
+  charts?: ChartConfigEntry[];
+}
+
 // Rich (non-scalar) log payload streamed from the agent. Shape of
 // `payload` is per-`type`; renderers narrow it inside the panel.
 export interface LogEvent {
@@ -380,7 +388,7 @@ export type SSEEvent =
   | { type: 'agent_aborted'; data: Record<string, unknown> }
   | { type: 'metrics_batch'; data: MetricsBatchData }
   | { type: 'metric'; data: MetricEventData }
-  | { type: 'chart_config'; data: ChartConfig }
+  | { type: 'chart_config'; data: ChartConfigSSEData }
   | { type: 'log_event'; data: LogEventSSEData }
   | { type: 'canvas_html'; data: CanvasHtmlData }
   | { type: 'subagent_start'; data: SubAgentStartData }
