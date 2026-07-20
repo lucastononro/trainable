@@ -595,6 +595,14 @@ async def init_db():
     # Alembic owns schema DDL now — `Base.metadata.create_all` /
     # `_run_migrations` are no longer called here. See `_run_migrations`'s
     # docstring and PR #121 for the schema-equivalence verification.
+    #
+    # NOTE: single-instance assumption. The stamp-vs-upgrade check above and
+    # the Alembic run below use separate connections and are not atomic, so
+    # two app instances booting concurrently against the same empty DB could
+    # both take the upgrade path and race on CREATE TABLE. Fine for the
+    # docker-compose deployment (one backend container); if this ever runs
+    # with multiple replicas, apply migrations via a one-off init job before
+    # starting the app instead (see backend/AGENTS.md, "Database").
     await asyncio.to_thread(_run_alembic_sync, stamp_only=stamp_only)
 
 

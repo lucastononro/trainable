@@ -35,8 +35,15 @@ import models  # noqa: F401  (populates Base.metadata as a side effect)
 config = context.config
 
 # Interpret the config file for Python logging.
+#
+# disable_existing_loggers=False is load-bearing: this env.py also runs
+# in-process at app startup (init_db() -> _run_alembic_sync), after main.py
+# and every module-level `logging.getLogger(__name__)` have already been
+# created. fileConfig's default (True) would silently disable all of those
+# app loggers the moment migrations run — killing app logging after boot
+# (and breaking any caplog-based test that runs after an Alembic test).
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # The app's own metadata — autogenerate diffs against this.
 target_metadata = Base.metadata
