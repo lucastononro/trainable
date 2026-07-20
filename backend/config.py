@@ -4,6 +4,7 @@ All values can be overridden via environment variables or a .env file.
 Variable names match the field names in UPPER_CASE (e.g. SANDBOX_TIMEOUT=300).
 """
 
+import json
 from typing import Annotated, Optional
 
 from pydantic import Field, field_validator
@@ -64,9 +65,10 @@ class Settings(BaseSettings):
 
     # -- CORS --
     # Allowed browser origins (env: CORS_ORIGINS, comma-separated, e.g.
-    # `CORS_ORIGINS=https://app.example.com,http://localhost:3000`).
-    # Defaults to the local frontend. `*` is honored but never combined
-    # with credentials (see main.py).
+    # `CORS_ORIGINS=https://app.example.com,http://localhost:3000`; a JSON
+    # array is also accepted). Defaults to the local frontend. `*` alone is
+    # honored but never combined with credentials (see main.py); mixing `*`
+    # with explicit origins is rejected at startup.
     cors_origins: Annotated[list[str], NoDecode] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
@@ -75,10 +77,48 @@ class Settings(BaseSettings):
     @field_validator("cors_origins", mode="before")
     @classmethod
     def _split_cors_origins(cls, v):
-        """Accept a comma-separated string (env var) or a real list."""
+        """Accept a comma-separated string (env var), a JSON array, or a list.
+
+        `NoDecode` hands us the raw env string, so the pre-NoDecode JSON-array
+        format (`CORS_ORIGINS=["http://..."]`) would otherwise be comma-split
+        into garbage like `['["http://..."]']` — parse it explicitly instead.
+        """
         if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",") if origin.strip()]
-        return v
+            stripped = v.strip()
+            if stripped.startswith("["):
+                try:
+                    decoded = json.loads(stripped)
+                except ValueError as exc:
+                    raise ValueError(
+                        "CORS_ORIGINS looks like a JSON array but is not valid "
+                        "JSON. Use a comma-separated list instead, e.g. "
+                        "CORS_ORIGINS=https://app.example.com,http://localhost:3000"
+                    ) from exc
+                if not isinstance(decoded, list) or not all(
+                    isinstance(o, str) for o in decoded
+                ):
+                    raise ValueError(
+                        "CORS_ORIGINS JSON value must be an array of strings."
+                    )
+                origins = [o.strip() for o in decoded if o.strip()]
+            else:
+                origins = [o.strip() for o in stripped.split(",") if o.strip()]
+        else:
+            origins = v
+        # Reject `*` mixed with explicit origins: main.py disables credentials
+        # whenever `*` is present, which would silently strip credentials from
+        # the explicit entries too. Fail fast with a clear message instead.
+        if (
+            isinstance(origins, list)
+            and "*" in origins
+            and any(o != "*" for o in origins)
+        ):
+            raise ValueError(
+                "CORS_ORIGINS: cannot mix '*' with explicit origins — list only "
+                "explicit origins to enable credentialed requests, or use '*' "
+                "alone (credentials will be disabled)."
+            )
+        return origins
 
     # -- Upload limits --
     max_upload_size_bytes: int = 500 * 1024 * 1024  # 500 MB

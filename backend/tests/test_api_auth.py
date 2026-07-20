@@ -72,7 +72,9 @@ async def test_stream_accepts_query_token():
     async with _client(TOKEN) as c:
         assert (await c.get("/api/sessions/abc/stream")).status_code == 401
         assert (await c.get("/api/sessions/abc/stream?token=nope")).status_code == 401
-        assert (await c.get(f"/api/sessions/abc/stream?token={TOKEN}")).status_code == 200
+        assert (
+            await c.get(f"/api/sessions/abc/stream?token={TOKEN}")
+        ).status_code == 200
         # ?token= is stream-only — it must not unlock other routes
         assert (await c.get(f"/api/projects?token={TOKEN}")).status_code == 401
 
