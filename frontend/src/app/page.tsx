@@ -323,8 +323,10 @@ function HomePageContent() {
           const data = event.data as any;
           // Fan out the parsed event to any other subscriber (e.g. the
           // notebook) before/independent of the switch below — this is the
-          // single EventSource for the session, so everyone shares it.
-          publish(event);
+          // single EventSource for the session, so everyone shares it. `sid`
+          // tags the event with its owning session so subscribers can ignore
+          // stale cross-session deliveries during a session switch.
+          publish(sid, event);
 
           switch (event.type) {
             case 'state_change':
