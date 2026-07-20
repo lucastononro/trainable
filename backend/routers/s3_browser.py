@@ -185,11 +185,16 @@ async def upload_file(bucket: str, key: str, file: UploadFile = File(...)):
             )
         except BaseException:
             try:
-                await asyncio.to_thread(
-                    s3.abort_multipart_upload,
-                    Bucket=bucket,
-                    Key=key,
-                    UploadId=upload_id,
+                # Shielded so task cancellation (e.g. client disconnect) can't
+                # cancel the abort before the worker thread picks it up, which
+                # would orphan the multipart upload until S3's TTL clears it.
+                await asyncio.shield(
+                    asyncio.to_thread(
+                        s3.abort_multipart_upload,
+                        Bucket=bucket,
+                        Key=key,
+                        UploadId=upload_id,
+                    )
                 )
             except Exception as abort_err:  # pragma: no cover - best effort
                 logger.warning(f"S3 abort_multipart_upload: {abort_err}")
