@@ -34,7 +34,7 @@ interface ErrorBoundaryState {
  * Must be a class component — there is no hook equivalent for
  * `getDerivedStateFromError`/`componentDidCatch` as of React 18.
  */
-export default class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
   state: ErrorBoundaryState = { error: null };
 
   static getDerivedStateFromError(error: Error): ErrorBoundaryState {

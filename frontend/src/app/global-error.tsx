@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect } from 'react';
+
 // Root-layout error boundary (Next.js App Router convention). `error.tsx`
 // only catches errors thrown *below* the root layout — if `layout.tsx`
 // itself (or anything providers it mounts, e.g. AppProvider/ToastProvider)
@@ -16,6 +18,10 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  useEffect(() => {
+    console.error('Global error boundary caught:', error);
+  }, [error]);
+
   return (
     <html lang="en">
       <body
