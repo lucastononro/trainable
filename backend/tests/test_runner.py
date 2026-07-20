@@ -26,6 +26,7 @@ from models import Session as SessionModel
 from services.agent import runner
 from services.agent.tasks import (
     _running_tasks,
+    _session_task_locks,
     _silent_aborts,
     abort_agent,
     is_agent_running,
@@ -59,6 +60,18 @@ def _state_changes(msgs: list[Message]) -> list[str]:
 
 def _event_types(msgs: list[Message]) -> list[str]:
     return [m.metadata_.get("event_type") for m in msgs]
+
+
+@pytest.fixture(autouse=True)
+def _clear_task_registry():
+    """The task registry is module-level state that normally only empties via
+    cleanup_session in run_agent's `finally`. If a test fails mid-flight (or a
+    future test skips cleanup), entries would leak across tests — make the
+    isolation explicit rather than relying on distinct session IDs."""
+    yield
+    _running_tasks.clear()
+    _silent_aborts.clear()
+    _session_task_locks.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -362,5 +375,10 @@ async def test_task_registry_new_message_swaps_stale_task(monkeypatch):
 
     result = await new_task
     assert result == "new run done"
+    # Await the stale task's cancellation explicitly rather than relying on
+    # the event loop having already delivered its CancelledError during one of
+    # new_task's suspension points — that ordering is not guaranteed.
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(stale_task, timeout=1.0)
     assert stale_cancelled is True
     assert is_agent_running(session_id) is False
