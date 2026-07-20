@@ -12,7 +12,12 @@ accepted `timeout_seconds` but discarded it. These tests pin the fix:
     handler publishes `agent_timeout` and frees the session task);
   * the Claude provider — whose SDK runs the tool loop internally, so it
     must NOT be wrapped wholesale — threads the budget into the CLI env
-    as API_TIMEOUT_MS, bounding each provider HTTP request only.
+    as API_TIMEOUT_MS, bounding each provider HTTP request only;
+  * SDK/backend transport timeouts (`openai.APITimeoutError`,
+    `litellm.Timeout`) — which are NOT builtin TimeoutError subclasses and
+    can beat asyncio's timer when both share the same deadline — are mapped
+    onto the same TimeoutError propagation path instead of surfacing as
+    error+done events that make the run look finished.
 """
 
 from __future__ import annotations
@@ -94,6 +99,52 @@ class TestOpenAIProviderTimeout:
         # The per-request SDK timeout was threaded too.
         fake_client.with_options.assert_called_once_with(timeout=_BUDGET)
 
+    @pytest.mark.asyncio
+    async def test_sdk_transport_timeout_maps_to_builtin_timeout_error(
+        self, monkeypatch
+    ):
+        """When the SDK's own transport timer beats asyncio's wall clock.
+
+        `openai.APITimeoutError` is NOT a TimeoutError subclass. Unmapped,
+        it would fall into the generic `except Exception` handler and yield
+        error+done — the runner would end the turn loop normally and
+        publish `{stage}_done` instead of `agent_timeout` / `timed_out`.
+        """
+        openai = pytest.importorskip("openai")
+        httpx = pytest.importorskip("httpx")
+        from services.llm import openai_provider as op
+
+        assert not issubclass(openai.APITimeoutError, TimeoutError)
+
+        monkeypatch.setattr(
+            op,
+            "resolve_credentials",
+            lambda _n: MagicMock(token="fake", mode="api_key", extra={}),
+        )
+        provider = op.OpenAIProvider()
+
+        async def _sdk_timeout_create(**kwargs):
+            raise openai.APITimeoutError(
+                request=httpx.Request("POST", "https://api.openai.com/v1/responses")
+            )
+
+        fake_client = MagicMock()
+        fake_client.with_options.return_value = fake_client
+        fake_client.responses.create = _sdk_timeout_create
+        provider._client = fake_client
+
+        events = []
+        with pytest.raises(TimeoutError, match="openai"):
+            async for ev in provider.run(
+                prompt="p",
+                system_prompt="s",
+                model="gpt-5",
+                timeout_seconds=_BUDGET,
+            ):
+                events.append(ev)
+        # No error/done events — the run must NOT look finished.
+        assert events == []
+
 
 class TestGeminiProviderTimeout:
     @pytest.mark.asyncio
@@ -161,6 +212,86 @@ class TestLiteLLMProviderTimeout:
         assert time.monotonic() - start < 5
         # The per-attempt transport timeout still reaches litellm itself.
         assert captured["timeout"] == _BUDGET
+
+    @pytest.mark.asyncio
+    async def test_backend_timeout_maps_to_builtin_timeout_error(self, monkeypatch):
+        """When LiteLLM's own `timeout=` fires before asyncio's wall clock.
+
+        `litellm.Timeout` wraps `openai.APITimeoutError` — not a builtin
+        TimeoutError. It must be re-raised as TimeoutError so the runner
+        publishes `agent_timeout` instead of ending the run as done.
+        """
+        litellm = pytest.importorskip("litellm")
+        from services.llm import litellm_provider as lp
+
+        assert not issubclass(litellm.Timeout, TimeoutError)
+
+        monkeypatch.setattr(
+            lp,
+            "resolve_credentials",
+            lambda _n: MagicMock(token="fake", mode="api_key", extra={}),
+        )
+        provider = lp.LiteLLMProvider()
+
+        async def _timeout_acompletion(**kwargs):
+            raise litellm.Timeout(
+                "Request timed out",
+                model="groq/llama-3.3-70b",
+                llm_provider="groq",
+            )
+
+        fake_litellm = MagicMock()
+        fake_litellm.Timeout = litellm.Timeout
+        fake_litellm.acompletion = _timeout_acompletion
+        provider._litellm = fake_litellm
+
+        events = []
+        with pytest.raises(TimeoutError, match="litellm"):
+            async for ev in provider.run(
+                prompt="p",
+                system_prompt="s",
+                model="groq/llama-3.3-70b",
+                timeout_seconds=_BUDGET,
+            ):
+                events.append(ev)
+        # No error/done events — the run must NOT look finished.
+        assert events == []
+
+    @pytest.mark.asyncio
+    async def test_generic_error_still_yields_error_event(self, monkeypatch):
+        """Non-timeout failures keep the error+done contract.
+
+        Also pins the defensive type guard: the mocked module's `Timeout`
+        attribute is a MagicMock instance (not an exception class), and the
+        isinstance check must cope instead of raising TypeError.
+        """
+        from services.llm import litellm_provider as lp
+
+        monkeypatch.setattr(
+            lp,
+            "resolve_credentials",
+            lambda _n: MagicMock(token="fake", mode="api_key", extra={}),
+        )
+        provider = lp.LiteLLMProvider()
+
+        async def _boom(**kwargs):
+            raise RuntimeError("backend exploded")
+
+        fake_litellm = MagicMock()
+        fake_litellm.acompletion = _boom
+        provider._litellm = fake_litellm
+
+        events = [
+            ev
+            async for ev in provider.run(
+                prompt="p",
+                system_prompt="s",
+                model="groq/llama-3.3-70b",
+                timeout_seconds=_BUDGET,
+            )
+        ]
+        assert [ev.kind for ev in events] == ["error", "done"]
+        assert "backend exploded" in events[0].data["message"]
 
 
 class TestClaudeProviderTimeoutEnv:

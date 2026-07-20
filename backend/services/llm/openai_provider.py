@@ -30,6 +30,13 @@ from .base import LLMEvent, LLMProvider, ProviderCapabilities, enforce_wall_cloc
 
 logger = logging.getLogger(__name__)
 
+try:
+    # Only the exception type — the full SDK import stays lazy in
+    # `_make_sdk_client` (which raises ProviderUnavailable if missing).
+    from openai import APITimeoutError as _SDKTimeoutError
+except ImportError:  # pragma: no cover — without the SDK no call can raise it
+    _SDKTimeoutError = ()  # type: ignore[assignment]
+
 
 def _to_responses_tool(name: str, description: str, input_schema: dict) -> dict:
     """Responses API tool shape — flat, no `function:` nesting."""
@@ -245,6 +252,22 @@ class OpenAIProvider(LLMProvider):
                 "OpenAIProvider Responses call exceeded the wall-clock timeout"
             )
             raise
+        except _SDKTimeoutError as e:
+            # The per-request SDK timeout (`with_options` above) shares the
+            # wall-clock deadline, so it can fire a hair before asyncio's
+            # timer. `APITimeoutError` is NOT a builtin TimeoutError
+            # subclass — without this mapping it would fall into the
+            # generic handler below and the run would end as `{stage}_done`
+            # instead of `agent_timeout` / `timed_out` (issue #95).
+            logger.warning("OpenAIProvider Responses call hit the SDK timeout")
+            raise TimeoutError(
+                "openai LLM call timed out at the SDK transport layer"
+                + (
+                    f" ({timeout_seconds:g}s wall-clock budget)"
+                    if timeout_seconds and timeout_seconds > 0
+                    else ""
+                )
+            ) from e
         except Exception as e:
             logger.exception("OpenAIProvider Responses call failed")
             yield LLMEvent.error(str(e))
