@@ -9,6 +9,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from config import settings
+from schemas import UploadResponse
 from services.s3_client import get_s3_client, get_s3_external_endpoint
 from services.volume import should_ignore_workspace_path
 
@@ -113,8 +114,10 @@ async def generate_presigned_url(req: PresignRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/upload")
-async def upload_file(bucket: str, key: str, file: UploadFile = File(...)):
+@router.post("/upload", response_model=UploadResponse)
+async def upload_file(
+    bucket: str, key: str, file: UploadFile = File(...)
+) -> UploadResponse:
     # NOTE: authentication for this router is handled globally (issue #88);
     # this endpoint only enforces target validation and bounded streaming.
     _validate_bucket(bucket)
@@ -144,7 +147,7 @@ async def upload_file(bucket: str, key: str, file: UploadFile = File(...)):
         if not next_chunk:
             # Fits in a single bounded chunk — plain put_object.
             s3.put_object(Bucket=bucket, Key=key, Body=chunk, ContentType=content_type)
-            return {"status": "uploaded", "bucket": bucket, "key": key, "size": total}
+            return UploadResponse(bucket=bucket, key=key, size=total)
 
         # Larger body: stream through a multipart upload so we never hold
         # more than two chunks in memory.
@@ -179,7 +182,7 @@ async def upload_file(bucket: str, key: str, file: UploadFile = File(...)):
             except Exception as abort_err:  # pragma: no cover - best effort
                 logger.warning(f"S3 abort_multipart_upload: {abort_err}")
             raise
-        return {"status": "uploaded", "bucket": bucket, "key": key, "size": total}
+        return UploadResponse(bucket=bucket, key=key, size=total)
     except HTTPException:
         raise
     except Exception as e:
