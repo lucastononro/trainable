@@ -668,7 +668,7 @@ export interface CompareResponse {
   metrics: Record<string, CompareMetricSeries[]>;
   // Backend quirk: initialized as an empty list and only replaced with the
   // overlap object when at least one session has a prep summary.
-  feature_overlap: CompareFeatureOverlap | [];
+  feature_overlap: CompareFeatureOverlap | never[];
   totals: Record<string, CompareSessionTotals>;
 }
 
