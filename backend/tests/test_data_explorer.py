@@ -128,6 +128,46 @@ async def test_query_prep_data_invalid_sql(client, sample_csv, mock_volume_with_
 
 
 @pytest.mark.asyncio
+async def test_query_prep_data_rejects_forbidden_sql(
+    client, sample_csv, mock_volume_with_prep
+):
+    """_validate_query must reject non-SELECT statements and filesystem
+    functions before the query is offloaded to the executor thread."""
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "routers.data_explorer"):
+            stack.enter_context(p)
+
+        for sql in (
+            "DROP TABLE train",
+            "SELECT * FROM train; DELETE FROM train",
+            "SELECT * FROM read_parquet('/etc/passwd')",
+        ):
+            resp = await client.post(
+                "/api/sessions/test-session/prep/query",
+                json={"sql": sql},
+            )
+            assert resp.status_code == 400, sql
+
+
+@pytest.mark.asyncio
+async def test_query_prep_data_enforces_limit(
+    client, sample_csv, mock_volume_with_prep
+):
+    """A query without LIMIT gets the caller's limit appended (capped)."""
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "routers.data_explorer"):
+            stack.enter_context(p)
+
+        resp = await client.post(
+            "/api/sessions/test-session/prep/query",
+            json={"sql": "SELECT * FROM train", "limit": 3},
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["row_count"] == 3
+
+
+@pytest.mark.asyncio
 async def test_query_no_data(client, sample_csv):
     vol = MockVolume({})
 
