@@ -80,6 +80,7 @@ export const api = {
       name?: string;
       description?: string;
       sandbox_config?: SandboxConfig;
+      budget_usd?: number | null;
       training_config?: TrainingConfig;
     },
   ) =>

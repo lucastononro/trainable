@@ -73,7 +73,7 @@ import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import CostBadge, { UsageTotals } from '@/components/CostBadge';
 import InlineTasks from '@/components/InlineTasks';
-import type { UsageEvent } from '@/lib/types';
+import type { BudgetInfo, UsageEvent } from '@/lib/types';
 
 const ZERO_USAGE: UsageTotals = {
   cost_usd: 0,
@@ -258,6 +258,9 @@ export default function HomePage() {
   // Live usage totals for the active session (cost badge in header)
   const [usageTotals, setUsageTotals] = useState<UsageTotals>(ZERO_USAGE);
   const [recentUsage, setRecentUsage] = useState<UsageEvent[]>([]);
+  // Project budget vs. spend (issue #107) — hydrated with session usage,
+  // flipped to exceeded by the budget_exceeded SSE event.
+  const [budgetInfo, setBudgetInfo] = useState<BudgetInfo | null>(null);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -349,7 +352,8 @@ export default function HomePage() {
               if (
                 data.state.includes('done') ||
                 data.state === 'failed' ||
-                data.state === 'cancelled'
+                data.state === 'cancelled' ||
+                data.state === 'budget_exceeded'
               ) {
                 streamingItemIdRef.current = null;
                 setIsRunning(false);
@@ -600,6 +604,20 @@ export default function HomePage() {
             case 'agent_aborted':
               streamingItemIdRef.current = null;
               addItem({ type: 'status', content: 'Agent stopped' });
+              setIsRunning(false);
+              break;
+            case 'budget_exceeded':
+              // Hard-stop guardrail (#107): the runner halted the agent
+              // because project spend crossed its cap.
+              streamingItemIdRef.current = null;
+              addItem({ type: 'error', content: data.error });
+              setBudgetInfo({
+                project_id: data.project_id,
+                budget_usd: data.budget_usd ?? null,
+                spent_usd: data.spent_usd ?? 0,
+                remaining_usd: 0,
+                exceeded: true,
+              });
               setIsRunning(false);
               break;
             case 'metrics_batch': {
@@ -960,6 +978,7 @@ export default function HomePage() {
     activeAgentsRef.current = [];
     setUsageTotals(ZERO_USAGE);
     setRecentUsage([]);
+    setBudgetInfo(null);
     setTasks([]);
   }, [setIsRunning]);
 
@@ -1013,6 +1032,7 @@ export default function HomePage() {
             compute_runs: t.compute_runs || 0,
           });
           setRecentUsage(s.events ?? []);
+          setBudgetInfo(s.budget ?? null);
         })
         .catch(() => {
           /* historical usage is best-effort; live SSE will fill in */
@@ -1822,7 +1842,9 @@ export default function HomePage() {
 
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
-          {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
+          {hasActiveSession && (
+            <CostBadge totals={usageTotals} recent={recentUsage} budget={budgetInfo} />
+          )}
 
           {hasActiveSession && (
             <>

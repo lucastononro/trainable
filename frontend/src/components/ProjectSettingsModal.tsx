@@ -39,8 +39,10 @@ interface Props {
   isOpen: boolean;
   projectName: string;
   sandboxConfig: SandboxConfig;
+  /** Hard-stop USD spend cap for the project. null = uncapped. */
+  budgetUsd: number | null;
   trainingConfig: TrainingConfig;
-  onSave: (config: SandboxConfig, training: TrainingConfig) => void;
+  onSave: (config: SandboxConfig, budgetUsd: number | null, training: TrainingConfig) => void;
   onClose: () => void;
 }
 
@@ -102,6 +104,7 @@ export default function ProjectSettingsModal({
   isOpen,
   projectName,
   sandboxConfig,
+  budgetUsd,
   trainingConfig,
   onSave,
   onClose,
@@ -110,6 +113,8 @@ export default function ProjectSettingsModal({
   const [defaultTimeout, setDefaultTimeout] = useState(600);
   const [trainingGpu, setTrainingGpu] = useState('');
   const [trainingTimeout, setTrainingTimeout] = useState(1800);
+  // Budget kept as a string so the field can be emptied (= no limit).
+  const [budget, setBudget] = useState('');
 
   // Pre-flight training controls (issue #104). Empty string / empty list =
   // "no constraint" — the trainer agent keeps full autonomy.
@@ -127,6 +132,7 @@ export default function ProjectSettingsModal({
       setDefaultTimeout(d?.timeout ?? 600);
       setTrainingGpu(t?.gpu || '');
       setTrainingTimeout(t?.timeout ?? 1800);
+      setBudget(budgetUsd != null ? String(budgetUsd) : '');
       setOptimizationMetric(trainingConfig.optimization_metric || '');
       setModelFamilies(trainingConfig.model_families || []);
       setMaxTrials(trainingConfig.max_trials != null ? String(trainingConfig.max_trials) : '');
@@ -137,7 +143,7 @@ export default function ProjectSettingsModal({
       );
       setMaxCost(trainingConfig.max_cost_usd != null ? String(trainingConfig.max_cost_usd) : '');
     }
-  }, [isOpen, sandboxConfig, trainingConfig]);
+  }, [isOpen, sandboxConfig, budgetUsd, trainingConfig]);
 
   const toggleFamily = (value: string) => {
     setModelFamilies((prev) =>
@@ -167,6 +173,7 @@ export default function ProjectSettingsModal({
   };
 
   const handleSave = () => {
+    const parsed = parseFloat(budget);
     const parsePositive = (raw: string, integer = false): number | undefined => {
       const n = Number(raw);
       if (raw.trim() === '' || !Number.isFinite(n) || n <= 0) return undefined;
@@ -184,6 +191,7 @@ export default function ProjectSettingsModal({
         default: buildProfile(defaultGpu, defaultTimeout),
         training: buildProfile(trainingGpu, trainingTimeout),
       },
+      Number.isFinite(parsed) && parsed >= 0 ? parsed : null,
       training,
     );
     onClose();
@@ -247,6 +255,29 @@ export default function ProjectSettingsModal({
             Agents automatically select the right profile. The training profile is used when{' '}
             <code className="text-gray-500">heavy=true</code> is set on code execution.
           </p>
+
+          <div className="border-t border-white/[0.04]" />
+
+          <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">Budget</h3>
+          <div>
+            <div className="flex items-baseline gap-2 mb-2">
+              <h4 className="text-xs font-semibold text-gray-300">Spend cap (USD)</h4>
+              <span className="text-[11px] text-gray-600">whole project, LLM + compute</span>
+            </div>
+            <input
+              type="number"
+              min={0}
+              step="0.5"
+              value={budget}
+              onChange={(e) => setBudget(e.target.value)}
+              placeholder="No limit"
+              className="w-full px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-xs text-white focus:outline-none focus:border-blue-500/50 transition-colors"
+            />
+            <p className="text-[11px] text-gray-600 mt-2">
+              Hard stop: agents halt as soon as the project&apos;s accumulated spend crosses this
+              cap. Leave empty for no limit.
+            </p>
+          </div>
 
           <div className="border-t border-white/[0.06]" />
 

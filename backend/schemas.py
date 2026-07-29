@@ -154,6 +154,8 @@ class ProjectCreate(BaseModel):
     name: Optional[str] = Field(default=None, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
     sandbox_config: Optional[SandboxConfig] = None
+    # Hard-stop USD spend cap for the project. None = uncapped.
+    budget_usd: Optional[float] = Field(default=None, ge=0.0, le=1_000_000)
     training_config: Optional[TrainingConfig] = None
 
 
@@ -222,6 +224,9 @@ class ProjectUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)
     sandbox_config: Optional[SandboxConfig] = None
+    # PATCH semantics: omit to leave unchanged; send explicit null to clear
+    # the cap (the router checks model_fields_set to tell the two apart).
+    budget_usd: Optional[float] = Field(default=None, ge=0.0, le=1_000_000)
     training_config: Optional[TrainingConfig] = None
 
 

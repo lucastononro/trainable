@@ -75,6 +75,10 @@ class Project(Base):
     description = Column(Text, default="")
     created_at = Column(String, default=lambda: utcnow().isoformat())
     sandbox_config = Column(JSON, default=dict)
+    # Hard-stop spend cap in USD across the whole project (LLM + sandbox
+    # compute, summed over usage_events). NULL = uncapped. Enforced by
+    # services/budget.py via the agent runner.
+    budget_usd = Column(Float, nullable=True)
     # Pre-flight training controls (metric, model families, trial budget,
     # wall-clock/cost cap) — see schemas.TrainingConfig. Empty dict = the
     # trainer agent keeps full autonomy.
@@ -118,6 +122,7 @@ class Project(Base):
             "name": self.name,
             "description": self.description or "",
             "sandbox_config": self.sandbox_config or {},
+            "budget_usd": self.budget_usd,
             "training_config": self.training_config or {},
             "created_at": self.created_at,
             "updated_at": self.updated_at,

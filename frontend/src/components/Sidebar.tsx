@@ -518,10 +518,16 @@ export default function Sidebar() {
   }, []);
 
   const handleSaveProjectSettings = useCallback(
-    async (projectId: string, config: SandboxConfig, training: TrainingConfig) => {
+    async (
+      projectId: string,
+      config: SandboxConfig,
+      budgetUsd: number | null,
+      training: TrainingConfig,
+    ) => {
       try {
         await api.updateProject(projectId, {
           sandbox_config: config,
+          budget_usd: budgetUsd,
           training_config: training,
         });
         await refreshProjects();
@@ -924,9 +930,11 @@ export default function Sidebar() {
             isOpen={settingsProjectId !== null}
             projectName={settingsProject?.name ?? ''}
             sandboxConfig={settingsProject?.sandbox_config ?? {}}
+            budgetUsd={settingsProject?.budget_usd ?? null}
             trainingConfig={settingsProject?.training_config ?? {}}
-            onSave={(config, training) => {
-              if (settingsProjectId) handleSaveProjectSettings(settingsProjectId, config, training);
+            onSave={(config, budgetUsd, training) => {
+              if (settingsProjectId)
+                handleSaveProjectSettings(settingsProjectId, config, budgetUsd, training);
             }}
             onClose={() => setSettingsProjectId(null)}
           />

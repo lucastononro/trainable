@@ -23,6 +23,8 @@ export interface Project {
   name: string;
   description: string;
   sandbox_config: SandboxConfig;
+  /** Hard-stop USD spend cap across the whole project. null = uncapped. */
+  budget_usd?: number | null;
   training_config: TrainingConfig;
   created_at: string;
   updated_at: string;
@@ -411,6 +413,17 @@ export interface UsageSummary {
   }>;
   by_session: SessionUsageRow[];
   events: UsageEvent[];
+  /** Project-level budget vs. accumulated spend. null when the session has
+   *  no resolvable project. spent_usd is the WHOLE project's spend. */
+  budget?: BudgetInfo | null;
+}
+
+export interface BudgetInfo {
+  project_id: string;
+  budget_usd: number | null;
+  spent_usd: number;
+  remaining_usd: number | null;
+  exceeded: boolean;
 }
 
 export interface SkillCatalogEntry {
