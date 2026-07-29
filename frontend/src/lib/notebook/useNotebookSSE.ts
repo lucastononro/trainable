@@ -56,13 +56,17 @@ export function useNotebookSSE(
   useEffect(() => {
     if (!sessionId || !enabled) return;
 
-    const handler = (msg: SSEEvent) => {
+    const handler = (eventSessionId: string, msg: SSEEvent) => {
+      // The bus is page-global while the old EventSource-per-hook design was
+      // implicitly session-scoped: during a session switch, events from the
+      // new connection can be published before React flushes this effect's
+      // cleanup. Drop anything not belonging to our session.
+      if (eventSessionId !== sessionId) return;
       const type = msg?.type as string | undefined;
       if (!type || !type.startsWith('notebook.')) return;
       const data = (msg.data ?? {}) as any;
       const h = handlersRef.current;
-      const belongsToThisNotebook =
-        !filterRef.current || data.notebook_name === filterRef.current;
+      const belongsToThisNotebook = !filterRef.current || data.notebook_name === filterRef.current;
 
       switch (type) {
         case 'notebook.kernel.state':

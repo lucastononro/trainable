@@ -115,6 +115,17 @@ class ClaudeProvider(LLMProvider):
     ) -> AsyncIterator[LLMEvent]:
         tool_names = [t["name"] if isinstance(t, dict) else t for t in (tools or [])]
 
+        # `query()` runs the whole multi-turn loop internally — including MCP
+        # tool execution — so wrapping it in asyncio.wait_for would count
+        # tool time against the LLM budget (exactly what the runner
+        # deliberately stopped doing; the sandbox timeout governs tools).
+        # Instead, bound each *individual provider HTTP request* via Claude
+        # Code's API_TIMEOUT_MS so a stalled network call fails that one
+        # request without capping tool execution.
+        env = dict(kwargs.get("env") or {})
+        if timeout_seconds and timeout_seconds > 0:
+            env.setdefault("API_TIMEOUT_MS", str(int(timeout_seconds * 1000)))
+
         options = ClaudeAgentOptions(
             system_prompt=system_prompt,
             model=model,
@@ -123,7 +134,7 @@ class ClaudeProvider(LLMProvider):
             tools=tool_names,
             allowed_tools=tool_names,
             mcp_servers=mcp_servers or {},
-            env=kwargs.get("env", {}),
+            env=env,
         )
 
         # Per-turn usage accumulator keyed by model name. Required so
