@@ -66,7 +66,9 @@ def captured_exec(monkeypatch):
     return calls
 
 
-def test_up_fails_friendly_when_daemon_down(config_dir, _docker_daemon_down, captured_exec, capsys):
+def test_up_fails_friendly_when_daemon_down(
+    config_dir, _docker_daemon_down, captured_exec, capsys
+):
     with pytest.raises(SystemExit) as exc:
         cmd_up()
     assert exc.value.code == 1
@@ -74,7 +76,9 @@ def test_up_fails_friendly_when_daemon_down(config_dir, _docker_daemon_down, cap
     assert "daemon is not running" in capsys.readouterr().out
 
 
-def test_down_fails_friendly_when_daemon_down(config_dir, _docker_daemon_down, captured_exec):
+def test_down_fails_friendly_when_daemon_down(
+    config_dir, _docker_daemon_down, captured_exec
+):
     with pytest.raises(SystemExit) as exc:
         cmd_down()
     assert exc.value.code == 1

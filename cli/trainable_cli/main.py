@@ -98,9 +98,7 @@ def _write_compose_template(dest: Path) -> None:
     Called on every `trainable init` *and* every `trainable up` so existing
     installs migrate to the env-var-tag-aware compose layout automatically.
     """
-    template = resources.files("trainable_cli").joinpath(
-        "_templates", COMPOSE_FILE
-    )
+    template = resources.files("trainable_cli").joinpath("_templates", COMPOSE_FILE)
     (dest / COMPOSE_FILE).write_text(template.read_text(encoding="utf-8"))
 
 
