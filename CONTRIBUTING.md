@@ -77,6 +77,6 @@ All tests must pass before submitting a PR.
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/lucastononro/trainable-monorepo/issues)
+- Use [GitHub Issues](https://github.com/lucastononro/trainable/issues)
 - Include steps to reproduce, expected vs actual behavior, and environment details
 - For security vulnerabilities, please email the maintainer directly instead of opening a public issue
