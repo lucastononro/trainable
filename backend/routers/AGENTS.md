@@ -17,6 +17,7 @@ lineage.py        Lineage graph endpoints (raw → processed → model)
 notebook.py       Notebook read/write/run
 files.py          Session/project file tree + download
 s3_browser.py     S3 prefix listing
+samples.py        Bundled sample-dataset catalog + one-click project-from-sample
 skills.py         Skill catalog (for the UI's "available tools" panel)
 stream.py         SSE — the single subscription endpoint
 usage.py          Token + cost rollups

@@ -25,6 +25,7 @@ from routers import (
     projects,
     registry,
     s3_browser,
+    samples,
     sessions,
     skills as skills_router,
     snapshots,
@@ -114,6 +115,7 @@ app.include_router(registry.router, prefix="/api")
 app.include_router(compare.router, prefix="/api")
 app.include_router(snapshots.router, prefix="/api")
 app.include_router(lineage.router, prefix="/api")
+app.include_router(samples.router, prefix="/api")
 
 
 @app.get("/api/health")

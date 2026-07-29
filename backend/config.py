@@ -130,6 +130,12 @@ class Settings(BaseSettings):
     # -- Upload limits --
     max_upload_size_bytes: int = 500 * 1024 * 1024  # 500 MB
 
+    # -- Sample datasets --
+    # Directory holding the bundled sample datasets (repo-root `sample-data/`).
+    # When unset, well-known locations are probed (repo checkout sibling of
+    # backend/, or /app/sample-data inside the container).
+    sample_data_dir: Optional[str] = None
+
     # -- Data explorer --
     query_default_limit: int = 100
     query_max_limit: int = 1000

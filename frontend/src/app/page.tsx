@@ -20,6 +20,7 @@ import {
   TaskEventData,
 } from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
+import { takeSuggestedPrompt } from '@/lib/suggestedPrompt';
 import {
   ImperativePanelHandle,
   Panel,
@@ -289,6 +290,17 @@ export default function HomePage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatItems]);
+
+  // Seed the chat input with the suggested prompt handed off by the
+  // sample-dataset gallery (first-run flow). Consumed exactly once, and
+  // never clobbers something the user already typed.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const prompt = takeSuggestedPrompt(activeSessionId);
+    if (!prompt) return;
+    setDraft((prev) => (isDraftEmpty(prev) ? [{ kind: 'text', value: prompt }] : prev));
+    inputRef.current?.focus();
+  }, [activeSessionId]);
 
   // ---------------------------------------------------------------------------
   // addItem helper

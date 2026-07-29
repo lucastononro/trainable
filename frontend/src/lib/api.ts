@@ -34,6 +34,8 @@ import type {
   ExperimentFullDetail,
   CompareResponse,
   RawDatasetPreview,
+  SampleDataset,
+  CreateProjectFromSampleResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -61,6 +63,15 @@ export const api = {
     }),
 
   getProject: (id: string) => fetchJSON<ProjectDetail>(`/projects/${id}`),
+
+  // Sample datasets (first-run gallery)
+  listSamples: () => fetchJSON<SampleDataset[]>('/samples'),
+
+  createProjectFromSample: (sampleId: string, name?: string) =>
+    fetchJSON<CreateProjectFromSampleResponse>('/projects/from-sample', {
+      method: 'POST',
+      body: JSON.stringify({ sample_id: sampleId, ...(name ? { name } : {}) }),
+    }),
 
   updateProject: (
     id: string,
