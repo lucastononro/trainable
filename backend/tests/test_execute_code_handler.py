@@ -143,6 +143,42 @@ class TestEventPayload:
         assert payload["gpu"] == "T4"
         assert payload["timeout"] == 120
 
+    @pytest.mark.asyncio
+    async def test_denied_gpu_emits_tool_start_before_tool_end(self, handler_mod):
+        """The UI's active-tool state machine needs the start/end pair in
+        order — a denial must not emit an orphaned tool_end."""
+        handler, publish = _make_handler(handler_mod, CONFIG)
+        await handler({"code": "x", "gpu": "H100"})
+        events = [
+            c.args[1]
+            for c in publish.await_args_list
+            if c.args[1] in ("tool_start", "tool_end")
+        ]
+        assert events == ["tool_start", "tool_end"]
+
+
+class TestOwnerMaxTimeout:
+    """An owner-set max_timeout caps EVERY execution, including the
+    profile fallback (heavy=True without an explicit `timeout=`)."""
+
+    OWNER_CAPPED = {
+        "default": {"gpu": None, "timeout": 600},
+        "training": {"gpu": "A10G", "timeout": 1800},
+        "max_timeout": 100,
+    }
+
+    @pytest.mark.asyncio
+    async def test_profile_timeout_capped_by_owner_max(self, handler_mod):
+        handler, _ = _make_handler(handler_mod, self.OWNER_CAPPED)
+        await handler({"code": "x", "heavy": True})
+        assert handler_mod.run_code.await_args.kwargs["timeout"] == 100
+
+    @pytest.mark.asyncio
+    async def test_default_fallback_capped_by_owner_max(self, handler_mod):
+        handler, _ = _make_handler(handler_mod, {"max_timeout": 100})
+        await handler({"code": "x"})
+        assert handler_mod.run_code.await_args.kwargs["timeout"] == 100
+
 
 class TestNoConfig:
     @pytest.mark.asyncio

@@ -261,11 +261,15 @@ def _gpu_hourly_usd(gpu: str) -> float | None:
     """Approx $/hr for a canonical label on the active provider; None when
     pricing is unavailable (the prompt then omits prices)."""
     try:
+        # Private import on purpose: sandbox.yml rate resolution has no
+        # public API yet. A signature/name change there degrades to
+        # price-less prompts — logged below so it isn't invisible.
         from services.usage import _resolve_compute_rate
 
         rate = _resolve_compute_rate(settings.compute_provider, gpu)
         return rate * 3600 if rate > 0 else None
-    except Exception:
+    except Exception as e:
+        logger.debug("GPU pricing unavailable for %s: %s", gpu, e)
         return None
 
 

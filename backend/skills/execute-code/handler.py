@@ -8,6 +8,7 @@ import time
 
 import modal.exception as modal_exc
 
+from config import settings
 from services.compute.base import SandboxTimeoutError
 from services.compute_allowance import (
     clamp_timeout,
@@ -103,6 +104,20 @@ def create_handler(
                     f"Re-call execute-code with one of those values, or omit "
                     f"`gpu` to use the {profile_key} profile."
                 )
+                # tool_start before tool_end — every other path in this
+                # handler emits the pair in order, and the UI's active-tool
+                # state machine depends on it.
+                await publish_fn(
+                    session_id,
+                    "tool_start",
+                    {
+                        "tool": "execute_code",
+                        "input": {"code": code[:500], "heavy": heavy},
+                        "gpu": requested_gpu,
+                        "timeout": timeout,
+                    },
+                    role="tool",
+                )
                 await publish_fn(
                     session_id,
                     "tool_end",
@@ -121,6 +136,12 @@ def create_handler(
             clamped = clamp_timeout(requested_timeout, allowance)
             if clamped is not None:
                 timeout = clamped
+
+        # An owner-set max_timeout caps EVERY execution — including the
+        # profile fallback (heavy=True without an explicit `timeout=`) and
+        # the sandbox default. When max_timeout is profile-derived this is
+        # a no-op (it is the max of the profile timeouts and the default).
+        timeout = min(timeout or settings.sandbox_timeout, allowance.max_timeout)
 
         await publish_fn(
             session_id,
