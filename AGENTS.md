@@ -42,7 +42,8 @@ frontend (Next.js)  ─ SSE ─►  backend (FastAPI)  ──►  Modal sandboxe
 
 ## How to contribute (PR workflow)
 
-1. **Branch from `main`** (or the current release branch if a release is in flight). Branch name uses `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `ci/` prefixes.
+0. **Merge to staging, always.** Integration happens on the current staging branch (`staging-v0.0.5`), never directly on `main`. Branch from staging, open PRs with staging as base, and record each merge in the staging ledger (`STAGING-v0.0.5.md` on that branch) so the consolidation stays backtrackable. `main` only moves when a staging branch is promoted as a release.
+1. **Branch from the staging branch** (per rule 0). Branch name uses `feat/`, `fix/`, `refactor/`, `docs/`, `test/`, `ci/` prefixes.
 2. **Open an issue first** for anything beyond a small fix. The issue is where scope gets pinned; the PR is where code lands. We've burned weeks on PRs whose scope drifted because no issue anchored it.
 3. **Keep PRs reviewable.** Soft cap: <500 lines diff, single concern. If you're at 1000+ lines or touching unrelated areas, split.
 4. **Commit message uses conventional commits** (`feat:`, `fix:`, `refactor:`, etc.). The body explains the *why*, not the *what*.
