@@ -1,23 +1,44 @@
-"""Tests for db._run_migrations — the ALTER-TABLE upgrade path for
-existing databases (create_all covers fresh DBs; this covers upgrades)."""
+"""Tests for the deployments provider-columns Alembic revision (PR #145).
 
-import os
+Fresh DBs get `provider` / `provider_endpoint_id` from a plain
+`alembic upgrade head`; legacy (pre-Alembic) DBs are stamped at the
+initial revision and then upgraded (see `db._run_alembic_sync`), so the
+ALTERs reach them too — with existing rows backfilled to provider='modal'.
+Covers both paths plus idempotency.
+"""
+
 import sqlite3
-import tempfile
 
 import pytest
 from sqlalchemy import create_engine, inspect, text
 
-from db import _run_migrations
+from db import _LEGACY_SCHEMA_MARKER_TABLES, _run_alembic_sync
 
 
-@pytest.fixture
-def legacy_engine():
-    """A file-backed sqlite DB shaped like a pre-multi-provider install:
-    deployments exists WITHOUT provider / provider_endpoint_id."""
-    fd, path = tempfile.mkstemp(suffix=".db")
-    os.close(fd)
-    raw = sqlite3.connect(path)
+@pytest.fixture()
+def _sqlite_file_db(tmp_path, monkeypatch):
+    """Point settings.database_url at a fresh file-backed SQLite DB (same
+    redirect mechanism as tests/test_alembic_migrations.py)."""
+    from config import settings
+
+    db_path = tmp_path / "deployments_provider_test.db"
+    monkeypatch.setattr(settings, "database_url", f"sqlite+aiosqlite:///{db_path}")
+    return db_path
+
+
+def _deployment_cols(db_path):
+    engine = create_engine(f"sqlite:///{db_path}")
+    with engine.connect() as conn:
+        return [c["name"] for c in inspect(conn).get_columns("deployments")]
+
+
+def _create_legacy_db(db_path):
+    """Shape a pre-multi-provider install: the full legacy marker set plus
+    a deployments table WITHOUT provider / provider_endpoint_id, holding
+    one live Modal-era row."""
+    raw = sqlite3.connect(db_path)
+    for name in _LEGACY_SCHEMA_MARKER_TABLES:
+        raw.execute(f'CREATE TABLE "{name}" (id INTEGER PRIMARY KEY)')
     raw.execute(
         """CREATE TABLE deployments (
             id VARCHAR(36) PRIMARY KEY,
@@ -37,39 +58,44 @@ def legacy_engine():
     )
     raw.commit()
     raw.close()
-    engine = create_engine(f"sqlite:///{path}")
-    yield engine
-    engine.dispose()
-    os.unlink(path)
 
 
 class TestDeploymentProviderMigration:
-    def test_adds_provider_columns(self, legacy_engine):
-        with legacy_engine.begin() as conn:
-            _run_migrations(conn)
-        with legacy_engine.connect() as conn:
-            cols = [c["name"] for c in inspect(conn).get_columns("deployments")]
-            assert "provider" in cols
-            assert "provider_endpoint_id" in cols
+    def test_fresh_upgrade_head_adds_provider_columns(self, _sqlite_file_db):
+        # Sync on purpose: _run_alembic_sync drives its own event loop.
+        _run_alembic_sync(stamp_only=False)
 
-    def test_existing_rows_default_to_modal(self, legacy_engine):
-        with legacy_engine.begin() as conn:
-            _run_migrations(conn)
-        with legacy_engine.connect() as conn:
+        cols = _deployment_cols(_sqlite_file_db)
+        assert "provider" in cols
+        assert "provider_endpoint_id" in cols
+
+    def test_legacy_stamp_then_upgrade_adds_columns(self, _sqlite_file_db):
+        _create_legacy_db(_sqlite_file_db)
+        _run_alembic_sync(stamp_only=True)
+
+        cols = _deployment_cols(_sqlite_file_db)
+        assert "provider" in cols
+        assert "provider_endpoint_id" in cols
+
+    def test_legacy_rows_backfill_to_modal(self, _sqlite_file_db):
+        _create_legacy_db(_sqlite_file_db)
+        _run_alembic_sync(stamp_only=True)
+
+        engine = create_engine(f"sqlite:///{_sqlite_file_db}")
+        with engine.connect() as conn:
             provider, endpoint_id = conn.execute(
                 text(
                     "SELECT provider, provider_endpoint_id "
                     "FROM deployments WHERE id='d1'"
                 )
             ).one()
-            assert provider == "modal"
-            assert endpoint_id is None
+        assert provider == "modal"
+        assert endpoint_id is None
 
-    def test_idempotent(self, legacy_engine):
-        with legacy_engine.begin() as conn:
-            _run_migrations(conn)
-        with legacy_engine.begin() as conn:
-            _run_migrations(conn)  # second run must not raise
-        with legacy_engine.connect() as conn:
-            cols = [c["name"] for c in inspect(conn).get_columns("deployments")]
-            assert cols.count("provider") == 1
+    def test_upgrade_is_idempotent(self, _sqlite_file_db):
+        _create_legacy_db(_sqlite_file_db)
+        _run_alembic_sync(stamp_only=True)
+        _run_alembic_sync(stamp_only=False)  # second boot: plain upgrade, no-op
+
+        cols = _deployment_cols(_sqlite_file_db)
+        assert cols.count("provider") == 1

@@ -98,6 +98,13 @@ export interface NotebookCreatedEvent {
   notebook_name: string;
   notebook_path: string;
 }
+export interface StructureChangedEvent {
+  reason: 'agent_append' | string;
+  notebook_name: string;
+  notebook_path?: string;
+  cell_id?: string;
+  total_cells?: number;
+}
 
 export interface NotebookListItem {
   name: string;
