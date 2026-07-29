@@ -251,6 +251,7 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06] shrink-0">
           {previewFile ? (
             <button
+              type="button"
               onClick={() => setPreviewFile(null)}
               title="Back to file list"
               className="p-1.5 rounded-lg hover:bg-white/[0.06] text-gray-500 hover:text-gray-300 transition-colors"
@@ -281,9 +282,7 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {previewFile && (
-            <DatasetPreviewPanel projectId={projectId} path={previewFile.path} />
-          )}
+          {previewFile && <DatasetPreviewPanel projectId={projectId} path={previewFile.path} />}
           {!previewFile && loading && (
             <div className="flex items-center gap-2 text-sm text-gray-500 py-8 justify-center">
               <Loader2 className="w-4 h-4 animate-spin" />
@@ -293,7 +292,7 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
           {!previewFile && error && !loading && (
             <div className="text-sm text-red-400 py-4">Error: {error}</div>
           )}
-          {!previewFile && !loading && !error &&s3Error && (
+          {!previewFile && !loading && !error && s3Error && (
             <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-300">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
@@ -302,24 +301,29 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               </div>
             </div>
           )}
-          {!previewFile && !loading && !error &&files && sandboxChecked && sandboxMissingCount > 0 && (
-            <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-              <div>
-                <div className="font-medium">
-                  {sandboxMissingCount} file{sandboxMissingCount === 1 ? '' : 's'} not yet synced to
-                  the agent sandbox.
-                </div>
-                <div className="text-amber-400/70 mt-0.5">
-                  The upload reached storage but the Modal Volume didn&apos;t pick it up — agents
-                  won&apos;t see these files yet. Try re-uploading, or check backend logs for{' '}
-                  <code className="px-1 bg-black/40 rounded">Modal Volume upload failed</code>{' '}
-                  entries.
+          {!previewFile &&
+            !loading &&
+            !error &&
+            files &&
+            sandboxChecked &&
+            sandboxMissingCount > 0 && (
+              <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-medium">
+                    {sandboxMissingCount} file{sandboxMissingCount === 1 ? '' : 's'} not yet synced
+                    to the agent sandbox.
+                  </div>
+                  <div className="text-amber-400/70 mt-0.5">
+                    The upload reached storage but the Modal Volume didn&apos;t pick it up — agents
+                    won&apos;t see these files yet. Try re-uploading, or check backend logs for{' '}
+                    <code className="px-1 bg-black/40 rounded">Modal Volume upload failed</code>{' '}
+                    entries.
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-          {!previewFile && !loading && !error &&files && files.length === 0 && (
+            )}
+          {!previewFile && !loading && !error && files && files.length === 0 && (
             <div className="text-center py-12">
               <FolderOpen className="w-10 h-10 text-gray-700 mx-auto mb-3" />
               <p className="text-sm text-gray-400">No data uploaded in this project yet.</p>
@@ -328,7 +332,7 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               </p>
             </div>
           )}
-          {!previewFile && !loading && !error &&files && files.length > 0 && (
+          {!previewFile && !loading && !error && files && files.length > 0 && (
             <div className="space-y-5">
               {groups.map((group) => (
                 <FolderGroup

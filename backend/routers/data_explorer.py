@@ -1,15 +1,10 @@
 """Data exploration endpoints using DuckDB for querying processed parquet files."""
 
 import asyncio
-import datetime
-import decimal
 import io
 import logging
-import math
-import os
 import posixpath
 import re
-import tempfile
 
 import duckdb
 import pyarrow.parquet as pq
@@ -21,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from db import async_session, get_db
 from models import Artifact, ProcessedDatasetMeta, Project
 from schemas import RawDatasetPreview
+from services.dataset_preview import profile_raw_file
 from services.volume import (
     listdir_async,
     read_volume_file_async,
@@ -255,92 +251,6 @@ def _validate_raw_dataset_path(project_id: str, path: str) -> str:
     return normalized
 
 
-def _json_safe(value):
-    """Coerce a DuckDB cell value into something JSON-serializable."""
-    if value is None or isinstance(value, (bool, int, str)):
-        return value
-    if isinstance(value, float):
-        return value if math.isfinite(value) else None
-    if isinstance(value, decimal.Decimal):
-        f = float(value)
-        return f if math.isfinite(f) else None
-    if isinstance(value, (bytes, bytearray)):
-        return value.hex()
-    if isinstance(value, (datetime.datetime, datetime.date, datetime.time)):
-        return value.isoformat()
-    return str(value)
-
-
-def _missing_pct(null_percentage) -> float:
-    """Normalize DuckDB SUMMARIZE null_percentage across versions.
-
-    Newer DuckDB returns a DECIMAL percent (e.g. 25.00); older versions
-    returned a VARCHAR like "25.0%".
-    """
-    if null_percentage is None:
-        return 0.0
-    if isinstance(null_percentage, str):
-        null_percentage = null_percentage.rstrip("%").strip() or "0"
-    pct = float(null_percentage)
-    return min(max(pct, 0.0), 100.0)
-
-
-def _profile_raw_file(raw: bytes, suffix: str, limit: int) -> dict:
-    """Scan raw file bytes with DuckDB: head rows + per-column quick profile.
-
-    CPU-bound and blocking — always call via `asyncio.to_thread` (issue #93:
-    a large sync scan on the event loop freezes SSE for every session).
-    """
-    tmp_path: str | None = None
-    con = duckdb.connect(":memory:")
-    try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(raw)
-            tmp_path = tmp.name
-
-        reader = "read_parquet" if suffix == ".parquet" else "read_csv_auto"
-        # Materialize before disabling external access so user-visible
-        # queries below never touch the filesystem.
-        con.execute(f"CREATE TABLE raw AS SELECT * FROM {reader}(?)", [tmp_path])
-        con.execute("SET enable_external_access = false")
-
-        row_count: int = con.execute("SELECT COUNT(*) FROM raw").fetchone()[0]
-
-        # One-scan profile: dtype, approx cardinality, and missing % per column.
-        summary = con.execute("SUMMARIZE raw")
-        summary_cols = [d[0] for d in summary.description]
-        columns = []
-        for row in summary.fetchall():
-            info = dict(zip(summary_cols, row))
-            columns.append(
-                {
-                    "name": info["column_name"],
-                    "dtype": info["column_type"],
-                    "missing_pct": _missing_pct(info.get("null_percentage")),
-                    "unique_count": int(info.get("approx_unique") or 0),
-                }
-            )
-
-        head = con.execute("SELECT * FROM raw LIMIT ?", [limit])
-        head_columns = [d[0] for d in head.description]
-        head_rows = [[_json_safe(v) for v in row] for row in head.fetchall()]
-
-        return {
-            "row_count": row_count,
-            "column_count": len(head_columns),
-            "columns": columns,
-            "head_columns": head_columns,
-            "head_rows": head_rows,
-        }
-    finally:
-        con.close()
-        if tmp_path:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-
-
 @router.get("/projects/{project_id}/datasets/preview", response_model=RawDatasetPreview)
 async def preview_raw_dataset(
     project_id: str,
@@ -375,9 +285,12 @@ async def preview_raw_dataset(
         raise HTTPException(status_code=404, detail=f"File not found: {normalized}")
 
     try:
-        profile = await asyncio.to_thread(_profile_raw_file, raw, ext, limit)
-    except Exception as e:
+        profile = await asyncio.to_thread(profile_raw_file, raw, ext, limit)
+    except duckdb.Error as e:
+        # Unparseable/unsupported input file — a client-visible 400.
         raise HTTPException(status_code=400, detail=f"Preview error: {e}")
+    # Anything else (OSError, MemoryError, ...) is a server-side failure and
+    # propagates as a 500 instead of a misleading 400.
 
     return RawDatasetPreview(
         path=normalized,

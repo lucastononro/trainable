@@ -93,10 +93,10 @@ export const api = {
     }>(`/projects/${id}/files`),
 
   /** Raw (pre-prep) preview + quick profile of an uploaded CSV/TSV/Parquet. */
-  previewProjectDataset: (projectId: string, path: string, limit = 50) =>
-    fetchJSON<RawDatasetPreview>(
-      `/projects/${projectId}/datasets/preview?path=${encodeURIComponent(path)}&limit=${limit}`,
-    ),
+  previewProjectDataset: (projectId: string, path: string, limit = 50) => {
+    const qs = new URLSearchParams({ path, limit: String(limit) });
+    return fetchJSON<RawDatasetPreview>(`/projects/${projectId}/datasets/preview?${qs.toString()}`);
+  },
 
   // Experiments
   listExperiments: (params?: {
