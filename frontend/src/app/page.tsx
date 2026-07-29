@@ -2738,7 +2738,7 @@ const FileViewer = memo(function FileViewer({
           </SyntaxHighlighter>
         ) : isMarkdown ? (
           <div className="p-6 markdown-content">
-            <ErrorBoundary label="this file">
+            <ErrorBoundary key={filePath} label="this file">
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
