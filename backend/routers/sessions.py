@@ -14,10 +14,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import async_session, get_db
+from errors import capture_exception
 from models import Artifact, Experiment, LogEvent, Message, Metric, Task
 from models import Session as SessionModel
-from schemas import ClarificationReply, MessageCreate, TaskCreate, TaskUpdate
+from schemas import (
+    ApprovalReply,
+    ClarificationReply,
+    MessageCreate,
+    SessionResume,
+    TaskCreate,
+    TaskUpdate,
+)
+from services import approvals as approvals_svc
 from services.agent import abort_agent, run_agent
+from services.agent.resume import (
+    build_resume_context,
+    build_resume_prompt,
+    is_resumable_state,
+)
 from services.agent.tasks import is_agent_running, register_task
 from services.broadcaster import broadcaster
 from services.clarifications import list_pending, resolve as resolve_clarification
@@ -136,6 +150,11 @@ async def send_message(
         if session.experiment and session.experiment.project:
             sandbox_config = session.experiment.project.sandbox_config or {}
 
+        # HITL approval gates (issue #108): assert the per-session flag from
+        # the message's toggle state on every launch. Omitted/False keeps the
+        # default (gates off) — the runner's injection is a no-op then.
+        approvals_svc.set_enabled(session_id, bool(body.approvals))
+
         # Mark the session "running" eagerly so the sidebar spinner + the
         # restore-on-tab-switch path both see the live state. Completion /
         # failure / cancellation paths below overwrite this.
@@ -168,7 +187,16 @@ async def send_message(
                     if s and s.state != "cancelled":
                         s.state = "cancelled"
                         await fresh_db.commit()
-            except Exception:
+            except Exception as exc:
+                # This runs outside the request lifecycle (fire-and-forget
+                # asyncio.Task), so FastAPI's generic_exception_handler never
+                # sees it — report to Sentry explicitly here, no-op without a
+                # DSN configured.
+                logger.exception(
+                    "Unhandled error in background agent run for session %s",
+                    session_id,
+                )
+                capture_exception(exc)
                 async with async_session() as fresh_db:
                     s = await fresh_db.get(SessionModel, session_id)
                     if s:
@@ -213,6 +241,109 @@ async def abort_session(session_id: str, db: AsyncSession = Depends(get_db)):
     return {"status": "not_running"}
 
 
+@router.post("/sessions/{session_id}/resume")
+async def resume_session(
+    session_id: str,
+    body: SessionResume | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """Resume or retry an interrupted session without re-driving the chat.
+
+    Relaunches the agent with the prior conversation, persisted tool history,
+    task state, and the workspace file listing injected (see
+    services/agent/resume.py) so steps whose artifacts already exist on the
+    volume are skipped rather than redone.
+    """
+    body = body or SessionResume()
+    result = await db.execute(
+        select(SessionModel)
+        .where(SessionModel.id == session_id)
+        .options(selectinload(SessionModel.experiment).selectinload(Experiment.project))
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    if is_agent_running(session_id):
+        raise HTTPException(
+            status_code=409,
+            detail="An agent is already running in this session — abort it first "
+            "or wait for it to finish.",
+        )
+
+    prior_state = session.state or "created"
+    if not is_resumable_state(prior_state):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Session state '{prior_state}' has no prior run to resume.",
+        )
+
+    resume_context = await build_resume_context(session_id, prior_state)
+    resume_prompt = build_resume_prompt(prior_state, body.mode)
+
+    # Capture experiment context before the DB session closes (mirrors
+    # send_message's follow-up launch).
+    stage = "chat"
+    experiment_id = session.experiment_id
+    dataset_ref = session.experiment.dataset_ref or "" if session.experiment else ""
+    instructions = session.experiment.instructions or "" if session.experiment else ""
+    selected_model = body.model or session.model
+    agent_models = body.agent_models or {}
+    agent_thinking = body.agent_thinking or {}
+    sandbox_config = {}
+    if session.experiment and session.experiment.project:
+        sandbox_config = session.experiment.project.sandbox_config or {}
+
+    session.state = f"{stage}_running"
+    await db.commit()
+
+    await broadcaster.publish(
+        session_id,
+        {
+            "type": "session_resumed",
+            "data": {"mode": body.mode, "prior_state": prior_state},
+        },
+    )
+
+    async def _run_resume():
+        try:
+            await run_agent(
+                session_id=session_id,
+                experiment_id=experiment_id,
+                stage=stage,
+                instructions=instructions,
+                dataset_ref=dataset_ref,
+                user_prompt=resume_prompt,
+                sandbox_config=sandbox_config,
+                model=selected_model,
+                agent_models=agent_models,
+                agent_thinking=agent_thinking,
+                resume_context=resume_context,
+            )
+            async with async_session() as fresh_db:
+                s = await fresh_db.get(SessionModel, session_id)
+                if s:
+                    s.state = "done"
+                    await fresh_db.commit()
+        except asyncio.CancelledError:
+            async with async_session() as fresh_db:
+                s = await fresh_db.get(SessionModel, session_id)
+                if s and s.state != "cancelled":
+                    s.state = "cancelled"
+                    await fresh_db.commit()
+        except Exception:
+            async with async_session() as fresh_db:
+                s = await fresh_db.get(SessionModel, session_id)
+                if s:
+                    s.state = "failed"
+                    await fresh_db.commit()
+
+    task = asyncio.create_task(_run_resume())
+    await register_task(session_id, task)
+
+    return {"status": "resumed", "mode": body.mode, "prior_state": prior_state}
+
+
 @router.get("/sessions/{session_id}/clarifications")
 async def get_pending_clarifications(session_id: str):
     """Return any clarifications currently waiting for a user reply."""
@@ -248,6 +379,41 @@ async def reply_to_clarification(
         },
     )
     return {"status": "ok"}
+
+
+@router.post("/sessions/{session_id}/approvals/{approval_id}")
+async def reply_to_approval(
+    session_id: str,
+    approval_id: str,
+    body: ApprovalReply,
+):
+    """User verdict on a pending approval gate — unblocks the waiting agent.
+
+    The `approval_resolved` SSE/persistence event is published by the skill
+    handler once its future resolves, so this route only resolves the future.
+    """
+    edits = body.edits.strip()
+    if body.decision == "edit" and not edits:
+        raise HTTPException(
+            status_code=400,
+            detail="decision='edit' requires non-empty edits.",
+        )
+    answered = resolve_clarification(
+        session_id,
+        approval_id,
+        {
+            "decision": body.decision,
+            "answer": edits,
+            "answered_by": "user",
+            "timeout": False,
+        },
+    )
+    if not answered:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending approval with that approval_id (already answered or expired).",
+        )
+    return {"status": "ok", "decision": body.decision}
 
 
 @router.get("/sessions/{session_id}/artifacts")

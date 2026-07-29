@@ -42,12 +42,11 @@ class TestSdkPreambleRepoBootstrap:
         # mid-exec, which the preamble's try/except would swallow.
         src = build_sdk_preamble(session_id)
         assert f'_SID = "{session_id}"' in src
-        assert (
-            '_SESSION_SRC = _trn_os.path.join(_VOL_ROOT, "sessions", _SID, "src")'
-            in src
-        )
-        assert "_trn_os.makedirs(_SESSION_SRC, exist_ok=True)" in src
-        assert "_trn_sys.path.insert(0, _SESSION_SRC)" in src
+        assert '_trn_os.environ["TRAINABLE_RUNTIME_MODE"] = "sandbox"' in src
+        assert "_bootstrap_session_repo()" in src
+        assert 'session_src = _VOL_ROOT / "sessions" / _SID / "src"' in src
+        assert "session_src.mkdir(parents=True, exist_ok=True)" in src
+        assert "sys.path.insert(0, src)" in src
         assert "__init__.py" in src
         del fake_src  # keep tmp_path fixture happy (lint)
 
@@ -77,6 +76,7 @@ class TestSdkPreambleRepoBootstrap:
         b = build_sdk_preamble("session-bbb")
         assert '_SID = "session-aaa"' in a
         assert '_SID = "session-bbb"' in b
+        assert 'os.environ.get("TRAINABLE_RUNTIME_MODE", "local")' in a
         # Template untouched after rendering.
         assert "__SESSION_ID__" in SDK_PREAMBLE_TEMPLATE
 

@@ -23,6 +23,9 @@ import {
   Search,
   Save,
   X,
+  FlaskConical,
+  Upload,
+  Play,
 } from 'lucide-react';
 import Link from 'next/link';
 import {
@@ -39,7 +42,14 @@ import {
 import { api } from '@/lib/api';
 import Sidebar from '@/components/Sidebar';
 import PythonCodeEditor from '@/components/PythonCodeEditor';
-import type { ComputeOption, DeploymentRow, MetricPoint, RegisteredModel } from '@/lib/types';
+import type {
+  ComputeOption,
+  DeploymentRow,
+  MetricPoint,
+  PredictProxyResponse,
+  PredictSchema,
+  RegisteredModel,
+} from '@/lib/types';
 
 function formatBytes(n: number): string {
   if (!n) return '—';
@@ -123,6 +133,313 @@ function ModelChart({ points }: { points: MetricPoint[] }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Prediction playground — the "Test" panel on a live model card.
+// ---------------------------------------------------------------------------
+
+// Minimal CSV parser: quoted fields, escaped quotes (""), CRLF. Good
+// enough for the small validation files the panel accepts; not a
+// general-purpose CSV library. First row is the header.
+function parseCsv(text: string): Record<string, string>[] {
+  const rows: string[][] = [];
+  let cell = '';
+  let row: string[] = [];
+  let inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') {
+          cell += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        cell += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(cell);
+      cell = '';
+    } else if (ch === '\n' || ch === '\r') {
+      if (ch === '\r' && text[i + 1] === '\n') i++;
+      row.push(cell);
+      cell = '';
+      rows.push(row);
+      row = [];
+    } else {
+      cell += ch;
+    }
+  }
+  if (cell !== '' || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  const nonEmpty = rows.filter((r) => r.some((c) => c.trim() !== ''));
+  if (nonEmpty.length < 2) return [];
+  const header = nonEmpty[0].map((h) => h.trim());
+  return nonEmpty.slice(1).map((r) => {
+    const rec: Record<string, string> = {};
+    header.forEach((h, idx) => {
+      if (h) rec[h] = r[idx] ?? '';
+    });
+    return rec;
+  });
+}
+
+// Blank → 0 (the endpoint projects trained columns; a 0 beats sending
+// "" which pandas would coerce into a string column), numeric-looking →
+// number, anything else stays a string (categorical features).
+function coerceCell(v: string): number | string {
+  const t = v.trim();
+  if (t === '') return 0;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : t;
+}
+
+// Matches PREDICT_PROXY_MAX_RECORDS on the backend.
+const MAX_TEST_RECORDS = 200;
+// Refuse to read huge files into memory — `file.text()` loads the whole
+// file before the 200-row truncation ever runs. 5 MB is generous for a
+// smoke-test CSV.
+const MAX_CSV_BYTES = 5 * 1024 * 1024;
+
+function TestPanel({ m, onClose }: { m: RegisteredModel; onClose: () => void }) {
+  const [schema, setSchema] = useState<PredictSchema | null>(null);
+  const [schemaLoading, setSchemaLoading] = useState(true);
+  const [mode, setMode] = useState<'form' | 'csv'>('form');
+  const [formValues, setFormValues] = useState<Record<string, string>>({});
+  const [csvRecords, setCsvRecords] = useState<Record<string, string>[] | null>(null);
+  const [csvName, setCsvName] = useState<string | null>(null);
+  const [csvError, setCsvError] = useState<string | null>(null);
+  const [predicting, setPredicting] = useState(false);
+  const [predictError, setPredictError] = useState<string | null>(null);
+  const [result, setResult] = useState<PredictProxyResponse | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSchemaLoading(true);
+    api
+      .getPredictSchema(m.id)
+      .then((s) => {
+        if (cancelled) return;
+        setSchema(s);
+        // No known feature columns → nothing to render a form from;
+        // fall straight into CSV mode.
+        if (!s.feature_columns?.length) setMode('csv');
+      })
+      .catch(() => {
+        // Schema is a nicety — the proxy works without it, so a failed
+        // fetch just degrades to CSV-only mode.
+        if (!cancelled) setMode('csv');
+      })
+      .finally(() => {
+        if (!cancelled) setSchemaLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [m.id]);
+
+  const features = schema?.feature_columns ?? null;
+
+  const onCsvFile = async (file: File) => {
+    setCsvError(null);
+    setCsvRecords(null);
+    setCsvName(file.name);
+    if (file.size > MAX_CSV_BYTES) {
+      setCsvError(
+        `File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). The test panel ` +
+          'accepts up to 5 MB — use the endpoint directly for larger batches.',
+      );
+      return;
+    }
+    try {
+      const records = parseCsv(await file.text());
+      if (!records.length) {
+        setCsvError('Could not parse any data rows — expected a header row + at least one row.');
+        return;
+      }
+      setCsvRecords(records);
+    } catch (e) {
+      setCsvError((e as Error).message);
+    }
+  };
+
+  const run = async () => {
+    setPredicting(true);
+    setPredictError(null);
+    setResult(null);
+    try {
+      let records: Record<string, unknown>[];
+      if (mode === 'form' && features?.length) {
+        records = [Object.fromEntries(features.map((c) => [c, coerceCell(formValues[c] ?? '')]))];
+      } else {
+        if (!csvRecords?.length) throw new Error('Upload a CSV first.');
+        records = csvRecords
+          .slice(0, MAX_TEST_RECORDS)
+          .map((r) => Object.fromEntries(Object.entries(r).map(([k, v]) => [k, coerceCell(v)])));
+      }
+      setResult(await api.predictModel(m.id, records));
+    } catch (e) {
+      setPredictError((e as Error).message);
+    } finally {
+      setPredicting(false);
+    }
+  };
+
+  const canRun = mode === 'form' ? Boolean(features?.length) : Boolean(csvRecords?.length);
+
+  return (
+    <div className="mt-3 rounded-lg border border-sky-500/20 bg-sky-500/5 overflow-hidden">
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.05] text-[11px] text-sky-200/90">
+        <FlaskConical className="w-3.5 h-3.5 text-sky-300" />
+        <span className="font-medium">Test predictions</span>
+        <span className="opacity-60">— sent through the backend with the stored X-API-Key.</span>
+        <div className="flex-1" />
+        {features?.length ? (
+          <div className="flex rounded-md overflow-hidden border border-white/[0.08]">
+            {(['form', 'csv'] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setMode(t)}
+                className={`px-2 py-0.5 text-[10px] uppercase tracking-wide ${
+                  mode === t
+                    ? 'bg-sky-500/25 text-sky-200'
+                    : 'bg-transparent text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                {t === 'form' ? 'Form' : 'CSV'}
+              </button>
+            ))}
+          </div>
+        ) : null}
+        <button
+          onClick={onClose}
+          className="inline-flex items-center justify-center w-6 h-6 rounded text-gray-500 hover:bg-white/[0.06]"
+          title="Close"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </div>
+
+      <div className="px-3 py-2.5">
+        {schemaLoading ? (
+          <div className="py-3 text-center text-[11px] text-gray-500">Loading input schema…</div>
+        ) : (
+          <>
+            {mode === 'form' && features?.length ? (
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+                {features.map((c) => (
+                  <label key={c} className="block">
+                    <span className="block text-[10px] font-mono text-gray-400 truncate" title={c}>
+                      {c}
+                    </span>
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={formValues[c] ?? ''}
+                      onChange={(e) => setFormValues((v) => ({ ...v, [c]: e.target.value }))}
+                      placeholder="0"
+                      className="mt-0.5 w-full text-xs h-7 px-2 rounded-md bg-black/40 border border-white/[0.08] text-gray-200 placeholder-gray-600 focus:outline-none focus:ring-1 focus:ring-sky-500/40 tabular-nums"
+                    />
+                  </label>
+                ))}
+              </div>
+            ) : (
+              <div>
+                {!features?.length ? (
+                  <div className="mb-2 text-[11px] text-gray-500">
+                    No trained feature columns on record for this model — upload a CSV with the same
+                    columns the model was trained on (header row required).
+                  </div>
+                ) : null}
+                <label className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-gray-300 cursor-pointer">
+                  <Upload className="w-3.5 h-3.5" />
+                  {csvName ?? 'Choose CSV file…'}
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) onCsvFile(f);
+                      // Allow re-selecting the same file after an edit.
+                      e.target.value = '';
+                    }}
+                  />
+                </label>
+                {csvRecords ? (
+                  <span className="ml-2 text-[11px] text-gray-400 tabular-nums">
+                    {csvRecords.length} row{csvRecords.length === 1 ? '' : 's'} parsed
+                    {csvRecords.length > MAX_TEST_RECORDS
+                      ? ` — only the first ${MAX_TEST_RECORDS} will be sent`
+                      : ''}
+                    {schema?.target_column && csvRecords[0]?.[schema.target_column] !== undefined
+                      ? ` · target column \`${schema.target_column}\` is ignored`
+                      : ''}
+                  </span>
+                ) : null}
+                {csvError ? (
+                  <div className="mt-1.5 text-[11px] text-rose-300">{csvError}</div>
+                ) : null}
+              </div>
+            )}
+
+            <div className="mt-2.5 flex items-center gap-2">
+              <button
+                onClick={run}
+                disabled={!canRun || predicting}
+                className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 disabled:opacity-50"
+              >
+                <Play className="w-3 h-3" />
+                {predicting ? 'Predicting…' : 'Predict'}
+              </button>
+              {predicting ? (
+                <span className="text-[11px] text-gray-500">
+                  First request after idle cold-starts the container — can take ~30s.
+                </span>
+              ) : null}
+            </div>
+
+            {predictError ? (
+              <div className="mt-2 px-2.5 py-1.5 rounded-md bg-rose-500/10 border border-rose-500/20 text-[11px] text-rose-300 break-all">
+                {predictError}
+              </div>
+            ) : null}
+
+            {result ? (
+              <div className="mt-2.5 rounded-md border border-white/[0.06] bg-black/30 overflow-hidden">
+                <div className="px-2.5 py-1 border-b border-white/[0.05] text-[10px] text-gray-500">
+                  {result.predictions.length} prediction
+                  {result.predictions.length === 1 ? '' : 's'}
+                  {result.model ? ` · ${result.model} v${result.version}` : ''}
+                </div>
+                <div className="max-h-56 overflow-y-auto">
+                  <table className="w-full text-[11px] tabular-nums">
+                    <tbody>
+                      {result.predictions.map((p, i) => (
+                        <tr key={i} className="border-b border-white/[0.03] last:border-0">
+                          <td className="px-2.5 py-1 text-gray-600 w-10">#{i + 1}</td>
+                          <td className="px-2.5 py-1 font-mono text-emerald-300 break-all">
+                            {typeof p === 'object' && p !== null ? JSON.stringify(p) : String(p)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ModelCard({
   m,
   deployments,
@@ -148,6 +465,8 @@ function ModelCard({
   const [keyCopied, setKeyCopied] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [chartOpen, setChartOpen] = useState(false);
+  // In-app prediction playground for the live endpoint.
+  const [testOpen, setTestOpen] = useState(false);
   // Inspect/edit panel state for the serving app.py.
   const [appOpen, setAppOpen] = useState(false);
   const [appCode, setAppCode] = useState<string | null>(null);
@@ -352,6 +671,18 @@ function ModelCard({
                 </a>
               ) : null}
               <button
+                onClick={() => setTestOpen((v) => !v)}
+                className={`inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg ${
+                  testOpen
+                    ? 'bg-sky-500/25 text-sky-200'
+                    : 'bg-sky-500/15 hover:bg-sky-500/25 text-sky-300'
+                }`}
+                title="Send test predictions to the live endpoint from right here"
+              >
+                <FlaskConical className="w-3 h-3" />
+                Test
+              </button>
+              <button
                 onClick={() => copyCurl(live.endpoint_url ?? '')}
                 className="inline-flex items-center gap-1 text-xs px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300"
                 title={live.endpoint_url ?? 'no url'}
@@ -435,6 +766,7 @@ function ModelCard({
           </div>
         </div>
       ) : null}
+      {live && testOpen ? <TestPanel m={m} onClose={() => setTestOpen(false)} /> : null}
       {live ? (
         <div className="mt-2 flex items-center gap-1.5 text-[11px] text-gray-500">
           Redeploy on:

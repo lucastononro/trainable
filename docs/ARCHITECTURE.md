@@ -291,7 +291,7 @@ Under the hood: `log()` prints JSON to stdout → sandbox streams it → `metric
 ## Directory Structure
 
 ```
-trainable-monorepo/
+trainable/
 ├── backend/
 │   ├── main.py                    # FastAPI app, CORS, lifecycle
 │   ├── db.py                      # Async SQLAlchemy engine + session

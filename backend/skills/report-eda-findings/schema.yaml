@@ -1,0 +1,48 @@
+type: object
+properties:
+  findings:
+    type: array
+    description: The full batch of structured EDA findings for this pass.
+    items:
+      type: object
+      properties:
+        finding_type:
+          type: string
+          enum:
+            - leakage
+            - class_imbalance
+            - high_cardinality
+            - multicollinearity
+            - missing_values
+            - outliers
+            - duplicates
+            - skewed_target
+            - id_column
+            - constant_column
+            - datetime_leakage
+            - other
+          description: What class of issue this is. Drives the card's badge.
+        columns:
+          type: array
+          items:
+            type: string
+          description: Affected column names. Empty for dataset-wide findings.
+        severity:
+          type: string
+          enum: [info, warning, critical]
+          description: How urgent this is for the user. Defaults to warning.
+        summary:
+          type: string
+          description: One or two sentences describing the observation, with numbers.
+        recommendation:
+          type: string
+          description: >
+            Concrete prep action, phrased as an instruction data_prep can
+            execute verbatim. Rendered behind the card's "Apply in prep"
+            button.
+      required:
+        - finding_type
+        - summary
+        - recommendation
+required:
+  - findings
