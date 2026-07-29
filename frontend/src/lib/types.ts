@@ -414,6 +414,26 @@ export interface ComputeOption {
   blurb: string;
 }
 
+// Input schema for the in-app prediction playground (Test panel on
+// /models). `feature_columns: null` means the training dataset's
+// metadata is gone — the panel falls back to CSV-upload-only mode.
+export interface PredictSchema {
+  model_id: string;
+  feature_columns: string[] | null;
+  target_column: string | null;
+  endpoint_url: string | null;
+  has_live_deployment: boolean;
+}
+
+// Relayed verbatim from the deployed Modal endpoint through the backend
+// proxy. `predictions` is one element per input record — class label
+// for classifiers, numeric value for regressors.
+export interface PredictProxyResponse {
+  predictions: unknown[];
+  model?: string;
+  version?: number;
+}
+
 export interface DeploymentRow {
   id: string;
   model_id: string;
