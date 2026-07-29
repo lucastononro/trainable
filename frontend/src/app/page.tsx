@@ -72,6 +72,7 @@ import {
   Download,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import CostBadge, { UsageTotals } from '@/components/CostBadge';
@@ -2395,20 +2396,27 @@ function HomePageContent() {
               onExpand={() => setCanvasOpen(true)}
             >
               {canvasOpen && (
-                <WorkspaceSidebar
-                  experimentId={activeExperimentId || ''}
-                  sessionId={activeSessionId || ''}
-                  canvasContent={canvasContent}
-                  canvasTitle={canvasTitle}
-                  generatedFiles={generatedFiles}
-                  fileTree={fileTree}
-                  metricPoints={metricPoints}
-                  chartConfig={chartConfig}
-                  logEvents={logEvents}
-                  htmlArtifacts={htmlArtifacts}
-                  sessionState={sessionState}
-                  onClose={() => workspacePanelRef.current?.collapse()}
-                />
+                // Keyed by sessionId so switching sessions also clears any
+                // prior crash state, in addition to the panel's own "Try
+                // again" button. Agent-authored file content, markdown, and
+                // self-contained HTML artifacts all render inside here —
+                // without this boundary, a bad one blanks the whole SPA.
+                <ErrorBoundary key={activeSessionId} label="the workspace">
+                  <WorkspaceSidebar
+                    experimentId={activeExperimentId || ''}
+                    sessionId={activeSessionId || ''}
+                    canvasContent={canvasContent}
+                    canvasTitle={canvasTitle}
+                    generatedFiles={generatedFiles}
+                    fileTree={fileTree}
+                    metricPoints={metricPoints}
+                    chartConfig={chartConfig}
+                    logEvents={logEvents}
+                    htmlArtifacts={htmlArtifacts}
+                    sessionState={sessionState}
+                    onClose={() => workspacePanelRef.current?.collapse()}
+                  />
+                </ErrorBoundary>
               )}
             </Panel>
           </PanelGroup>
@@ -2774,30 +2782,32 @@ const FileViewer = memo(function FileViewer({
           </SyntaxHighlighter>
         ) : isMarkdown ? (
           <div className="p-6 markdown-content">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                img: ({ src, alt }) => {
-                  let imgSrc = src || '';
-                  if (imgSrc.startsWith('/data/')) {
-                    imgSrc = api.filesRawUrl(imgSrc);
-                  } else if (imgSrc && !imgSrc.startsWith('http')) {
-                    const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-                    imgSrc = api.filesRawUrl(dir + '/' + imgSrc);
-                  }
-                  return (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={imgSrc}
-                      alt={alt || ''}
-                      className="max-w-full rounded-lg shadow-md my-4"
-                    />
-                  );
-                },
-              }}
-            >
-              {content || ''}
-            </ReactMarkdown>
+            <ErrorBoundary key={filePath} label="this file">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  img: ({ src, alt }) => {
+                    let imgSrc = src || '';
+                    if (imgSrc.startsWith('/data/')) {
+                      imgSrc = api.filesRawUrl(imgSrc);
+                    } else if (imgSrc && !imgSrc.startsWith('http')) {
+                      const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+                      imgSrc = api.filesRawUrl(dir + '/' + imgSrc);
+                    }
+                    return (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={imgSrc}
+                        alt={alt || ''}
+                        className="max-w-full rounded-lg shadow-md my-4"
+                      />
+                    );
+                  },
+                }}
+              >
+                {content || ''}
+              </ReactMarkdown>
+            </ErrorBoundary>
           </div>
         ) : (
           <pre className="p-4 text-[13px] text-gray-300 font-mono whitespace-pre-wrap leading-relaxed">
@@ -2845,9 +2855,11 @@ const ReportMarkdown = memo(function ReportMarkdown({
   return (
     <div className="h-full overflow-y-auto p-6 bg-black">
       <div className="markdown-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-          {content}
-        </ReactMarkdown>
+        <ErrorBoundary label="this report">
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+            {content}
+          </ReactMarkdown>
+        </ErrorBoundary>
       </div>
     </div>
   );
@@ -3785,6 +3797,11 @@ function SubAgentCard({ item }: { item: ChatItem }) {
   const modelName = item.meta?.model
     ? item.meta.model.replace('claude-', '').replace(/-/g, ' ')
     : '';
+  // Truncated once here so the markdown path and the error-boundary fallback
+  // render the same bounded text (a summary can be megabytes of agent output).
+  const summary = item.meta?.summary;
+  const truncatedSummary =
+    summary && summary.length > 800 ? summary.slice(0, 800) + '\n\n...' : summary;
 
   useEffect(() => {
     if (!isStart) return;
@@ -3844,15 +3861,17 @@ function SubAgentCard({ item }: { item: ChatItem }) {
               {item.meta.task}
             </div>
           )}
-          {item.meta?.summary && (
+          {truncatedSummary && (
             <div className="text-xs text-gray-400 max-h-48 overflow-y-auto">
               <span className={`${colors.text} font-medium`}>Result: </span>
               <div className="mt-1 markdown-chat">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {item.meta.summary.length > 800
-                    ? item.meta.summary.slice(0, 800) + '\n\n...'
-                    : item.meta.summary}
-                </ReactMarkdown>
+                <ErrorBoundary
+                  fallback={() => (
+                    <div className="whitespace-pre-wrap break-words">{truncatedSummary}</div>
+                  )}
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{truncatedSummary}</ReactMarkdown>
+                </ErrorBoundary>
               </div>
             </div>
           )}
@@ -4320,7 +4339,11 @@ const ChatItemView = memo(function ChatItemView({
             {agentMeta && (
               <div className={`text-[10px] ${avatarText} font-medium mb-1`}>{agentMeta.label}</div>
             )}
-            <ReactMarkdown remarkPlugins={CHAT_MARKDOWN_PLUGINS}>{item.content}</ReactMarkdown>
+            <ErrorBoundary
+              fallback={() => <div className="whitespace-pre-wrap break-words">{item.content}</div>}
+            >
+              <ReactMarkdown remarkPlugins={CHAT_MARKDOWN_PLUGINS}>{item.content}</ReactMarkdown>
+            </ErrorBoundary>
             {isStreaming && (
               <span className="inline-block w-2 h-5 bg-primary-400 rounded-sm ml-0.5 animate-blink align-text-bottom" />
             )}
