@@ -22,6 +22,7 @@ import {
   GeneratedFile,
 } from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
+import { takeSuggestedPrompt } from '@/lib/suggestedPrompt';
 import {
   ImperativePanelHandle,
   Panel,
@@ -68,13 +69,14 @@ import {
   GitBranch,
   Globe,
   ExternalLink,
+  Download,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import CostBadge, { UsageTotals } from '@/components/CostBadge';
 import InlineTasks from '@/components/InlineTasks';
-import type { UsageEvent } from '@/lib/types';
+import type { BudgetInfo, UsageEvent } from '@/lib/types';
 
 const ZERO_USAGE: UsageTotals = {
   cost_usd: 0,
@@ -227,6 +229,11 @@ const SUGGESTIONS = [
   },
 ];
 
+// How close (px) to the bottom of the chat pane the user must be for
+// auto-scroll to stay "pinned". Module-level so the binding is created once
+// and is unambiguously stable for the scroll-handler closure.
+const AUTO_SCROLL_PIN_THRESHOLD_PX = 96;
+
 // ---------------------------------------------------------------------------
 // Main page component
 // ---------------------------------------------------------------------------
@@ -341,6 +348,9 @@ function HomePageContent() {
   // Live usage totals for the active session (cost badge in header)
   const [usageTotals, setUsageTotals] = useState<UsageTotals>(ZERO_USAGE);
   const [recentUsage, setRecentUsage] = useState<UsageEvent[]>([]);
+  // Project budget vs. spend (issue #107) — hydrated with session usage,
+  // flipped to exceeded by the budget_exceeded SSE event.
+  const [budgetInfo, setBudgetInfo] = useState<BudgetInfo | null>(null);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -374,26 +384,38 @@ function HomePageContent() {
   // an assistant reply streams token-by-token; without the pin gate,
   // `scrollIntoView` fired on every single one of those changes and
   // hijacked the scroll position, making it impossible to scroll up and
-  // read earlier output. `behavior: 'auto'` (no animation) while a bubble is
-  // actively streaming avoids stacking up smooth-scroll animations that
-  // fight each other; once streaming settles we go back to a smooth nudge.
+  // read earlier output. `behavior: 'auto'` (instant, no animation) is used
+  // unconditionally: a smooth scroll animates through intermediate positions,
+  // and each intermediate `scroll` event would make `handleChatScroll` see
+  // `distanceFromBottom > threshold` and un-pin mid-animation — so if the
+  // first streaming tokens arrived before the animation landed, auto-scroll
+  // silently stopped. An instant jump fires a single scroll event already at
+  // the bottom, which keeps the pin state consistent.
   useEffect(() => {
     if (!pinnedToBottomRef.current) return;
-    bottomRef.current?.scrollIntoView({
-      behavior: streamingItemIdRef.current ? 'auto' : 'smooth',
-    });
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [chatItems]);
 
   // Track whether the user is pinned near the bottom of the chat pane via a
   // scroll listener + threshold, rather than assuming every render should
   // snap back down.
-  const AUTO_SCROLL_PIN_THRESHOLD_PX = 96;
   const handleChatScroll = useCallback(() => {
     const el = chatScrollRef.current;
     if (!el) return;
     const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
     pinnedToBottomRef.current = distanceFromBottom <= AUTO_SCROLL_PIN_THRESHOLD_PX;
   }, []);
+
+  // Seed the chat input with the suggested prompt handed off by the
+  // sample-dataset gallery (first-run flow). Consumed exactly once, and
+  // never clobbers something the user already typed.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const prompt = takeSuggestedPrompt(activeSessionId);
+    if (!prompt) return;
+    setDraft((prev) => (isDraftEmpty(prev) ? [{ kind: 'text', value: prompt }] : prev));
+    inputRef.current?.focus();
+  }, [activeSessionId]);
 
   // ---------------------------------------------------------------------------
   // addItem helper
@@ -425,8 +447,10 @@ function HomePageContent() {
           const event = JSON.parse(e.data) as SSEEvent;
           // Fan out the parsed event to any other subscriber (e.g. the
           // notebook) before/independent of the switch below — this is the
-          // single EventSource for the session, so everyone shares it.
-          publish(event);
+          // single EventSource for the session, so everyone shares it. `sid`
+          // tags the event with its owning session so subscribers can ignore
+          // stale cross-session deliveries during a session switch.
+          publish(sid, event);
 
           // Narrowing on `event.type` below gives each case a correctly
           // typed `event.data` (see the `SSEEvent` union in lib/types.ts) —
@@ -453,7 +477,8 @@ function HomePageContent() {
               if (
                 data.state.includes('done') ||
                 data.state === 'failed' ||
-                data.state === 'cancelled'
+                data.state === 'cancelled' ||
+                data.state === 'budget_exceeded'
               ) {
                 streamingItemIdRef.current = null;
                 setIsRunning(false);
@@ -720,6 +745,22 @@ function HomePageContent() {
               addItem({ type: 'status', content: 'Agent stopped' });
               setIsRunning(false);
               break;
+            case 'budget_exceeded': {
+              // Hard-stop guardrail (#107): the runner halted the agent
+              // because project spend crossed its cap.
+              const data = event.data;
+              streamingItemIdRef.current = null;
+              addItem({ type: 'error', content: data.error });
+              setBudgetInfo({
+                project_id: data.project_id,
+                budget_usd: data.budget_usd ?? null,
+                spent_usd: data.spent_usd ?? 0,
+                remaining_usd: 0,
+                exceeded: true,
+              });
+              setIsRunning(false);
+              break;
+            }
             case 'metrics_batch': {
               const data = event.data;
               const items = data.items || [];
@@ -1090,6 +1131,7 @@ function HomePageContent() {
     activeAgentsRef.current = [];
     setUsageTotals(ZERO_USAGE);
     setRecentUsage([]);
+    setBudgetInfo(null);
     setTasks([]);
   }, [setIsRunning]);
 
@@ -1143,6 +1185,7 @@ function HomePageContent() {
             compute_runs: t.compute_runs || 0,
           });
           setRecentUsage(s.events ?? []);
+          setBudgetInfo(s.budget ?? null);
         })
         .catch(() => {
           /* historical usage is best-effort; live SSE will fill in */
@@ -1295,8 +1338,7 @@ function HomePageContent() {
                   type: 'subagent_start',
                   content: (msg.metadata?.agent_type as string) || 'sub-agent',
                   meta: {
-                    task:
-                      metaStr(msg.metadata?.task) || metaStr(msg.metadata?.description) || '',
+                    task: metaStr(msg.metadata?.task) || metaStr(msg.metadata?.description) || '',
                     model: metaStr(msg.metadata?.model) || '',
                     depth: metaNum(msg.metadata?.depth) || 1,
                     agent_id: metaStr(msg.metadata?.agent_id) || '',
@@ -1954,7 +1996,9 @@ function HomePageContent() {
 
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
-          {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
+          {hasActiveSession && (
+            <CostBadge totals={usageTotals} recent={recentUsage} budget={budgetInfo} />
+          )}
 
           {hasActiveSession && (
             <>
@@ -2544,7 +2588,7 @@ const HtmlPanel = memo(function HtmlPanel({ artifact }: { artifact: HtmlArtifact
     );
   }
 
-  const rawUrl = `/api/files/raw?path=${encodeURIComponent(artifact.path)}`;
+  const rawUrl = api.filesRawUrl(artifact.path);
   const sizeLabel = humanArtifactBytes(artifact.size);
 
   return (
@@ -2690,14 +2734,14 @@ const FileViewer = memo(function FileViewer({
           <div className="p-6 flex items-center justify-center bg-black">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={`/api/files/raw?path=${encodeURIComponent(filePath)}`}
+              src={api.filesRawUrl(filePath)}
               alt={fileName}
               className="max-w-full max-h-[60vh] rounded-lg"
             />
           </div>
         ) : isPdf ? (
           <iframe
-            src={`/api/files/raw?path=${encodeURIComponent(filePath)}#view=FitH`}
+            src={`${api.filesRawUrl(filePath)}#view=FitH`}
             title={fileName}
             className="w-full h-full min-h-[80vh] bg-white border-0"
           />
@@ -2736,10 +2780,10 @@ const FileViewer = memo(function FileViewer({
                 img: ({ src, alt }) => {
                   let imgSrc = src || '';
                   if (imgSrc.startsWith('/data/')) {
-                    imgSrc = `/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+                    imgSrc = api.filesRawUrl(imgSrc);
                   } else if (imgSrc && !imgSrc.startsWith('http')) {
                     const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-                    imgSrc = `/api/files/raw?path=${encodeURIComponent(dir + '/' + imgSrc)}`;
+                    imgSrc = api.filesRawUrl(dir + '/' + imgSrc);
                   }
                   return (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -2785,10 +2829,10 @@ const ReportMarkdown = memo(function ReportMarkdown({
       img: ({ src, alt }: { src?: string; alt?: string }) => {
         let imgSrc = src || '';
         if (imgSrc.startsWith('/data/')) {
-          imgSrc = `/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+          imgSrc = api.filesRawUrl(imgSrc);
         } else if (imgSrc && !imgSrc.startsWith('http')) {
           const workspace = `/sessions/${sessionId}/eda`;
-          imgSrc = `/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
+          imgSrc = api.filesRawUrl(workspace + '/' + imgSrc);
         }
         return (
           // eslint-disable-next-line @next/next/no-img-element
@@ -3281,6 +3325,21 @@ function WorkspaceSidebar({
             >
               <BarChart3 className="w-3 h-3 text-gray-600" />
             </button>
+            <a
+              // Browser-native streamed zip download — Content-Disposition on
+              // the backend picks the filename. Routed through Next's /api
+              // rewrite so dev and prod both work with no host hard-coding.
+              href={sessionId ? `/api/sessions/${sessionId}/download` : undefined}
+              aria-disabled={!sessionId}
+              className={`p-1 rounded transition-colors ${
+                sessionId
+                  ? 'hover:bg-white/[0.06] cursor-pointer'
+                  : 'opacity-40 pointer-events-none'
+              }`}
+              title="Download workspace as zip"
+            >
+              <Download className="w-3 h-3 text-gray-600" />
+            </a>
             <button
               onClick={onClose}
               className="p-1 hover:bg-white/[0.06] rounded transition-colors"
@@ -4024,11 +4083,14 @@ function renderGroupedChatItems(
       }
       result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
     } else {
+      // Pass a per-item boolean instead of the shared streamingItemId string:
+      // when streaming starts/ends only the affected item sees a prop change,
+      // so `memo` still bails out for every other bubble.
       result.push(
         <ChatItemView
           key={cur.id}
           item={cur}
-          streamingItemId={streamingItemId}
+          isStreaming={cur.id === streamingItemId}
           sessionId={sessionId}
         />,
       );
@@ -4203,11 +4265,11 @@ const CHAT_MARKDOWN_PLUGINS = [remarkGfm];
 
 const ChatItemView = memo(function ChatItemView({
   item,
-  streamingItemId,
+  isStreaming,
   sessionId,
 }: {
   item: ChatItem;
-  streamingItemId?: string | null;
+  isStreaming?: boolean;
   sessionId?: string | null;
 }) {
   switch (item.type) {
@@ -4246,7 +4308,6 @@ const ChatItemView = memo(function ChatItemView({
       const agentColor = agentMeta ? AGENT_COLORS[agentMeta.color] : null;
       const avatarBg = agentColor ? agentColor.bg : 'bg-emerald-500/20';
       const avatarText = agentColor ? agentColor.text : 'text-emerald-400';
-      const isStreaming = item.id === streamingItemId;
 
       return (
         <div className="flex gap-3 animate-fade-in">
