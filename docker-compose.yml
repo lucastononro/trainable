@@ -66,9 +66,18 @@ services:
       OTEL_SERVICE_NAME: trainable-backend
     volumes:
       - ./backend:/app
+      # Bundled sample datasets for the first-run gallery (repo root, so it
+      # isn't inside the ./backend build context — mount it explicitly).
+      - ./sample-data:/app/sample-data:ro
       - ~/.modal.toml:/home/trainable/.modal.toml:ro
       - ~/.claude:/home/trainable/.claude:ro
     command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/api/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
     depends_on:
       postgres:
         condition: service_healthy
@@ -96,7 +105,8 @@ services:
       - ./frontend/tsconfig.json:/app/tsconfig.json
     command: ["npm", "run", "dev"]
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   postgres-data:

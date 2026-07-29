@@ -26,9 +26,16 @@ from typing import Any, AsyncIterator
 
 from .auth import resolve_credentials
 from .auth._base import Credentials, ProviderUnavailable
-from .base import LLMEvent, LLMProvider, ProviderCapabilities
+from .base import LLMEvent, LLMProvider, ProviderCapabilities, enforce_wall_clock
 
 logger = logging.getLogger(__name__)
+
+try:
+    # Only the exception type — the full SDK import stays lazy in
+    # `_make_sdk_client` (which raises ProviderUnavailable if missing).
+    from openai import APITimeoutError as _SDKTimeoutError
+except ImportError:  # pragma: no cover — without the SDK no call can raise it
+    _SDKTimeoutError = ()  # type: ignore[assignment]
 
 
 def _to_responses_tool(name: str, description: str, input_schema: dict) -> dict:
@@ -153,8 +160,15 @@ class OpenAIProvider(LLMProvider):
         max_turns: int,
         messages: list[dict] | None = None,
         reasoning_effort: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMEvent]:
         client = self._client_or_raise()
+        # Bound each HTTP attempt at the SDK/httpx layer too, so a stalled
+        # request fails with a clean APITimeoutError instead of relying
+        # solely on task cancellation. `enforce_wall_clock` below remains
+        # the hard cap (SDK retries can't stretch past it).
+        if timeout_seconds and timeout_seconds > 0:
+            client = client.with_options(timeout=float(timeout_seconds))
 
         oai_tools = [
             _to_responses_tool(
@@ -184,7 +198,11 @@ class OpenAIProvider(LLMProvider):
             kwargs["reasoning"] = {"effort": reasoning_effort}
 
         try:
-            resp = await client.responses.create(**kwargs)
+            resp = await enforce_wall_clock(
+                client.responses.create(**kwargs),
+                timeout_seconds,
+                provider="openai",
+            )
 
             # Iterate the typed output items. Each item is one of:
             #   message     -> assistant text (one or more output_text blocks)
@@ -226,6 +244,30 @@ class OpenAIProvider(LLMProvider):
                         "output_tokens": getattr(usage, "output_tokens", 0) or 0,
                     },
                 )
+        except TimeoutError:
+            # A stalled provider call must end the run — propagate so the
+            # runner's TimeoutError handler publishes `agent_timeout` and
+            # frees the session's task-registry entry (issue #95).
+            logger.warning(
+                "OpenAIProvider Responses call exceeded the wall-clock timeout"
+            )
+            raise
+        except _SDKTimeoutError as e:
+            # The per-request SDK timeout (`with_options` above) shares the
+            # wall-clock deadline, so it can fire a hair before asyncio's
+            # timer. `APITimeoutError` is NOT a builtin TimeoutError
+            # subclass — without this mapping it would fall into the
+            # generic handler below and the run would end as `{stage}_done`
+            # instead of `agent_timeout` / `timed_out` (issue #95).
+            logger.warning("OpenAIProvider Responses call hit the SDK timeout")
+            raise TimeoutError(
+                "openai LLM call timed out at the SDK transport layer"
+                + (
+                    f" ({timeout_seconds:g}s wall-clock budget)"
+                    if timeout_seconds and timeout_seconds > 0
+                    else ""
+                )
+            ) from e
         except Exception as e:
             logger.exception("OpenAIProvider Responses call failed")
             yield LLMEvent.error(str(e))
@@ -250,6 +292,7 @@ class OpenAIProvider(LLMProvider):
             max_turns=max_turns,
             messages=kwargs.get("messages"),
             reasoning_effort=kwargs.get("reasoning_effort"),
+            timeout_seconds=timeout_seconds,
         ):
             yield event
         yield LLMEvent.done()
