@@ -3937,7 +3937,17 @@ function renderGroupedChatItems(
       }
       result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
     } else {
-      result.push(renderChatItem(cur, streamingItemId, sessionId));
+      // Pass a per-item boolean instead of the shared streamingItemId string:
+      // when streaming starts/ends only the affected item sees a prop change,
+      // so `memo` still bails out for every other bubble.
+      result.push(
+        <ChatItemView
+          key={cur.id}
+          item={cur}
+          isStreaming={cur.id === streamingItemId}
+          sessionId={sessionId}
+        />,
+      );
       i++;
     }
   }
@@ -4091,14 +4101,31 @@ function AttachedFilesPreview({
 }
 
 // ---------------------------------------------------------------------------
-// renderChatItem
+// ChatItemView — memoized per-item renderer (formerly the plain
+// `renderChatItem` function). renderGroupedChatItems re-runs on every
+// `agent_token`/`agent_message` SSE event (each one calls `setChatItems`),
+// which previously re-invoked this as a plain function for every prior
+// message and re-parsed markdown for all of them — O(messages) ReactMarkdown
+// parses per streamed chunk. Wrapping it in `memo`, keyed by `item.id` at
+// the call site, means React bails out and skips re-render (and re-parse)
+// for every bubble except the one whose `item` object reference actually
+// changed (the currently-streaming assistant bubble).
 // ---------------------------------------------------------------------------
 
-function renderChatItem(
-  item: ChatItem,
-  streamingItemId?: string | null,
-  sessionId?: string | null,
-) {
+// Stable remark-plugins array for chat bubbles — a fresh `[remarkGfm]`
+// literal on every render would give ReactMarkdown a "new" plugin list each
+// time, undermining the memoization above even when `item` didn't change.
+const CHAT_MARKDOWN_PLUGINS = [remarkGfm];
+
+const ChatItemView = memo(function ChatItemView({
+  item,
+  isStreaming,
+  sessionId,
+}: {
+  item: ChatItem;
+  isStreaming?: boolean;
+  sessionId?: string | null;
+}) {
   switch (item.type) {
     case 'user': {
       const files: string[] = item.meta?.files || [];
@@ -4107,7 +4134,7 @@ function renderChatItem(
       const hasFiles = files.length > 0;
       const tokens = mentions && mentions.length > 0 ? wireToDraft(item.content, mentions) : null;
       return (
-        <div key={item.id} className="flex justify-end animate-fade-in">
+        <div className="flex justify-end animate-fade-in">
           <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary-600 text-white text-sm overflow-hidden">
             {hasFiles && <UserMessageFilePills files={files} hasText={Boolean(hasText)} />}
             {hasText && (
@@ -4135,10 +4162,9 @@ function renderChatItem(
       const agentColor = agentMeta ? AGENT_COLORS[agentMeta.color] : null;
       const avatarBg = agentColor ? agentColor.bg : 'bg-emerald-500/20';
       const avatarText = agentColor ? agentColor.text : 'text-emerald-400';
-      const isStreaming = item.id === streamingItemId;
 
       return (
-        <div key={item.id} className="flex gap-3 animate-fade-in">
+        <div className="flex gap-3 animate-fade-in">
           <div
             className={`w-7 h-7 rounded-full ${avatarBg} flex items-center justify-center shrink-0 mt-1`}
           >
@@ -4148,7 +4174,7 @@ function renderChatItem(
             {agentMeta && (
               <div className={`text-[10px] ${avatarText} font-medium mb-1`}>{agentMeta.label}</div>
             )}
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={CHAT_MARKDOWN_PLUGINS}>{item.content}</ReactMarkdown>
             {isStreaming && (
               <span className="inline-block w-2 h-5 bg-primary-400 rounded-sm ml-0.5 animate-blink align-text-bottom" />
             )}
@@ -4158,29 +4184,26 @@ function renderChatItem(
     }
     case 'tool_start':
     case 'tool_end':
-      return <CollapsibleToolCard key={item.id} item={item} />;
+      return <CollapsibleToolCard item={item} />;
     case 'code_output':
       return null; // folded into the tool card above
     case 'subagent_start':
     case 'subagent_end':
-      return <SubAgentCard key={item.id} item={item} />;
+      return <SubAgentCard item={item} />;
     case 'clarification':
-      return <ClarificationCard key={item.id} item={item} sessionId={sessionId ?? null} />;
+      return <ClarificationCard item={item} sessionId={sessionId ?? null} />;
     case 'agent_tool':
-      return <AgentToolCard key={item.id} item={item} />;
+      return <AgentToolCard item={item} />;
     case 'error':
       return (
-        <div
-          key={item.id}
-          className="animate-fade-in flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800/50 rounded-lg text-sm text-red-400"
-        >
+        <div className="animate-fade-in flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800/50 rounded-lg text-sm text-red-400">
           <AlertCircle className="w-4 h-4 shrink-0" />
           {item.content}
         </div>
       );
     case 'status':
       return (
-        <div key={item.id} className="text-center">
+        <div className="text-center">
           <span
             className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
               item.content.includes('running')
@@ -4200,7 +4223,7 @@ function renderChatItem(
       );
     case 'stage_complete':
       return (
-        <div key={item.id} className="flex items-center justify-center py-2 animate-fade-in">
+        <div className="flex items-center justify-center py-2 animate-fade-in">
           <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-green-500/10 border border-green-500/20">
             <CheckCircle2 className="w-4 h-4 text-green-400" />
             <span className="text-sm font-medium text-green-300">{item.content} complete</span>
@@ -4210,4 +4233,4 @@ function renderChatItem(
     default:
       return null;
   }
-}
+});
