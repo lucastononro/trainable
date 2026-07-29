@@ -6,12 +6,7 @@ import { SSEStreamProvider } from '@/lib/SSEStreamContext';
 import { api } from '@/lib/api';
 import type { EdaFinding, Mention, Draft, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
 import { appendTextToDraft, draftToWire, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
-import {
-  ImperativePanelHandle,
-  Panel,
-  PanelGroup,
-  PanelResizeHandle,
-} from 'react-resizable-panels';
+import { Group, Panel, Separator, usePanelRef, type Layout } from 'react-resizable-panels';
 import { BarChart3, Database, GripVertical, Loader2, PanelRightOpen } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
@@ -27,6 +22,10 @@ import { useSessionStream } from '@/lib/useSessionStream';
 // ---------------------------------------------------------------------------
 // Main page component
 // ---------------------------------------------------------------------------
+
+// localStorage key for the persisted chat/workspace split (v4 `Group` layout:
+// map of panel id -> flexGrow). Kept stable across the v2->v4 migration.
+const LAYOUT_STORAGE_KEY = 'trainable-layout-v2';
 
 function HomePageContent() {
   const {
@@ -72,13 +71,33 @@ function HomePageContent() {
   );
 
   const [canvasOpen, setCanvasOpen] = useState(false);
-  const workspacePanelRef = useRef<ImperativePanelHandle>(null);
+  const workspacePanelRef = usePanelRef();
+  // v4 replacement for v2's `autoSaveId`: persist the Group layout (map of
+  // panel id -> flexGrow) to localStorage. Hand-rolled instead of the
+  // library's `useDefaultLayout` hook because that hook reads localStorage
+  // during server render and breaks `next build` prerendering.
+  const [defaultLayout] = useState<Layout | undefined>(() => {
+    if (typeof window === 'undefined') return undefined;
+    try {
+      const raw = window.localStorage.getItem(LAYOUT_STORAGE_KEY);
+      return raw ? (JSON.parse(raw) as Layout) : undefined;
+    } catch {
+      return undefined;
+    }
+  });
+  const onLayoutChanged = useCallback((layout: Layout) => {
+    try {
+      window.localStorage.setItem(LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+    } catch {
+      // Persistence is best-effort (storage may be full or blocked).
+    }
+  }, []);
 
   // Opens the canvas and forces the panel to its intended default width —
   // `.expand()` alone restores the last drag-size (which may be smaller than
-  // we want), so we always `.resize(...)` to the same target the PanelGroup
+  // we want), so we always `.resize(...)` to the same target the Group
   // uses on first mount.
-  const CANVAS_DEFAULT_SIZE = 70;
+  const CANVAS_DEFAULT_SIZE = '70%';
   const openCanvas = useCallback(() => {
     const p = workspacePanelRef.current;
     if (!p) return;
@@ -90,10 +109,10 @@ function HomePageContent() {
       // tab if the user opens the canvas with nothing currently active.
       window.dispatchEvent(new CustomEvent('trainable:canvas-opened'));
     });
-  }, []);
+  }, [workspacePanelRef]);
   const collapseCanvas = useCallback(() => {
     workspacePanelRef.current?.collapse();
-  }, []);
+  }, [workspacePanelRef]);
   const clearDraft = useCallback(() => setDraft([]), []);
 
   // The SSE connection + onmessage reducer and every state slice it owns
@@ -685,13 +704,14 @@ function HomePageContent() {
           // -------------------------------------------------------------------
           // Studio view: chat + workspace
           // -------------------------------------------------------------------
-          <PanelGroup
-            direction="horizontal"
+          <Group
+            orientation="horizontal"
             className="flex-1 animate-slide-up"
-            autoSaveId="trainable-layout-v2"
+            defaultLayout={defaultLayout}
+            onLayoutChanged={onLayoutChanged}
           >
             {/* Chat panel */}
-            <Panel defaultSize={canvasOpen ? 30 : 100} minSize={20}>
+            <Panel id="chat" defaultSize={canvasOpen ? '30%' : '100%'} minSize="20%">
               <ChatPane
                 activeSessionId={activeSessionId}
                 activeProjectId={activeProjectId}
@@ -729,7 +749,7 @@ function HomePageContent() {
             </Panel>
 
             {/* Resize handle + Workspace sidebar */}
-            <PanelResizeHandle
+            <Separator
               className={`w-1.5 transition-colors relative group flex items-center justify-center ${canvasOpen ? 'bg-surface-border hover:bg-primary-500/50 active:bg-primary-500/70' : 'bg-transparent pointer-events-none'}`}
             >
               {canvasOpen && (
@@ -737,15 +757,18 @@ function HomePageContent() {
                   <GripVertical className="w-3 h-3 text-gray-400" />
                 </div>
               )}
-            </PanelResizeHandle>
+            </Separator>
             <Panel
-              ref={workspacePanelRef}
-              defaultSize={canvasOpen ? 70 : 0}
-              minSize={30}
+              id="workspace"
+              panelRef={workspacePanelRef}
+              defaultSize={canvasOpen ? '70%' : '0%'}
+              minSize="30%"
               collapsible
-              collapsedSize={0}
-              onCollapse={() => setCanvasOpen(false)}
-              onExpand={() => setCanvasOpen(true)}
+              collapsedSize="0%"
+              // v4 has no onCollapse/onExpand; derive canvasOpen from the
+              // panel's rendered size (collapsedSize is 0%, so a collapsed
+              // panel reports 0px).
+              onResize={(size) => setCanvasOpen(size.inPixels > 0)}
             >
               {canvasOpen && (
                 // Keyed by sessionId so switching sessions also clears any
@@ -773,7 +796,7 @@ function HomePageContent() {
                 </ErrorBoundary>
               )}
             </Panel>
-          </PanelGroup>
+          </Group>
         )}
       </div>
 
