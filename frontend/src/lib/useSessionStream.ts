@@ -1297,11 +1297,7 @@ export function useSessionStream(
                     ...restored[idx].meta,
                     status: 'resolved',
                     decision: msg.metadata?.decision as
-                      | 'approve'
-                      | 'edit'
-                      | 'timeout'
-                      | 'cancelled'
-                      | undefined,
+                      'approve' | 'edit' | 'timeout' | 'cancelled' | undefined,
                     answer: metaStr(msg.metadata?.answer),
                     answered_by: metaStr(msg.metadata?.answered_by),
                   },
