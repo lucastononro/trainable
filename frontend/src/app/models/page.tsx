@@ -252,7 +252,7 @@ function TestPanel({ m, onClose }: { m: RegisteredModel; onClose: () => void }) 
     if (file.size > MAX_CSV_BYTES) {
       setCsvError(
         `File is too large (${(file.size / 1024 / 1024).toFixed(1)} MB). The test panel ` +
-          'accepts up to 5 MB — use the endpoint directly for larger batches.'
+          'accepts up to 5 MB — use the endpoint directly for larger batches.',
       );
       return;
     }
@@ -297,9 +297,7 @@ function TestPanel({ m, onClose }: { m: RegisteredModel; onClose: () => void }) 
       <div className="flex items-center gap-2 px-3 py-1.5 border-b border-white/[0.05] text-[11px] text-sky-200/90">
         <FlaskConical className="w-3.5 h-3.5 text-sky-300" />
         <span className="font-medium">Test predictions</span>
-        <span className="opacity-60">
-          — sent through the backend with the stored X-API-Key.
-        </span>
+        <span className="opacity-60">— sent through the backend with the stored X-API-Key.</span>
         <div className="flex-1" />
         {features?.length ? (
           <div className="flex rounded-md overflow-hidden border border-white/[0.08]">
@@ -354,8 +352,8 @@ function TestPanel({ m, onClose }: { m: RegisteredModel; onClose: () => void }) 
               <div>
                 {!features?.length ? (
                   <div className="mb-2 text-[11px] text-gray-500">
-                    No trained feature columns on record for this model — upload a CSV with the
-                    same columns the model was trained on (header row required).
+                    No trained feature columns on record for this model — upload a CSV with the same
+                    columns the model was trained on (header row required).
                   </div>
                 ) : null}
                 <label className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg bg-white/[0.04] hover:bg-white/[0.08] text-gray-300 cursor-pointer">
