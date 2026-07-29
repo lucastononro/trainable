@@ -14,6 +14,7 @@ sandbox-timeout handling), so no timeout logic lives here.
 import os
 import queue
 import subprocess
+import tempfile
 import threading
 
 import runpod
@@ -25,36 +26,57 @@ def handler(job):
     workdir = inp.get("workdir") or "/data"
     os.makedirs(workdir, exist_ok=True)
 
-    proc = subprocess.Popen(
-        ["python", "-u", "-c", code],
-        cwd=workdir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
+    # Stage the code in a temp file on the ephemeral container disk and
+    # exec it through a tiny -c bootstrap. Passing the script itself via
+    # `python -c <code>` puts it on argv, and execve's ARG_MAX (~2 MB,
+    # shared with the environment) makes Popen raise "Argument list too
+    # long" for the multi-MB scripts the backend otherwise accepts. The
+    # bootstrap keeps `python -c` semantics (sys.path[0] = cwd, argv[0] =
+    # "-c") so agent code behaves exactly as on the Modal path.
+    fd, code_path = tempfile.mkstemp(suffix=".py", prefix="runpod-job-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(code)
+        bootstrap = (
+            f"exec(compile(open({code_path!r}, 'rb').read(), "
+            f"{code_path!r}, 'exec'))"
+        )
 
-    q: queue.Queue = queue.Queue()
+        proc = subprocess.Popen(
+            ["python", "-u", "-c", bootstrap],
+            cwd=workdir,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
 
-    def pump(stream, name):
-        for line in iter(stream.readline, ""):
-            q.put({"stream": name, "text": line})
-        stream.close()
-        q.put({"eof": name})
+        q: queue.Queue = queue.Queue()
 
-    for stream, name in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
-        threading.Thread(target=pump, args=(stream, name), daemon=True).start()
+        def pump(stream, name):
+            for line in iter(stream.readline, ""):
+                q.put({"stream": name, "text": line})
+            stream.close()
+            q.put({"eof": name})
 
-    eofs = 0
-    while eofs < 2:
-        item = q.get()
-        if "eof" in item:
-            eofs += 1
-            continue
-        yield item
+        for stream, name in ((proc.stdout, "stdout"), (proc.stderr, "stderr")):
+            threading.Thread(target=pump, args=(stream, name), daemon=True).start()
 
-    proc.wait()
-    yield {"returncode": proc.returncode}
+        eofs = 0
+        while eofs < 2:
+            item = q.get()
+            if "eof" in item:
+                eofs += 1
+                continue
+            yield item
+
+        proc.wait()
+        yield {"returncode": proc.returncode}
+    finally:
+        try:
+            os.unlink(code_path)
+        except OSError:
+            pass
 
 
 runpod.serverless.start({"handler": handler, "return_aggregate_stream": True})

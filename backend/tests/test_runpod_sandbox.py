@@ -91,6 +91,48 @@ class TestRunPodJobHandle:
         assert rc != 0
 
     @pytest.mark.asyncio
+    async def test_transient_stream_errors_are_retried(self, monkeypatch):
+        """A single network blip must not condemn a healthy job to
+        FAILED/returncode -9 — the poller tolerates a few consecutive
+        /stream failures."""
+        fake = FakeRunPodClient(_completed_stream())
+        orig_stream = fake.stream
+        state = {"raised": 0}
+
+        async def flaky_stream(endpoint_id, job_id):
+            if state["raised"] < 2:
+                state["raised"] += 1
+                raise RuntimeError("connection reset by peer")
+            return await orig_stream(endpoint_id, job_id)
+
+        fake.stream = flaky_stream
+        monkeypatch.setattr(rp_sandbox, "get_client", lambda: fake)
+
+        handle = rp_sandbox.RunPodJobHandle("ep-1", "job-1")
+        stdout = [chunk async for chunk in handle.stdout]
+        rc = await handle.wait()
+
+        assert rc == 0
+        assert stdout == ["hello\n"]
+
+    @pytest.mark.asyncio
+    async def test_persistent_stream_failure_marks_failed(self, monkeypatch):
+        fake = FakeRunPodClient([{"status": "IN_PROGRESS", "stream": []}])
+
+        async def always_fail(endpoint_id, job_id):
+            raise RuntimeError("RunPod API unreachable")
+
+        fake.stream = always_fail
+        monkeypatch.setattr(rp_sandbox, "get_client", lambda: fake)
+
+        handle = rp_sandbox.RunPodJobHandle("ep-1", "job-1")
+        stderr = [chunk async for chunk in handle.stderr]
+        rc = await handle.wait()
+
+        assert rc == -9
+        assert any("output stream lost" in line for line in stderr)
+
+    @pytest.mark.asyncio
     async def test_terminate_cancels_job(self, monkeypatch):
         fake = FakeRunPodClient([{"status": "IN_PROGRESS", "stream": []}])
         monkeypatch.setattr(rp_sandbox, "get_client", lambda: fake)
