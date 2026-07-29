@@ -1,5 +1,16 @@
 # Release notes
 
+## v0.0.4 — 2026-05-12
+
+Hot-fix release on top of v0.0.3 addressing image-tag staleness.
+
+### CLI
+
+- **`trainable up` now pulls images pinned to the wheel's own version.** The compose template uses `${TRAINABLE_BACKEND_TAG:-latest}` / `${TRAINABLE_FRONTEND_TAG:-latest}` indirection and the CLI sets those env vars to its installed version on every `up`. Result: `pip install -U trainable-ai && trainable up` always pulls `ghcr.io/.../:<version>` rather than reusing whatever stale `:latest` happens to be in the local docker cache.
+- **Compose template ships inside the wheel.** Previously the CLI fetched `docker-compose.prod.yml` from `raw.githubusercontent.com` on `trainable init`. Now it's bundled at `trainable_cli/_templates/docker-compose.prod.yml`, so installs work offline and the wheel + compose are always in lockstep. `cmd_up` re-writes the compose file on every invocation so users upgrading from 0.0.3 → 0.0.4 silently migrate to the new layout.
+
+---
+
 ## v0.0.3 — 2026-05-12
 
 This release turns Trainable from a Claude-only prototype into a multi-provider, skill-driven agent studio with first-class lineage, deploy, and live observability.

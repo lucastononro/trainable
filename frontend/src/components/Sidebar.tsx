@@ -18,12 +18,13 @@ import {
   X,
   Box,
   FlaskConical,
+  Download,
 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
-import type { Experiment, Project, SandboxConfig } from '@/lib/types';
+import type { Experiment, Project, SandboxConfig, TrainingConfig } from '@/lib/types';
 import ConfirmModal from './ConfirmModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 
@@ -337,6 +338,17 @@ function ProjectSection({
         >
           <Settings className="w-3 h-3 text-gray-500" />
         </button>
+        <a
+          // Browser-native streamed zip download — Content-Disposition on the
+          // backend picks the filename. Going through Next's /api rewrite
+          // keeps this working in dev and prod without an extra env var.
+          href={`/api/projects/${project.id}/download`}
+          onClick={(e) => e.stopPropagation()}
+          className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
+          title="Download project workspace (zip)"
+        >
+          <Download className="w-3 h-3 text-gray-500" />
+        </a>
         <button
           onClick={onDelete}
           className="p-0.5 rounded opacity-0 group-hover:opacity-100 hover:bg-white/[0.1] transition-all shrink-0"
@@ -517,10 +529,19 @@ export default function Sidebar() {
     setConfirmTarget({ kind: 'project', id: projectId });
   }, []);
 
-  const handleSaveSandboxConfig = useCallback(
-    async (projectId: string, config: SandboxConfig) => {
+  const handleSaveProjectSettings = useCallback(
+    async (
+      projectId: string,
+      config: SandboxConfig,
+      budgetUsd: number | null,
+      training: TrainingConfig,
+    ) => {
       try {
-        await api.updateProject(projectId, { sandbox_config: config });
+        await api.updateProject(projectId, {
+          sandbox_config: config,
+          budget_usd: budgetUsd,
+          training_config: training,
+        });
         await refreshProjects();
       } catch {
         // silent
@@ -921,8 +942,11 @@ export default function Sidebar() {
             isOpen={settingsProjectId !== null}
             projectName={settingsProject?.name ?? ''}
             sandboxConfig={settingsProject?.sandbox_config ?? {}}
-            onSave={(config) => {
-              if (settingsProjectId) handleSaveSandboxConfig(settingsProjectId, config);
+            budgetUsd={settingsProject?.budget_usd ?? null}
+            trainingConfig={settingsProject?.training_config ?? {}}
+            onSave={(config, budgetUsd, training) => {
+              if (settingsProjectId)
+                handleSaveProjectSettings(settingsProjectId, config, budgetUsd, training);
             }}
             onClose={() => setSettingsProjectId(null)}
           />

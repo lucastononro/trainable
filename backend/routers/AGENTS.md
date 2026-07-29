@@ -10,13 +10,14 @@ experiments.py    Experiment CRUD + lifecycle (created → prepping → ...)
 projects.py       Project CRUD
 models.py         Available model registry (proxies models.yml to the frontend)
 registry.py       Registered model CRUD
-snapshots.py      Run snapshots
+snapshots.py      Run snapshots + reproduce action (replay scripts, diff metrics)
 compare.py        Multi-experiment compare
 data_explorer.py  Dataset inspection + preview
 lineage.py        Lineage graph endpoints (raw → processed → model)
 notebook.py       Notebook read/write/run
 files.py          Session/project file tree + download
 s3_browser.py     S3 prefix listing
+samples.py        Bundled sample-dataset catalog + one-click project-from-sample
 skills.py         Skill catalog (for the UI's "available tools" panel)
 stream.py         SSE — the single subscription endpoint
 usage.py          Token + cost rollups

@@ -35,7 +35,7 @@ This split matters and has caused confusion. The pip install line is `pip instal
 The wizard, in order:
 
 1. **Check prereqs.** Docker installed and running. Print actionable error if not.
-2. **Pull images.** `ghcr.io/lucastononro/trainable-backend:latest` + `:frontend:latest`. Multi-arch manifest handles the platform.
+2. **Pull images.** `ghcr.io/lucastononro/trainable-backend:<version>` + `:frontend:<version>`, where `<version>` is the installed wheel's version. The compose template uses `${TRAINABLE_BACKEND_TAG:-latest}` / `${TRAINABLE_FRONTEND_TAG:-latest}` indirection; `cmd_up` injects the wheel's `importlib.metadata.version("trainable-ai")` into those env vars on every invocation so users on `pip install -U trainable-ai` never get a stale cached `:latest`. Multi-arch manifest handles the platform.
 3. **Collect credentials.** The backend treats Claude / OpenAI / Gemini / LiteLLM as equal peers (`backend/services/llm/factory.py`), so the wizard presents them as a flat multi-select and requires *at least one* on fresh install or full replace.
    - Claude: `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` (run `claude setup-token` for the latter).
    - OpenAI: `OPENAI_API_KEY`.
@@ -72,7 +72,7 @@ The wizard, in order:
 - **PyPI**: `hatch build && twine upload`.
 - **Images**: `docker buildx build --platform linux/amd64,linux/arm64 ...`.
 - **Both update on every release.** A release where the pip wheel pins old image tags is broken.
-- **Pin major versions only.** `trainable-ai==0.x` pins to the major; image tags use semver.
+- **Wheel and images are tag-locked.** `cmd_up` sets `TRAINABLE_BACKEND_TAG` / `TRAINABLE_FRONTEND_TAG` to the wheel's own version, and the compose template (bundled inside the wheel at `trainable_cli/_templates/docker-compose.prod.yml`) reads those env vars. So `trainable-ai==0.0.4` always pulls `ghcr.io/.../:0.0.4`, never a cached `:latest`. The semver image tag is produced by `docker/metadata-action`'s `type=semver,pattern={{version}}` rule in `publish-image.yml`, which strips the leading `v` from the git tag.
 - **Test install in a fresh venv** before tagging a release: `python -m venv /tmp/test && /tmp/test/bin/pip install trainable-ai && /tmp/test/bin/trainable --help`.
 
 ## Release checklist
