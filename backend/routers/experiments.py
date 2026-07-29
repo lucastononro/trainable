@@ -550,24 +550,35 @@ async def attach_data(
                 raw_name = f.filename or "file"
                 rel_path = _safe_relative_path(raw_name)
                 key = _dataset_s3_key(project_id, rel_path)
-                content = await f.read()
-                if len(content) > settings.max_upload_size_bytes:
-                    raise HTTPException(
-                        status_code=413, detail=f"File '{rel_path}' too large"
+
+                # Stream to a temp file in bounded 1 MB chunks instead of
+                # buffering the whole body — same pattern as
+                # create_experiment (issue #94).
+                size = 0
+                with tempfile.NamedTemporaryFile(delete=False) as tmp:
+                    tmp_path = tmp.name
+                    staged.append(
+                        (tmp_path, _dataset_volume_path(project_id, rel_path))
                     )
+                    chunk = await f.read(1024 * 1024)
+                    while chunk:
+                        size += len(chunk)
+                        if size > settings.max_upload_size_bytes:
+                            raise HTTPException(
+                                status_code=413, detail=f"File '{rel_path}' too large"
+                            )
+                        await asyncio.to_thread(tmp.write, chunk)
+                        chunk = await f.read(1024 * 1024)
 
                 await asyncio.to_thread(
-                    s3.put_object,
-                    Bucket="datasets",
-                    Key=key,
-                    Body=content,
-                    ContentType=f.content_type or "application/octet-stream",
+                    s3.upload_file,
+                    tmp_path,
+                    "datasets",
+                    key,
+                    ExtraArgs={
+                        "ContentType": f.content_type or "application/octet-stream"
+                    },
                 )
-
-                with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                    tmp.write(content)
-                    tmp_path = tmp.name
-                staged.append((tmp_path, _dataset_volume_path(project_id, rel_path)))
                 uploaded.append(f"s3://datasets/{key}")
 
             if staged:
