@@ -2,8 +2,44 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Literal, Protocol, runtime_checkable
+from typing import (
+    Any,
+    AsyncIterator,
+    Awaitable,
+    Literal,
+    Protocol,
+    TypeVar,
+    runtime_checkable,
+)
+
+T = TypeVar("T")
+
+
+async def enforce_wall_clock(
+    awaitable: Awaitable[T], timeout_seconds: float | None, *, provider: str
+) -> T:
+    """Await a single provider HTTP call under a hard wall-clock cap.
+
+    Providers wrap *only* the network call (never tool execution) with this
+    helper so `timeout_seconds` bounds a stalled provider request without
+    counting tool time. On expiry it raises builtin `TimeoutError`, which
+    providers must let propagate: the runner's `except TimeoutError` path
+    publishes `agent_timeout`, moves the session to `timed_out`, and frees
+    the background-task registry entry — instead of the task hanging forever
+    on a dead socket (issue #95).
+
+    A falsy / non-positive timeout disables the cap.
+    """
+    if not timeout_seconds or timeout_seconds <= 0:
+        return await awaitable
+    try:
+        return await asyncio.wait_for(awaitable, timeout=timeout_seconds)
+    except (TimeoutError, asyncio.TimeoutError) as e:
+        raise TimeoutError(
+            f"{provider} LLM call exceeded the {timeout_seconds:g}s wall-clock timeout"
+        ) from e
 
 
 EventKind = Literal[

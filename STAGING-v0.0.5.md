@@ -1,0 +1,35 @@
+# Staging branch `staging-v0.0.5` — merge ledger
+
+Purpose: consolidate all triaged open PRs (as of 2026-07-29) into one integration
+branch, off `main` at the v0.0.4 release line, so they can be tested together and
+backtracked. Nothing here is merged to `main`.
+
+Base: `origin/main` @ v0.0.4 line.
+Method per PR: check outstanding Greptile findings → fix valid ones (pushed to the
+PR branch, or noted if dismissed) → fix CI/conflicts → merge `--no-ff` into this
+branch → run relevant tests → record below.
+
+## Merged
+
+| Order | PR | Branch | Closes | Greptile follow-ups | Extra fixes | Tests | Notes |
+|------|----|--------|--------|--------------------|-------------|-------|-------|
+| 1 | #132 | fix/123-issue-tracker-link | #123 | none | none | docs-only | merged clean |
+| 2 | #129 | fix/125-update-stale-cli-readme-to-match-v0-0-4- (fork: Dodothereal) | #125 | none | none | docs-only | head branch lives on a fork; merged via `refs/pull/129/head` (head `1659a105` verified as merge parent) |
+| 3 | #137 | fix/124-ruff-config | #124 | none | none | `ruff check .` + `ruff format --check .` in `backend/` (ruff 0.15.22 via uvx) — all pass, 142 files formatted | CONTRIBUTING.md auto-merged with #132 (different lines), no conflict |
+| 4 | #135 | fix/122-pre-commit-config | #122 | P1 ruff version mismatch pre-commit vs CI — already fixed by author's fixup `3020b76` (pins `ruff==0.15.22` in ci.yml, cross-ref comments) | none | ruff check/format re-run in `backend/` after merge — pass | touches `.github/workflows/ci.yml`; merged clean |
+| 5 | #167 | fix/113-multiuser-auth-design | #113 (design note) | 4 outstanding findings fixed on the PR branch in `a18cd6e`: P1 ProjectShare mutual-exclusion → CHECK constraint + create-path validation specified; AuthSession hash-at-lookup pattern made explicit; bootstrap first-come-first-served → env pre-seed recommended, interactive form localhost/token-gated; `scope_to_user` link-browsing exclusion documented as intentional | none | docs-only | greptile comments postdated the branch head, so fixups were applied and pushed to the PR branch before merging |
+| 6 | #151 | fix/120-sentry-capture | #120 | P2 bare `except Exception` in test — already fixed by author's fixup `382db8f`; P1 (postdated head) `assert task.done()` after `wait_for` timeout could fail in slow CI — fixed on PR branch in `24f1900` (await task after timeout) | none | full backend suite: 300 passed, 8 skipped | merged clean |
+| 7 | #155 | fix/115-agent-sandbox-tests | #115 | both P2 findings (no task-registry cleanup fixture; stale-task cancellation asserted without explicit await) already fixed by author's fixup `befc75f` | none | full backend suite: 315 passed, 8 skipped | test-only; merged clean |
+| 8 | #139 | fix/93-offload-duckdb | #93 | both P2 findings (unguarded `raise None` re-raise sites in validator.py) already fixed by author's fixup `6936b64` + regression tests | none | full backend suite: 319 passed, 8 skipped | merged clean |
+| 9 | #134 | fix/127-env-file-permissions | #127 | P2 TOCTOU on `.env` creation — fixed by author's fixup `4259bdf` (`os.open` with mode 0600 at creation); P2 "reconfigure skips dir chmod" — verified false positive: `cmd_reconfigure()` delegates to `cmd_init()` which chmods the dir unconditionally | none | new `cli-test` CI job replicated locally: `pytest tests/` in `cli/` — 5 passed | adds first CLI test suite + `cli-test` job in ci.yml; auto-merged ci.yml clean |
+| 10 | #136 | fix/90-prod-compose-secrets | #90 | both P2 findings (`.env.example` comment accuracy + stale example values) already fixed by author's fixup `2e313f8` | none | `docker compose -f docker-compose.prod.yml config` fails closed without secrets (`POSTGRES_USER is missing` — intended) and renders OK with dummy env vars | datastores now bound to 127.0.0.1; merged clean |
+| 11 | #142 | fix/95-llm-timeout | #95 | all findings already fixed by author's fixup `39929e6`: 2× P1 SDK-timeout vs wall-clock race (OpenAI `APITimeoutError` / `litellm.Timeout` now mapped onto builtin `TimeoutError`) + P2 test coverage for the race | none | full backend suite: 330 passed, 8 skipped | touches `backend/config.py` (later waves beware); merged clean |
+| 12 | #133 | fix/96-relative-api-urls | #96 | P2 inline `/api/files/raw?path=...` built in six places — already fixed by author's fixup `b2488b4` (extracted helper per `frontend/src/lib/AGENTS.md`) | none | frontend: `npm ci` + `npm test` (vitest 4/4 passed), `npx tsc --noEmit` clean | adds vitest + `frontend-test` wiring in ci.yml; merged clean |
+| 13 | #138 | fix/88-api-auth | #88 | both P2 findings already fixed by author's fixup `eab79ba`: bearer token in `?token=` access logs (documented + header preferred) and WebSocket scopes bypassing auth silently (websocket scopes under `/api/` now gated, close 1008) | none | full backend suite: 345 passed, 8 skipped | auth opt-in via `API_AUTH_TOKEN`; merged clean |
+| 14 | #140 | fix/89-cors | #89 | both P2 findings already fixed by author's fixup `3f336df`: wildcard mixed with explicit origins now rejected at startup (fail-fast) instead of silently disabling credentials; JSON-array env format explicitly JSON-parsed despite `NoDecode` | none | full backend suite: 361 passed, 8 skipped | stacked on #138; `.env.example`/`config.py`/`main.py` auto-merged, `llm_timeout_seconds` (#142) preserved |
+| 15 | #144 | fix/119-readyz | #119 | 4 findings handled by author's fixup `029859c`: DB+S3 probes now concurrent via `asyncio.gather`; raw-SQL comment added per `backend/AGENTS.md`; S3-down test now exercises `list_buckets` failure path; `__aexit__ async def` finding dismissed as false positive (already `async def`) | none | full backend suite: 367 passed, 8 skipped; `docker compose -f docker-compose.prod.yml config -q` + `docker-compose.yml config -q` pass with dummy env vars | stacked on #140; `docker-compose.prod.yml` auto-merged clean — verified both #136's 127.0.0.1 binds AND #144's healthcheck/depends_on present |
+
+## Deferred / not merged
+
+| PR / Issue | Reason |
+|-----------|--------|

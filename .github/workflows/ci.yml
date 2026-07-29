@@ -23,7 +23,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install ruff
+      # Keep in sync with the ruff-pre-commit rev in .pre-commit-config.yaml.
+      - run: pip install "ruff==0.15.22"
       - run: ruff check .
       - run: ruff format --check .
 
@@ -40,6 +41,21 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
+      - run: pytest tests/ -v --tb=short
+
+  cli-test:
+    name: CLI Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install pytest .
       - run: pytest tests/ -v --tb=short
 
   backend-security:
@@ -75,6 +91,7 @@ jobs:
       - run: npx next lint
       - run: npx tsc --noEmit
       - run: npx prettier --check 'src/**/*.{ts,tsx,css}'
+      - run: npm test
 
   frontend-build:
     name: Frontend Build

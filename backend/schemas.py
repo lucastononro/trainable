@@ -89,6 +89,13 @@ class ProjectUpdate(BaseModel):
     sandbox_config: Optional[SandboxConfig] = None
 
 
+class UploadResponse(BaseModel):
+    status: Literal["uploaded"] = "uploaded"
+    bucket: str
+    key: str
+    size: int
+
+
 class ExperimentUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=_NAME_MAX)
     description: Optional[str] = Field(default=None, max_length=_DESC_MAX)

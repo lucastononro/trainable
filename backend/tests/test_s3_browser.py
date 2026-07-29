@@ -40,6 +40,32 @@ async def test_upload_small_file_ok(client, mock_s3):
 
 
 @pytest.mark.asyncio
+async def test_upload_response_is_typed(client, mock_s3):
+    """The upload response follows the UploadResponse schema and the endpoint
+    declares it in OpenAPI (routers/AGENTS.md: no raw-dict responses)."""
+    resp = await client.post(
+        "/api/s3/upload",
+        params={"bucket": "datasets", "key": "datasets/projects/p1/train.csv"},
+        files={"file": ("train.csv", b"x,y\n1,2\n", "text/csv")},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert set(body) == {"status", "bucket", "key", "size"}
+    assert body == {
+        "status": "uploaded",
+        "bucket": "datasets",
+        "key": "datasets/projects/p1/train.csv",
+        "size": len(b"x,y\n1,2\n"),
+    }
+
+    spec = (await client.get("/openapi.json")).json()
+    assert "UploadResponse" in spec["components"]["schemas"]
+    upload_op = spec["paths"]["/api/s3/upload"]["post"]
+    ok_schema = upload_op["responses"]["200"]["content"]["application/json"]["schema"]
+    assert ok_schema["$ref"].endswith("/UploadResponse")
+
+
+@pytest.mark.asyncio
 async def test_upload_unknown_bucket_rejected(client, mock_s3):
     resp = await client.post(
         "/api/s3/upload",
@@ -146,6 +172,7 @@ async def test_upload_cancelled_mid_multipart_still_aborts(mock_s3, monkeypatch)
 
     loop = asyncio.get_running_loop()
     executor = ThreadPoolExecutor(max_workers=1)
+    original_executor = loop._default_executor
     loop.set_default_executor(executor)
     release_worker = threading.Event()
     try:
@@ -180,6 +207,7 @@ async def test_upload_cancelled_mid_multipart_still_aborts(mock_s3, monkeypatch)
     finally:
         release_worker.set()
         executor.shutdown(wait=False)
+        loop._default_executor = original_executor
     mock_s3.abort_multipart_upload.assert_called_once_with(
         Bucket="datasets",
         Key="datasets/projects/p1/big.bin",

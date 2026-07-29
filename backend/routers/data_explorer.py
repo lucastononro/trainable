@@ -1,5 +1,6 @@
 """Data exploration endpoints using DuckDB for querying processed parquet files."""
 
+import asyncio
 import io
 import logging
 import re
@@ -57,9 +58,25 @@ class QueryRequest(BaseModel):
 def _load_parquet_to_duckdb(
     con: duckdb.DuckDBPyConnection, raw: bytes, table_name: str
 ):
-    """Load parquet bytes into a DuckDB table via pyarrow."""
+    """Load parquet bytes into a DuckDB table via pyarrow.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    """
     arrow_table = pq.read_table(io.BytesIO(raw))  # noqa: F841 — referenced by DuckDB SQL below
     con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM arrow_table")
+
+
+def _execute_fetch(
+    con: duckdb.DuckDBPyConnection, sql: str, params: list | None = None
+) -> tuple[list[str], list[tuple]]:
+    """Execute a query and fetch all rows.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    Returns (column_names, rows).
+    """
+    result = con.execute(sql, params) if params is not None else con.execute(sql)
+    columns = [desc[0] for desc in result.description]
+    return columns, result.fetchall()
 
 
 async def _resolve_split_paths(session_id: str) -> dict[str, str]:
@@ -138,7 +155,7 @@ async def query_prep_data(session_id: str, body: QueryRequest):
                 continue
             try:
                 raw = await read_volume_file_async(path)
-                _load_parquet_to_duckdb(con, raw, split)
+                await asyncio.to_thread(_load_parquet_to_duckdb, con, raw, split)
             except Exception:
                 pass
 
@@ -163,9 +180,7 @@ async def query_prep_data(session_id: str, body: QueryRequest):
         if "LIMIT" not in sql.upper():
             sql += f" LIMIT {max_limit}"
 
-        result = con.execute(sql)
-        columns = [desc[0] for desc in result.description]
-        rows = result.fetchall()
+        columns, rows = await asyncio.to_thread(_execute_fetch, con, sql)
 
         return {
             "columns": columns,
@@ -202,10 +217,10 @@ async def preview_prep_data(
 
     con = duckdb.connect(":memory:")
     try:
-        _load_parquet_to_duckdb(con, raw, split)
-        result = con.execute(f"SELECT * FROM {split} LIMIT ?", [limit])
-        columns = [desc[0] for desc in result.description]
-        rows = result.fetchall()
+        await asyncio.to_thread(_load_parquet_to_duckdb, con, raw, split)
+        columns, rows = await asyncio.to_thread(
+            _execute_fetch, con, f"SELECT * FROM {split} LIMIT ?", [limit]
+        )
         return {
             "split": split,
             "columns": columns,
