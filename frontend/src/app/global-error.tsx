@@ -42,9 +42,7 @@ export default function GlobalError({
         }}
       >
         <div>
-          <h1 style={{ fontSize: '18px', fontWeight: 500, margin: 0 }}>
-            Trainable failed to load
-          </h1>
+          <h1 style={{ fontSize: '18px', fontWeight: 500, margin: 0 }}>Trainable failed to load</h1>
           <p style={{ marginTop: '8px', maxWidth: '420px', fontSize: '14px', color: '#a3a3a3' }}>
             Something went wrong before the app could start. Try again, or reload the page if it
             keeps happening.

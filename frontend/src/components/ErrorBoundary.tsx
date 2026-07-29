@@ -61,7 +61,9 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <AlertCircle className="w-6 h-6 text-red-400 shrink-0" />
         <div>
           <p className="text-sm text-gray-300">
-            {this.props.label ? `Couldn't render ${this.props.label}.` : 'Something went wrong rendering this.'}
+            {this.props.label
+              ? `Couldn't render ${this.props.label}.`
+              : 'Something went wrong rendering this.'}
           </p>
           <p className="mt-1 max-w-md break-words font-mono text-xs text-gray-500">
             {error.message}
