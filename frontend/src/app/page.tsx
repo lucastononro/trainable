@@ -1296,8 +1296,7 @@ function HomePageContent() {
                   type: 'subagent_start',
                   content: (msg.metadata?.agent_type as string) || 'sub-agent',
                   meta: {
-                    task:
-                      metaStr(msg.metadata?.task) || metaStr(msg.metadata?.description) || '',
+                    task: metaStr(msg.metadata?.task) || metaStr(msg.metadata?.description) || '',
                     model: metaStr(msg.metadata?.model) || '',
                     depth: metaNum(msg.metadata?.depth) || 1,
                     agent_id: metaStr(msg.metadata?.agent_id) || '',
@@ -4279,9 +4278,7 @@ const ChatItemView = memo(function ChatItemView({
               <div className={`text-[10px] ${avatarText} font-medium mb-1`}>{agentMeta.label}</div>
             )}
             <ErrorBoundary
-              fallback={() => (
-                <div className="whitespace-pre-wrap break-words">{item.content}</div>
-              )}
+              fallback={() => <div className="whitespace-pre-wrap break-words">{item.content}</div>}
             >
               <ReactMarkdown remarkPlugins={CHAT_MARKDOWN_PLUGINS}>{item.content}</ReactMarkdown>
             </ErrorBoundary>
