@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Check, CheckCircle2, Clock, Loader2, Pencil, ShieldCheck, XCircle } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import { api } from '@/lib/api';
 import type { ChatItem } from '@/lib/chatItems';
 import { AGENT_COLORS, AGENT_META } from '@/components/chat/agentMeta';
@@ -34,6 +34,7 @@ export default function ApprovalCard({
   const [editing, setEditing] = useState(false);
   const [edits, setEdits] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
   const [localStatus, setLocalStatus] = useState<'pending' | 'sent' | 'resolved'>(
     item.meta?.status === 'resolved' ? 'resolved' : 'pending',
   );
@@ -52,6 +53,7 @@ export default function ApprovalCard({
     if (!sessionId || !item.meta?.approval_id) return;
     if (verdict === 'edit' && !edits.trim()) return;
     setSubmitting(true);
+    setSendError(null);
     try {
       await api.replyApproval(
         sessionId,
@@ -61,7 +63,14 @@ export default function ApprovalCard({
       );
       setLocalStatus('sent');
     } catch (e) {
+      // The buttons re-enable via `finally`, but without a visible message
+      // the user can't tell their verdict never reached the agent (e.g. the
+      // approval expired or the backend restarted) — surface it inline.
       console.error('Failed to send approval verdict', e);
+      setSendError(
+        `Couldn't send your ${verdict === 'edit' ? 'revision' : 'approval'} — ` +
+          `${e instanceof Error ? e.message : 'request failed'}. Try again.`,
+      );
     } finally {
       setSubmitting(false);
     }
@@ -140,6 +149,11 @@ export default function ApprovalCard({
           </div>
         ) : (
           <div className="mt-1 space-y-2">
+            {sendError && (
+              <div className="text-xs text-red-400 flex items-center gap-1.5">
+                <XCircle className="w-3.5 h-3.5 shrink-0" /> {sendError}
+              </div>
+            )}
             {editing && (
               <textarea
                 value={edits}
