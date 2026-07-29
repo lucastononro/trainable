@@ -51,6 +51,9 @@ All setups also need Modal credentials for sandboxed code execution:
 | `trainable reconfigure` | Add or replace LLM providers without losing existing keys |
 | `trainable up` | Start all services (works from any directory) |
 | `trainable down` | Stop all services |
+| `trainable status` | Show running containers (`docker compose ps`) |
+| `trainable logs` | Show service logs (`docker compose logs`) |
+| `trainable --version` | Print the installed CLI version |
 
 ### Reconfiguring
 
