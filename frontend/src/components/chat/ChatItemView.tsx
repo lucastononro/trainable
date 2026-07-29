@@ -4,7 +4,7 @@ import { memo, type ReactNode } from 'react';
 import { AlertCircle, Bot, CheckCircle2, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import MentionPill from '@/components/MentionPill';
 import { wireToDraft } from '@/lib/mentions';
 import type { Mention } from '@/lib/types';
@@ -36,11 +36,11 @@ const CHAT_MARKDOWN_PLUGINS = [remarkGfm];
 
 const ChatItemView = memo(function ChatItemView({
   item,
-  streamingItemId,
+  isStreaming,
   sessionId,
 }: {
   item: ChatItem;
-  streamingItemId?: string | null;
+  isStreaming?: boolean;
   sessionId?: string | null;
 }) {
   switch (item.type) {
@@ -79,7 +79,6 @@ const ChatItemView = memo(function ChatItemView({
       const agentColor = agentMeta ? AGENT_COLORS[agentMeta.color] : null;
       const avatarBg = agentColor ? agentColor.bg : 'bg-emerald-500/20';
       const avatarText = agentColor ? agentColor.text : 'text-emerald-400';
-      const isStreaming = item.id === streamingItemId;
 
       return (
         <div className="flex gap-3 animate-fade-in">
@@ -186,11 +185,14 @@ export function renderGroupedChatItems(
       }
       result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
     } else {
+      // Pass a per-item boolean instead of the shared streamingItemId string:
+      // when streaming starts/ends only the affected item sees a prop change,
+      // so `memo` still bails out for every other bubble.
       result.push(
         <ChatItemView
           key={cur.id}
           item={cur}
-          streamingItemId={streamingItemId}
+          isStreaming={cur.id === streamingItemId}
           sessionId={sessionId}
         />,
       );

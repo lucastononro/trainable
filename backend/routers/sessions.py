@@ -14,9 +14,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import async_session, get_db
+from errors import capture_exception
 from models import Artifact, Experiment, LogEvent, Message, Metric, Task
 from models import Session as SessionModel
-from schemas import ClarificationReply, MessageCreate, SessionResume, TaskCreate, TaskUpdate
+from schemas import (
+    ClarificationReply,
+    MessageCreate,
+    SessionResume,
+    TaskCreate,
+    TaskUpdate,
+)
 from services.agent import abort_agent, run_agent
 from services.agent.resume import (
     build_resume_context,
@@ -173,7 +180,16 @@ async def send_message(
                     if s and s.state != "cancelled":
                         s.state = "cancelled"
                         await fresh_db.commit()
-            except Exception:
+            except Exception as exc:
+                # This runs outside the request lifecycle (fire-and-forget
+                # asyncio.Task), so FastAPI's generic_exception_handler never
+                # sees it — report to Sentry explicitly here, no-op without a
+                # DSN configured.
+                logger.exception(
+                    "Unhandled error in background agent run for session %s",
+                    session_id,
+                )
+                capture_exception(exc)
                 async with async_session() as fresh_db:
                     s = await fresh_db.get(SessionModel, session_id)
                     if s:

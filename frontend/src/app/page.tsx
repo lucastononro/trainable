@@ -14,7 +14,7 @@ import {
 } from 'react-resizable-panels';
 import { BarChart3, Database, GripVertical, Loader2, PanelRightOpen } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import AgentStatusIndicator from '@/components/AgentStatusIndicator';
 import CostBadge from '@/components/CostBadge';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
@@ -110,6 +110,7 @@ function HomePageContent() {
     logEvents,
     usageTotals,
     recentUsage,
+    budgetInfo,
     activeAgents,
   } = useSessionStream(activeExperimentId, activeSessionId, {
     openCanvas,
@@ -576,7 +577,9 @@ function HomePageContent() {
 
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
-          {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
+          {hasActiveSession && (
+            <CostBadge totals={usageTotals} recent={recentUsage} budget={budgetInfo} />
+          )}
 
           {hasActiveSession && (
             <>
@@ -634,6 +637,9 @@ function HomePageContent() {
           // Welcome screen — shown whenever the chat has no user turn yet
           // -------------------------------------------------------------------
           <WelcomeScreen
+            activeSessionId={activeSessionId}
+            activeProjectId={activeProjectId}
+            experiments={experiments}
             draft={draft}
             onDraftChange={setDraft}
             onSend={handleSend}
@@ -662,6 +668,10 @@ function HomePageContent() {
             {/* Chat panel */}
             <Panel defaultSize={canvasOpen ? 30 : 100} minSize={20}>
               <ChatPane
+                activeSessionId={activeSessionId}
+                activeProjectId={activeProjectId}
+                experiments={experiments}
+                isRunning={isRunning}
                 canvasOpen={canvasOpen}
                 chatItems={chatItems}
                 streamingItemIdRef={streamingItemIdRef}

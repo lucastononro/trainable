@@ -33,7 +33,8 @@ tests/             pytest — async via pytest-asyncio
 
 - **SQLAlchemy 2.x async syntax** — `select(Model).where(...)`, `await session.scalars(...)`. No legacy `Query` API.
 - **Sessions come from `async_session()` in `db.py`** — use `async with async_session() as session:` and commit explicitly.
-- **Migrations are not yet wired.** When you add a column, also add a startup migration in `db.py:init_db()` until we adopt Alembic. Don't skip this and ship — it'll break prod.
+- **Migrations are Alembic.** When you change `models.py`, generate a revision (`cd backend && alembic revision --autogenerate -m "..."`), read it, and commit it under `alembic/versions/`. `init_db()` in `db.py` runs `alembic upgrade head` on every boot (in a worker thread, since Alembic's `env.py` drives its own async engine — see the comment on `_run_alembic_sync`); a legacy DB that already has the full schema but no `alembic_version` table gets `stamp head` instead (see `_pre_alembic_schema_present`). Don't hand-write `ALTER TABLE` in `db.py` anymore — that's what `_run_migrations` used to be (kept only as dead code / rollback reference, see its docstring).
+- **Boot-time migration assumes a single app instance** (which is what docker-compose runs). The stamp-vs-upgrade decision and the `alembic upgrade head` that follows are not atomic: two instances booting simultaneously against the same empty Postgres can both pick the upgrade path and race on `CREATE TABLE` ("relation already exists"). If this app is ever scaled to multiple replicas, run migrations as a one-off init container/job (`alembic upgrade head`) before starting replicas, instead of relying on boot-time migration.
 - **No raw SQL strings without a comment explaining why.** ORM first.
 
 ## Errors
@@ -74,7 +75,7 @@ tests/             pytest — async via pytest-asyncio
 
 - [ ] `ruff check . && ruff format .` clean
 - [ ] `pytest tests/ -v` passes
-- [ ] New columns / tables migrated in `db.py:init_db()` (until Alembic lands)
+- [ ] New columns / tables: `alembic revision --autogenerate`, reviewed and committed under `alembic/versions/`
 - [ ] Logger used; no `print`
 - [ ] Error path tested
 - [ ] If you added a route, also added a Pydantic schema for body/response

@@ -59,7 +59,9 @@ async def test_resume_session_not_found(client):
 
 
 @pytest.mark.asyncio
-async def test_resume_created_session_is_rejected(client, sample_csv, default_project_id):
+async def test_resume_created_session_is_rejected(
+    client, sample_csv, default_project_id
+):
     """A fresh session has no prior run — nothing to resume."""
     _, session_id = await _create_experiment(client, sample_csv, default_project_id)
     resp = await client.post(f"/api/sessions/{session_id}/resume")
@@ -159,7 +161,9 @@ async def test_resume_publishes_sse_event(client, sample_csv, default_project_id
             new_callable=AsyncMock,
             return_value="ctx",
         ),
-        patch("routers.sessions.broadcaster.publish", new_callable=AsyncMock) as mock_pub,
+        patch(
+            "routers.sessions.broadcaster.publish", new_callable=AsyncMock
+        ) as mock_pub,
     ):
         resp = await client.post(f"/api/sessions/{session_id}/resume")
         assert resp.status_code == 200

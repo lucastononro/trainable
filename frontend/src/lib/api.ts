@@ -6,6 +6,7 @@ import type {
   ProjectDetail,
   CreateProjectResponse,
   SandboxConfig,
+  TrainingConfig,
   Session,
   SessionDetail,
   Message,
@@ -26,11 +27,16 @@ import type {
   RegisteredModel,
   DeploymentRow,
   RunSnapshotRow,
+  ReproduceReport,
   DatasetVersionRow,
   LineageGraph,
   DatasetVersionDetail,
   SessionRow,
   ExperimentFullDetail,
+  CompareResponse,
+  RawDatasetPreview,
+  SampleDataset,
+  CreateProjectFromSampleResponse,
 } from './types';
 
 const API_BASE = '/api';
@@ -59,9 +65,24 @@ export const api = {
 
   getProject: (id: string) => fetchJSON<ProjectDetail>(`/projects/${id}`),
 
+  // Sample datasets (first-run gallery)
+  listSamples: () => fetchJSON<SampleDataset[]>('/samples'),
+
+  createProjectFromSample: (sampleId: string, name?: string) =>
+    fetchJSON<CreateProjectFromSampleResponse>('/projects/from-sample', {
+      method: 'POST',
+      body: JSON.stringify({ sample_id: sampleId, ...(name ? { name } : {}) }),
+    }),
+
   updateProject: (
     id: string,
-    patch: { name?: string; description?: string; sandbox_config?: SandboxConfig },
+    patch: {
+      name?: string;
+      description?: string;
+      sandbox_config?: SandboxConfig;
+      budget_usd?: number | null;
+      training_config?: TrainingConfig;
+    },
   ) =>
     fetchJSON<Project>(`/projects/${id}`, {
       method: 'PATCH',
@@ -90,6 +111,12 @@ export const api = {
       sandbox_checked?: boolean;
       sandbox_missing_count?: number;
     }>(`/projects/${id}/files`),
+
+  /** Raw (pre-prep) preview + quick profile of an uploaded CSV/TSV/Parquet. */
+  previewProjectDataset: (projectId: string, path: string, limit = 50) => {
+    const qs = new URLSearchParams({ path, limit: String(limit) });
+    return fetchJSON<RawDatasetPreview>(`/projects/${projectId}/datasets/preview?${qs.toString()}`);
+  },
 
   // Experiments
   listExperiments: (params?: {
@@ -136,6 +163,10 @@ export const api = {
   // this as a URL-builder rather than a fetch so the user clicks a real
   // link and the browser handles the streaming.
   modelDownloadUrl: (modelId: string) => `${API_BASE}/models/${modelId}/download`,
+  // URL-builder (not a fetch) for raw workspace files — used as `src` for
+  // <img>/<iframe> and sandboxed HTML previews, so the browser loads it
+  // directly and the backend's CSP on /files/raw applies.
+  filesRawUrl: (path: string) => `${API_BASE}/files/raw?path=${encodeURIComponent(path)}`,
   // Read the Modal serving app source the next deploy will ship.
   getServingApp: (modelId: string) =>
     fetchJSON<{ path: string; code: string }>(`/models/${modelId}/serving-app`),
@@ -173,6 +204,17 @@ export const api = {
   // new key in plaintext so the user can copy it. Running containers
   // keep the old key cached until cold-start; user can click Redeploy
   // to force cutover.
+  // Prediction playground — the "Test" panel on /models. Schema first
+  // (which features to render inputs for), then predictions through the
+  // backend proxy so the browser never holds the X-API-Key or fights
+  // Modal CORS.
+  getPredictSchema: (modelId: string) =>
+    fetchJSON<import('./types').PredictSchema>(`/models/${modelId}/predict-schema`),
+  predictModel: (modelId: string, records: Record<string, unknown>[]) =>
+    fetchJSON<import('./types').PredictProxyResponse>(`/models/${modelId}/predict`, {
+      method: 'POST',
+      body: JSON.stringify({ records }),
+    }),
   rotateModelKey: (modelId: string) =>
     fetchJSON<{ model_id: string; api_key: string; modal_secret: string; note: string }>(
       `/models/${modelId}/rotate-key`,
@@ -183,6 +225,11 @@ export const api = {
   takeSnapshot: (sessionId: string) =>
     fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`, { method: 'POST' }),
   getSnapshot: (sessionId: string) => fetchJSON<RunSnapshotRow>(`/sessions/${sessionId}/snapshot`),
+  reproduceSnapshot: (sessionId: string, tolerance?: number) =>
+    fetchJSON<ReproduceReport>(`/sessions/${sessionId}/snapshot/reproduce`, {
+      method: 'POST',
+      body: JSON.stringify(tolerance !== undefined ? { tolerance } : {}),
+    }),
 
   // Dataset versions
   projectDatasetVersions: (projectId: string) =>
@@ -316,6 +363,13 @@ export const api = {
   // Models
   listModels: () => fetchJSON<ModelInfo[]>('/models'),
   listProviders: () => fetchJSON<ProviderInfo[]>('/providers'),
+
+  // Session comparison — metrics + feature overlap + cost totals across
+  // up to 8 sessions in one round-trip (backend routers/compare.py).
+  compare: (sessionIds: string[]) => {
+    const qs = new URLSearchParams({ sessions: sessionIds.join(',') });
+    return fetchJSON<CompareResponse>(`/compare?${qs.toString()}`);
+  },
 
   // Usage / cost
   usageSummary: () => fetchJSON<UsageSummary>(`/usage/summary`),

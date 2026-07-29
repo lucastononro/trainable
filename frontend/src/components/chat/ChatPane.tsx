@@ -20,9 +20,8 @@ import {
   Square,
   Upload,
 } from 'lucide-react';
-import { useApp } from '@/lib/AppContext';
 import { isDraftEmpty } from '@/lib/mentions';
-import type { Draft, Task, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
+import type { Draft, Experiment, Task, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
 import type { ChatItem } from '@/lib/chatItems';
 import { renderGroupedChatItems } from '@/components/chat/ChatItemView';
 import AttachedFilesPreview from '@/components/chat/AttachedFilesPreview';
@@ -33,9 +32,16 @@ import MentionInput from '@/components/MentionInput';
 // ChatPane — the left panel of the studio view: scrollable chat stream
 // (grouped chat items + inline tasks card + typing indicator) and the
 // in-session input bar (attach menu + mention input + stop/send).
-// ---------------------------------------------------------------------------
+// How close (px) to the bottom of the chat pane the user must be for
+// auto-scroll to stay "pinned". Module-level so the binding is created once
+// and is unambiguously stable for the scroll-handler closure.
+const AUTO_SCROLL_PIN_THRESHOLD_PX = 96;
 
 export default function ChatPane({
+  activeSessionId,
+  activeProjectId,
+  experiments,
+  isRunning,
   canvasOpen,
   chatItems,
   streamingItemIdRef,
@@ -63,6 +69,12 @@ export default function ChatPane({
   onOpenS3Browser,
   sessionAttachedFiles,
 }: {
+  // Session-scoped values passed as props (not read from AppContext) so the
+  // component stays reusable and testable outside the studio page.
+  activeSessionId: string | null;
+  activeProjectId: string | null;
+  experiments: Experiment[];
+  isRunning: boolean;
   canvasOpen: boolean;
   chatItems: ChatItem[];
   streamingItemIdRef: MutableRefObject<string | null>;
@@ -94,8 +106,6 @@ export default function ChatPane({
   onOpenS3Browser: () => void;
   sessionAttachedFiles: { name: string; sandboxPath: string }[];
 }) {
-  const { activeSessionId, activeProjectId, experiments, isRunning } = useApp();
-
   const bottomRef = useRef<HTMLDivElement>(null);
   // The actual scrollable chat pane (the `overflow-y-auto` div `bottomRef`
   // sits at the bottom of). Used to measure scroll position for the
@@ -107,20 +117,21 @@ export default function ChatPane({
   // an assistant reply streams token-by-token; without the pin gate,
   // `scrollIntoView` fired on every single one of those changes and
   // hijacked the scroll position, making it impossible to scroll up and
-  // read earlier output. `behavior: 'auto'` (no animation) while a bubble is
-  // actively streaming avoids stacking up smooth-scroll animations that
-  // fight each other; once streaming settles we go back to a smooth nudge.
+  // read earlier output. `behavior: 'auto'` (instant, no animation) is used
+  // unconditionally: a smooth scroll animates through intermediate positions,
+  // and each intermediate `scroll` event would make `handleChatScroll` see
+  // `distanceFromBottom > threshold` and un-pin mid-animation — so if the
+  // first streaming tokens arrived before the animation landed, auto-scroll
+  // silently stopped. An instant jump fires a single scroll event already at
+  // the bottom, which keeps the pin state consistent.
   useEffect(() => {
     if (!pinnedToBottomRef.current) return;
-    bottomRef.current?.scrollIntoView({
-      behavior: streamingItemIdRef.current ? 'auto' : 'smooth',
-    });
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [chatItems, pinnedToBottomRef, streamingItemIdRef]);
 
   // Track whether the user is pinned near the bottom of the chat pane via a
   // scroll listener + threshold, rather than assuming every render should
   // snap back down.
-  const AUTO_SCROLL_PIN_THRESHOLD_PX = 96;
   const handleChatScroll = useCallback(() => {
     const el = chatScrollRef.current;
     if (!el) return;
