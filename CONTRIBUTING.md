@@ -38,7 +38,7 @@ This automatically runs ruff (lint + format), trailing whitespace fixes, and pri
 
 ### Python (backend)
 
-- Formatter/linter: [Ruff](https://docs.astral.sh/ruff/) (configured in `pyproject.toml`)
+- Formatter/linter: [Ruff](https://docs.astral.sh/ruff/) (configured in `backend/pyproject.toml`)
 - Run manually: `cd backend && ruff check . && ruff format .`
 - Type hints are expected on all function signatures
 - Use `logger` (not `print`) for all logging
@@ -77,6 +77,6 @@ All tests must pass before submitting a PR.
 
 ## Reporting Issues
 
-- Use [GitHub Issues](https://github.com/lucastononro/trainable-monorepo/issues)
+- Use [GitHub Issues](https://github.com/lucastononro/trainable/issues)
 - Include steps to reproduce, expected vs actual behavior, and environment details
 - For security vulnerabilities, please email the maintainer directly instead of opening a public issue

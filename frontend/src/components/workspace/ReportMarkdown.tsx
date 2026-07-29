@@ -3,7 +3,8 @@
 import { memo, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
+import { api } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // ReportMarkdown -- the canvas report tab body. Memoized so parent renders
@@ -25,10 +26,10 @@ const ReportMarkdown = memo(function ReportMarkdown({
       img: ({ src, alt }: { src?: string; alt?: string }) => {
         let imgSrc = src || '';
         if (imgSrc.startsWith('/data/')) {
-          imgSrc = `/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+          imgSrc = api.filesRawUrl(imgSrc);
         } else if (imgSrc && !imgSrc.startsWith('http')) {
           const workspace = `/sessions/${sessionId}/eda`;
-          imgSrc = `/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
+          imgSrc = api.filesRawUrl(workspace + '/' + imgSrc);
         }
         return (
           // eslint-disable-next-line @next/next/no-img-element

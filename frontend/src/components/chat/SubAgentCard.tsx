@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { CheckCircle2, ChevronRight, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import type { ChatItem } from '@/lib/chatItems';
 import { AGENT_COLORS, AGENT_META } from '@/components/chat/agentMeta';
 
@@ -26,6 +26,11 @@ export default function SubAgentCard({ item }: { item: ChatItem }) {
   const modelName = item.meta?.model
     ? item.meta.model.replace('claude-', '').replace(/-/g, ' ')
     : '';
+  // Truncated once here so the markdown path and the error-boundary fallback
+  // render the same bounded text (a summary can be megabytes of agent output).
+  const summary = item.meta?.summary;
+  const truncatedSummary =
+    summary && summary.length > 800 ? summary.slice(0, 800) + '\n\n...' : summary;
 
   useEffect(() => {
     if (!isStart) return;
@@ -85,20 +90,16 @@ export default function SubAgentCard({ item }: { item: ChatItem }) {
               {item.meta.task}
             </div>
           )}
-          {item.meta?.summary && (
+          {truncatedSummary && (
             <div className="text-xs text-gray-400 max-h-48 overflow-y-auto">
               <span className={`${colors.text} font-medium`}>Result: </span>
               <div className="mt-1 markdown-chat">
                 <ErrorBoundary
                   fallback={() => (
-                    <div className="whitespace-pre-wrap break-words">{item.meta?.summary}</div>
+                    <div className="whitespace-pre-wrap break-words">{truncatedSummary}</div>
                   )}
                 >
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {item.meta.summary.length > 800
-                      ? item.meta.summary.slice(0, 800) + '\n\n...'
-                      : item.meta.summary}
-                  </ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{truncatedSummary}</ReactMarkdown>
                 </ErrorBoundary>
               </div>
             </div>
