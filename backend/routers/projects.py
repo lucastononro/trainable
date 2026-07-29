@@ -59,6 +59,11 @@ async def create_project(body: ProjectCreate, db: AsyncSession = Depends(get_db)
         name=body.name or "New project",
         description=body.description or "",
         sandbox_config=body.sandbox_config.model_dump() if body.sandbox_config else {},
+        training_config=(
+            body.training_config.model_dump(exclude_none=True)
+            if body.training_config
+            else {}
+        ),
         created_at=now,
         updated_at=now,
     )
@@ -146,6 +151,9 @@ async def update_project(
         project.description = body.description
     if body.sandbox_config is not None:
         project.sandbox_config = body.sandbox_config.model_dump()
+    if body.training_config is not None:
+        # exclude_none so cleared fields drop out — {} means "no constraints".
+        project.training_config = body.training_config.model_dump(exclude_none=True)
     project.updated_at = _now()
 
     await db.commit()

@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import create_engine, inspect, text
 
 from db import (
+    _INITIAL_ALEMBIC_REVISION,
     _LEGACY_SCHEMA_MARKER_TABLES,
     _pre_alembic_schema_present,
     _run_alembic_sync,
@@ -89,7 +90,7 @@ def test_upgrade_head_on_fresh_db_creates_full_schema(_sqlite_file_db):
         assert _pre_alembic_schema_present(conn) is False
 
 
-def test_stamp_head_records_version_without_touching_schema(_sqlite_file_db):
+def test_stamp_marks_legacy_db_then_upgrades_to_head(_sqlite_file_db):
     # Simulate the legacy-deployment boot: schema exists (markers suffice for
     # the stamp command itself), no alembic_version yet.
     engine = create_engine(f"sqlite:///{_sqlite_file_db}")
@@ -102,11 +103,26 @@ def test_stamp_head_records_version_without_touching_schema(_sqlite_file_db):
         insp = inspect(conn)
         assert insp.has_table("alembic_version")
         version = conn.execute(text("SELECT version_num FROM alembic_version")).scalar()
-        assert version, "stamp head left alembic_version empty"
-        # stamp must not create any migration-managed tables beyond the
-        # markers we made + alembic_version itself.
+        assert version, "stamp+upgrade left alembic_version empty"
+        # The stamp lands on the initial revision and the subsequent upgrade
+        # applies post-cutover DDL (e.g. projects.training_config, PR #164) —
+        # stamping straight at head would silently skip it.
+        assert version != _INITIAL_ALEMBIC_REVISION
+        project_cols = [c["name"] for c in insp.get_columns("projects")]
+        assert "training_config" in project_cols
+        # stamp+upgrade must not create any migration-managed tables beyond
+        # the markers we made + alembic_version itself.
         assert set(insp.get_table_names()) == {
             *_LEGACY_SCHEMA_MARKER_TABLES,
             "alembic_version",
         }
         assert _pre_alembic_schema_present(conn) is False
+
+
+def test_upgrade_head_on_fresh_db_has_training_config_column(_sqlite_file_db):
+    _run_alembic_sync(stamp_only=False)
+
+    engine = create_engine(f"sqlite:///{_sqlite_file_db}")
+    with engine.connect() as conn:
+        project_cols = [c["name"] for c in inspect(conn).get_columns("projects")]
+        assert "training_config" in project_cols

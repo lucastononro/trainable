@@ -75,6 +75,10 @@ class Project(Base):
     description = Column(Text, default="")
     created_at = Column(String, default=lambda: utcnow().isoformat())
     sandbox_config = Column(JSON, default=dict)
+    # Pre-flight training controls (metric, model families, trial budget,
+    # wall-clock/cost cap) — see schemas.TrainingConfig. Empty dict = the
+    # trainer agent keeps full autonomy.
+    training_config = Column(JSON, default=dict)
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
     experiments = relationship(
@@ -114,6 +118,7 @@ class Project(Base):
             "name": self.name,
             "description": self.description or "",
             "sandbox_config": self.sandbox_config or {},
+            "training_config": self.training_config or {},
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "experiment_count": experiment_count,

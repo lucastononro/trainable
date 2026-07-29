@@ -6,6 +6,7 @@ import type {
   ProjectDetail,
   CreateProjectResponse,
   SandboxConfig,
+  TrainingConfig,
   Session,
   SessionDetail,
   Message,
@@ -75,7 +76,12 @@ export const api = {
 
   updateProject: (
     id: string,
-    patch: { name?: string; description?: string; sandbox_config?: SandboxConfig },
+    patch: {
+      name?: string;
+      description?: string;
+      sandbox_config?: SandboxConfig;
+      training_config?: TrainingConfig;
+    },
   ) =>
     fetchJSON<Project>(`/projects/${id}`, {
       method: 'PATCH',

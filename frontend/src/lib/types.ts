@@ -8,11 +8,22 @@ export interface SandboxConfig {
   training?: SandboxProfile | null;
 }
 
+/** Pre-flight training controls (issue #104). Every field optional —
+ *  an empty config leaves the trainer agent fully autonomous. */
+export interface TrainingConfig {
+  optimization_metric?: string | null;
+  model_families?: string[] | null;
+  max_trials?: number | null;
+  max_wallclock_minutes?: number | null;
+  max_cost_usd?: number | null;
+}
+
 export interface Project {
   id: string;
   name: string;
   description: string;
   sandbox_config: SandboxConfig;
+  training_config: TrainingConfig;
   created_at: string;
   updated_at: string;
   experiment_count: number;
