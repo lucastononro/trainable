@@ -84,6 +84,8 @@ class ApiToken(Base):                    # per-user PATs for CLI/scripts (replac
 
 DB-backed sessions (not stateless JWT): trivially revocable, no key management, and the deployment is a single backend instance with a DB already in the hot path. Store only hashes of session/PAT secrets, per the Greptile log-leak note on PR #138.
 
+Lookup pattern, stated once because it is easy to implement wrong: the cookie carries the raw `token_hex(32)` value while the DB PK stores `sha256(raw)` (also 64 hex chars), so **every session lookup hashes the incoming cookie value before querying** — `db.get(AuthSession, sha256(cookie_value))` — mirroring the `api_tokens.token_hash` lookup convention. Never store the raw token as the PK, and never double-hash (hash the cookie value exactly once, at lookup time).
+
 ### 3.3 Ownership FKs
 
 Add to `Project`, `Experiment`, `RegisteredModel`, `Deployment`:
@@ -113,6 +115,8 @@ class ProjectShare(Base):
     created_by = Column(String(36), ForeignKey("users.id"), nullable=False)
     created_at = Column(String, default=...)
 ```
+
+- The "exactly one of `user_id` / `link_token_hash`" invariant is enforced, not just documented: a `CHECK ((user_id IS NOT NULL) != (link_token_hash IS NOT NULL))` constraint is added in revision 1 (§5), and the create path (`POST /api/projects/{id}/shares`) validates the body so a share can never be attached to both a user and a link, or to neither.
 
 Plus one column on `Project`:
 
@@ -206,6 +210,8 @@ Sequenced as **three revisions** so each is independently reversible and the not
 
 First real login in `multi_user` mode: the **claim step** — the first user created (bootstrap form or `TRAINABLE_ADMIN_EMAIL`/`_PASSWORD` env) becomes admin, and gets offered "claim existing data" which reassigns default-owner objects to them (simple `UPDATE ... WHERE owner_id = <default>`; also flips `usage_events` rows attributed to the default owner). Instances that never enable `multi_user` just keep everything on the default owner invisibly.
 
+Bootstrap hardening: `POST /api/auth/bootstrap` is gated on an empty users table, which is first-come-first-served — on a publicly reachable instance there is a window between first deploy and the operator logging in where anyone could claim admin. The env-var pre-seed (`TRAINABLE_ADMIN_EMAIL`/`_PASSWORD`) is therefore the **recommended production bootstrap**; the interactive bootstrap form should only be reachable from localhost or behind the `token`-mode gate in Phase 2, and the docs must say so.
+
 Downgrade path: revision 3 reverses cleanly; revision 2's downgrade nulls the backfilled `owner_id`s and deletes the default user; revision 1 drops the tables/columns.
 
 ## 6. Authorization
@@ -239,6 +245,8 @@ def scope_to_user(stmt, user, *, project_alias=Project):
                              .where(ProjectShare.user_id == user.id)),
     ))
 ```
+
+`scope_to_user` deliberately does **not** cover pre-redemption link-browsing sessions (§3.4): a link holder who hasn't redeemed (or is unauthenticated) matches none of the three clauses, so the shared project never appears in any list endpoint for them — they can reach it only via `get_accessible_project` through the share link itself. This is intentional: an unredeemed link is a pointer to a single object, not an identity with a gallery.
 
 Child-object routes (`/sessions/{id}`, `/experiments/{id}`, `/models/{id}`, `/deployments/{id}`, files, notebook, lineage, compare, snapshots, data_explorer) resolve **child → project → check** with one helper per parent type (`get_accessible_session`, etc. — thin wrappers that join up to the project). Since every child already carries `project_id` or reaches it in one hop, no schema support is needed.
 
