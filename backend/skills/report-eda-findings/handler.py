@@ -108,7 +108,10 @@ def create_handler(
                 dropped += 1
                 continue
             findings.append(norm)
-        dropped += max(0, len(raw) - _MAX_FINDINGS)
+        # Items past the cap are valid findings we silently truncated, not
+        # schema failures — report them separately so the agent doesn't
+        # mistake the cap for a formatting problem and retry.
+        capped = max(0, len(raw) - _MAX_FINDINGS)
 
         if not findings:
             return {
@@ -137,7 +140,14 @@ def create_handler(
             agent_meta=agent_meta,
         )
 
-        note = f" ({dropped} invalid item(s) dropped)" if dropped else ""
+        notes = []
+        if dropped:
+            notes.append(f"{dropped} invalid item(s) dropped")
+        if capped:
+            notes.append(
+                f"{capped} item(s) omitted over the {_MAX_FINDINGS}-finding cap"
+            )
+        note = f" ({'; '.join(notes)})" if notes else ""
         return {
             "content": [
                 {

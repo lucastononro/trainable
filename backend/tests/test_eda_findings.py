@@ -50,7 +50,14 @@ def test_eda_agent_declares_the_skill():
 
 def test_other_agents_untouched():
     """Default behavior elsewhere is unchanged: only eda gains the skill."""
-    for agent in ("chat", "orchestrator", "data_prep", "feature_eng", "trainer", "reviewer"):
+    for agent in (
+        "chat",
+        "orchestrator",
+        "data_prep",
+        "feature_eng",
+        "trainer",
+        "reviewer",
+    ):
         assert SLUG not in get_agent_skills(agent), agent
 
 
@@ -153,4 +160,6 @@ async def test_handler_caps_batch_size():
     result = await handler({"findings": findings})
     assert not result.get("is_error")
     assert recorder.events[0]["data"]["count"] == 50
-    assert "(10 invalid item(s) dropped)" in result["content"][0]["text"]
+    assert (
+        "(10 item(s) omitted over the 50-finding cap)" in result["content"][0]["text"]
+    )

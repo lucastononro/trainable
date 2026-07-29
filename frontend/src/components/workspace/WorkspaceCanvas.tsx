@@ -30,7 +30,7 @@ import NodeMetadataPanel from '@/components/lineage/NodeMetadataPanel';
 import FileTreeRow from '@/components/workspace/FileTreeRow';
 import FileViewer from '@/components/workspace/FileViewer';
 import HtmlPanel from '@/components/workspace/HtmlPanel';
-import EdaFindingsPanel from '@/components/workspace/EdaFindingsPanel';
+import { EdaFindingsPanel } from '@/components/workspace/EdaFindingsPanel';
 import MetricsPanel from '@/components/workspace/MetricsPanel';
 import ReportMarkdown from '@/components/workspace/ReportMarkdown';
 import { getFileIconInfo } from '@/components/workspace/fileIcons';

@@ -118,7 +118,7 @@ function FindingCard({
   );
 }
 
-export default function EdaFindingsPanel({
+export function EdaFindingsPanel({
   findings,
   onApplyInPrep,
 }: {
@@ -138,9 +138,9 @@ export default function EdaFindingsPanel({
         data-prep instruction — review it, then send.
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-        {sorted.map((f, i) => (
+        {sorted.map((f) => (
           <FindingCard
-            key={`${f.finding_type}:${f.columns.join(',')}:${i}`}
+            key={`${f.finding_type}:${f.columns.join(',')}:${f.summary}`}
             finding={f}
             onApplyInPrep={onApplyInPrep}
           />
