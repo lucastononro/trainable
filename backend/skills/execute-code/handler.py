@@ -8,7 +8,13 @@ import time
 
 import modal.exception as modal_exc
 
+from config import settings
 from services.compute.base import SandboxTimeoutError
+from services.compute_allowance import (
+    clamp_timeout,
+    normalize_gpu,
+    resolve_compute_allowance,
+)
 from services.sandbox import run_code
 from services.skills.state import (
     _known_files,
@@ -74,8 +80,14 @@ def create_handler(
     async def handler(args: dict):
         code = args.get("code", "") if isinstance(args, dict) else str(args)
         heavy = args.get("heavy", False) if isinstance(args, dict) else False
+        requested_gpu = args.get("gpu") if isinstance(args, dict) else None
+        requested_timeout = args.get("timeout") if isinstance(args, dict) else None
 
-        # Pick the right sandbox profile based on heavy flag
+        # Compute selection precedence: explicit `gpu` arg > heavy profile
+        # > default profile. The explicit path is validated against the
+        # project's compute allowance (see services/compute_allowance.py —
+        # the same resolver renders the allowance into the system prompt).
+        allowance = resolve_compute_allowance(_sandbox_config)
         profile_key = "training" if heavy else "default"
         profile = _sandbox_config.get(profile_key) or {}
         gpu = profile.get("gpu")
@@ -83,10 +95,63 @@ def create_handler(
 
         start = time.time()
 
+        if requested_gpu:
+            label = normalize_gpu(requested_gpu)
+            if label is None or not allowance.permits(label):
+                error_msg = (
+                    f"GPU '{requested_gpu}' is not available in this project. "
+                    f"Allowed: {', '.join(allowance.allowed_gpus)}. "
+                    f"Re-call execute-code with one of those values, or omit "
+                    f"`gpu` to use the {profile_key} profile."
+                )
+                # tool_start before tool_end — every other path in this
+                # handler emits the pair in order, and the UI's active-tool
+                # state machine depends on it.
+                await publish_fn(
+                    session_id,
+                    "tool_start",
+                    {
+                        "tool": "execute_code",
+                        "input": {"code": code[:500], "heavy": heavy},
+                        "gpu": requested_gpu,
+                        "timeout": timeout,
+                    },
+                    role="tool",
+                )
+                await publish_fn(
+                    session_id,
+                    "tool_end",
+                    {"tool": "execute_code", "output": error_msg, "duration": 0},
+                    role="tool",
+                )
+                return {
+                    "content": [{"type": "text", "text": error_msg}],
+                    "is_error": True,
+                }
+            # "cpu" is an explicit request for no GPU; run_code(gpu=None)
+            # schedules on the CPU pool.
+            gpu = None if label == "cpu" else label
+
+        if requested_timeout is not None:
+            clamped = clamp_timeout(requested_timeout, allowance)
+            if clamped is not None:
+                timeout = clamped
+
+        # An owner-set max_timeout caps EVERY execution — including the
+        # profile fallback (heavy=True without an explicit `timeout=`) and
+        # the sandbox default. When max_timeout is profile-derived this is
+        # a no-op (it is the max of the profile timeouts and the default).
+        timeout = min(timeout or settings.sandbox_timeout, allowance.max_timeout)
+
         await publish_fn(
             session_id,
             "tool_start",
-            {"tool": "execute_code", "input": {"code": code[:500], "heavy": heavy}},
+            {
+                "tool": "execute_code",
+                "input": {"code": code[:500], "heavy": heavy},
+                "gpu": gpu or "cpu",
+                "timeout": timeout,
+            },
             role="tool",
         )
 
@@ -130,7 +195,9 @@ def create_handler(
                 f"The Python process was killed mid-execution and partial "
                 f"output (if any) is lost. Options: (a) split the work into "
                 f"smaller chunks, (b) reduce data size or iterations, "
-                f"(c) re-run with heavy=true for the GPU/training profile. "
+                f"(c) re-run with heavy=true for the GPU/training profile, "
+                f"(d) re-run with an explicit `timeout=` up to "
+                f"{allowance.max_timeout}s. "
                 f"Underlying error: {e.__class__.__name__}"
             )
             logger.warning("Sandbox timeout (session=%s): %s", session_id, e)

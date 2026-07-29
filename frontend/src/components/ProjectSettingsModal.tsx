@@ -4,13 +4,22 @@ import { useEffect, useState } from 'react';
 import { Settings, X } from 'lucide-react';
 import type { SandboxConfig, SandboxProfile, TrainingConfig } from '@/lib/types';
 
+// Canonical labels — must match backend/schemas.py CANONICAL_GPUS and the
+// (provider, gpu) rate keys in backend/services/sandbox.yml. The old
+// 'A100' value silently broke billing (rates are keyed 'A100-40GB').
 const GPU_OPTIONS = [
   { value: '', label: 'None (CPU only)' },
   { value: 'T4', label: 'T4 — 16 GB' },
   { value: 'L4', label: 'L4 — 24 GB' },
   { value: 'A10G', label: 'A10G — 24 GB' },
-  { value: 'A100', label: 'A100 — 40 GB' },
+  { value: 'A100-40GB', label: 'A100 — 40 GB' },
+  { value: 'A100-80GB', label: 'A100 — 80 GB' },
+  { value: 'H100', label: 'H100 — 80 GB' },
 ];
+
+// Options for the agent allowance checkboxes ("cpu" is always allowed and
+// shown as locked).
+const ALLOWANCE_OPTIONS = GPU_OPTIONS.filter((o) => o.value !== '');
 
 /** Mirrors backend schemas.KNOWN_MODEL_FAMILIES (minus the "other" catch-all). */
 const MODEL_FAMILY_OPTIONS = [
@@ -113,6 +122,8 @@ export default function ProjectSettingsModal({
   const [defaultTimeout, setDefaultTimeout] = useState(600);
   const [trainingGpu, setTrainingGpu] = useState('');
   const [trainingTimeout, setTrainingTimeout] = useState(1800);
+  const [allowedGpus, setAllowedGpus] = useState<string[]>([]);
+  const [maxTimeout, setMaxTimeout] = useState<number | ''>('');
   // Budget kept as a string so the field can be emptied (= no limit).
   const [budget, setBudget] = useState('');
 
@@ -132,6 +143,8 @@ export default function ProjectSettingsModal({
       setDefaultTimeout(d?.timeout ?? 600);
       setTrainingGpu(t?.gpu || '');
       setTrainingTimeout(t?.timeout ?? 1800);
+      setAllowedGpus(sandboxConfig.allowed_gpus ?? []);
+      setMaxTimeout(sandboxConfig.max_timeout ?? '');
       setBudget(budgetUsd != null ? String(budgetUsd) : '');
       setOptimizationMetric(trainingConfig.optimization_metric || '');
       setModelFamilies(trainingConfig.model_families || []);
@@ -148,6 +161,12 @@ export default function ProjectSettingsModal({
   const toggleFamily = (value: string) => {
     setModelFamilies((prev) =>
       prev.includes(value) ? prev.filter((f) => f !== value) : [...prev, value],
+    );
+  };
+
+  const toggleAllowedGpu = (value: string) => {
+    setAllowedGpus((prev) =>
+      prev.includes(value) ? prev.filter((g) => g !== value) : [...prev, value],
     );
   };
 
@@ -190,6 +209,8 @@ export default function ProjectSettingsModal({
       {
         default: buildProfile(defaultGpu, defaultTimeout),
         training: buildProfile(trainingGpu, trainingTimeout),
+        allowed_gpus: allowedGpus.length ? allowedGpus : null,
+        max_timeout: maxTimeout === '' ? null : maxTimeout,
       },
       Number.isFinite(parsed) && parsed >= 0 ? parsed : null,
       training,
@@ -226,7 +247,7 @@ export default function ProjectSettingsModal({
         {/* Body */}
         <div className="px-5 py-4 border-t border-white/[0.06] space-y-5 max-h-[70vh] overflow-y-auto">
           <h3 className="text-xs font-semibold text-gray-300 uppercase tracking-wider">
-            Modal Sandbox
+            Compute Sandbox
           </h3>
 
           <ProfileSection
@@ -251,9 +272,56 @@ export default function ProjectSettingsModal({
             onTimeoutChange={setTrainingTimeout}
           />
 
+          <div className="border-t border-white/[0.04]" />
+
+          {/* Agent GPU allowance */}
+          <div>
+            <div className="flex items-baseline gap-2 mb-2">
+              <h4 className="text-xs font-semibold text-gray-300">Agent GPU allowance</h4>
+              <span className="text-[11px] text-gray-600">
+                hardware the agent may request per call
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <label className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white/[0.02] border border-white/[0.06] text-xs text-gray-500 cursor-not-allowed">
+                <input type="checkbox" checked disabled className="accent-blue-600" />
+                CPU (always allowed)
+              </label>
+              {ALLOWANCE_OPTIONS.map((opt) => (
+                <label
+                  key={opt.value}
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-xs text-gray-300 cursor-pointer hover:border-blue-500/40 transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={allowedGpus.includes(opt.value)}
+                    onChange={() => toggleAllowedGpu(opt.value)}
+                    className="accent-blue-600"
+                  />
+                  {opt.label}
+                </label>
+              ))}
+            </div>
+            <div className="mt-3 space-y-1">
+              <label className="text-[11px] text-gray-500">
+                Max per-call timeout (s) — empty = largest profile timeout
+              </label>
+              <input
+                type="number"
+                min={10}
+                max={7200}
+                value={maxTimeout}
+                onChange={(e) => setMaxTimeout(e.target.value === '' ? '' : Number(e.target.value))}
+                className="w-full px-2.5 py-1.5 rounded-lg bg-white/[0.04] border border-white/[0.08] text-xs text-white focus:outline-none focus:border-blue-500/50 transition-colors"
+              />
+            </div>
+          </div>
+
           <p className="text-[11px] text-gray-600">
-            Agents automatically select the right profile. The training profile is used when{' '}
-            <code className="text-gray-500">heavy=true</code> is set on code execution.
+            Agents pick the cheapest allowed hardware per call via the{' '}
+            <code className="text-gray-500">gpu</code> argument; the training profile remains the{' '}
+            <code className="text-gray-500">heavy=true</code> fallback. Profile GPUs are always
+            implicitly allowed.
           </p>
 
           <div className="border-t border-white/[0.04]" />
