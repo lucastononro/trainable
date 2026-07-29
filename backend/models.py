@@ -736,8 +736,15 @@ class Deployment(Base):
     endpoint_url = Column(String(512), nullable=True)
     status = Column(String(20), default="pending")
     error = Column(Text, nullable=True)
+    # Provider-neutral app/function labels. Column names predate the
+    # multi-provider work — RunPod deployments store the endpoint name /
+    # handler label here too.
     modal_app = Column(String(255), nullable=True)
     modal_function = Column(String(255), nullable=True)
+    # Compute provider that owns the endpoint ("modal" | "runpod") plus
+    # the provider-side endpoint id (RunPod endpoint id; unused on Modal).
+    provider = Column(String(32), nullable=True, default="modal")
+    provider_endpoint_id = Column(String(255), nullable=True)
     # Compute target requested at deploy time — "cpu" | "T4" | "L4" |
     # "A10G" | "A100-40GB" | "A100-80GB" | "H100". Stored so the UI
     # badge on /models can show "DEPLOYED ON T4" without re-parsing
@@ -757,6 +764,8 @@ class Deployment(Base):
             "error": self.error,
             "modal_app": self.modal_app,
             "modal_function": self.modal_function,
+            "provider": self.provider or "modal",
+            "provider_endpoint_id": self.provider_endpoint_id,
             "compute": self.compute or "cpu",
             "created_at": self.created_at,
             "updated_at": self.updated_at,

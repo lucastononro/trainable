@@ -30,9 +30,41 @@ class Settings(BaseSettings):
     # allowed to touch. Anything else is rejected with a 400.
     s3_allowed_buckets: list[str] = ["datasets", "experiments"]
 
+    # -- Compute provider --
+    # Which GPU cloud runs sandboxes, notebook kernels, workspace storage
+    # and model-serving deployments: "modal" (default) or "runpod".
+    # RunPod additionally requires the RUNPOD_* settings below.
+    compute_provider: str = "modal"
+
     # -- Modal --
     modal_app_name: str = "trainable"
     modal_volume_name: str = "trainable-data"
+
+    # -- RunPod (used when COMPUTE_PROVIDER=runpod) --
+    # API key from runpod.io console → Settings → API Keys.
+    runpod_api_key: str = ""
+    # Datacenter that hosts the network volume AND all pods/endpoints.
+    # Must be one of the S3-API-capable datacenters (e.g. US-KS-2,
+    # EU-RO-1, EU-CZ-1, EUR-IS-1) — see docs/compute-providers.md.
+    runpod_datacenter_id: str = "US-KS-2"
+    # Network volume id (bucket name of the S3 API). Left empty, the
+    # backend looks up / creates a volume named after modal_volume_name's
+    # equivalent ("trainable-data") on first use — pin the id here after
+    # the first run to skip the lookup.
+    runpod_network_volume_id: str = ""
+    runpod_network_volume_size_gb: int = 100
+    # S3 API key pair from runpod.io console → Settings → S3 API Keys
+    # (distinct from the main API key).
+    runpod_s3_access_key_id: str = ""
+    runpod_s3_secret_access_key: str = ""
+    # Prebuilt worker image (see docker/runpod-worker/). Runs the code
+    # runner, the notebook kernel gateway, and model serving, selected
+    # via the TRAINABLE_ROLE env var.
+    runpod_worker_image: str = "ghcr.io/lucastononro/trainable-runpod-worker:latest"
+    # Serving image override; falls back to runpod_worker_image when empty.
+    runpod_serving_image: str = ""
+    # Max concurrent serverless workers per endpoint.
+    runpod_max_workers: int = 3
 
     # -- Claude / Agent --
     claude_model: str = "claude-sonnet-4-6"

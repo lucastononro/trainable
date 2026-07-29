@@ -92,10 +92,13 @@ def test_upgrade_head_on_fresh_db_creates_full_schema(_sqlite_file_db):
 
 def test_stamp_marks_legacy_db_then_upgrades_to_head(_sqlite_file_db):
     # Simulate the legacy-deployment boot: schema exists (markers suffice for
-    # the stamp command itself), no alembic_version yet.
+    # the stamp command itself), no alembic_version yet. `deployments` is
+    # created alongside the markers because the post-cutover revision
+    # b7d3f5a91c02 (PR #145) ALTERs it — a real legacy DB has it (create_all
+    # ran on every pre-Alembic boot); the bare marker set does not.
     engine = create_engine(f"sqlite:///{_sqlite_file_db}")
     with engine.begin() as conn:
-        _create_tables(conn, _LEGACY_SCHEMA_MARKER_TABLES)
+        _create_tables(conn, (*_LEGACY_SCHEMA_MARKER_TABLES, "deployments"))
 
     _run_alembic_sync(stamp_only=True)
 
@@ -106,16 +109,20 @@ def test_stamp_marks_legacy_db_then_upgrades_to_head(_sqlite_file_db):
         assert version, "stamp+upgrade left alembic_version empty"
         # The stamp lands on the initial revision and the subsequent upgrade
         # applies post-cutover DDL (e.g. projects.training_config, PR #164;
-        # projects.budget_usd, PR #165) — stamping straight at head would
-        # silently skip it.
+        # projects.budget_usd, PR #165; deployments.provider*, PR #145) —
+        # stamping straight at head would silently skip it.
         assert version != _INITIAL_ALEMBIC_REVISION
         project_cols = [c["name"] for c in insp.get_columns("projects")]
         assert "training_config" in project_cols
         assert "budget_usd" in project_cols
+        deployment_cols = [c["name"] for c in insp.get_columns("deployments")]
+        assert "provider" in deployment_cols
+        assert "provider_endpoint_id" in deployment_cols
         # stamp+upgrade must not create any migration-managed tables beyond
-        # the markers we made + alembic_version itself.
+        # the ones we made + alembic_version itself.
         assert set(insp.get_table_names()) == {
             *_LEGACY_SCHEMA_MARKER_TABLES,
+            "deployments",
             "alembic_version",
         }
         assert _pre_alembic_schema_present(conn) is False

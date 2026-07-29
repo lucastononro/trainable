@@ -1,4 +1,5 @@
-"""execute-code skill — runs Python in an isolated Modal sandbox."""
+"""execute-code skill — runs Python in an isolated sandbox on the
+configured compute provider."""
 
 from __future__ import annotations
 
@@ -7,6 +8,7 @@ import time
 
 import modal.exception as modal_exc
 
+from services.compute.base import SandboxTimeoutError
 from services.sandbox import run_code
 from services.skills.state import (
     _known_files,
@@ -112,8 +114,12 @@ def create_handler(
                 agent_type=_agent_type,
                 agent_id=_agent_id,
             )
-        except (modal_exc.SandboxTimeoutError, modal_exc.TimeoutError) as e:
-            # Modal killed the sandbox at its configured timeout. Surface this
+        except (
+            modal_exc.SandboxTimeoutError,
+            modal_exc.TimeoutError,
+            SandboxTimeoutError,
+        ) as e:
+            # The provider killed the sandbox at its configured timeout. Surface this
             # as a *tool_output* with is_error=True (not a session crash) so
             # the model recognises the timeout and can decide: stop, retry
             # with a smaller chunk, escalate to a heavier profile, or pivot.

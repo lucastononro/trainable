@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select
 
+from config import settings
 from db import async_session
 from models import Deployment, Project, RegisteredModel
 from services import deploy as deploy_svc
@@ -164,8 +165,10 @@ async def deploy_model(model_id: str, body: DeployRequest | None = None):
 async def deploy_compute_options():
     """List the compute targets the dropdown on /models offers. Source
     of truth for the labels + the per-option blurb lives here so the
-    frontend doesn't drift from the backend."""
-    return [
+    frontend doesn't drift from the backend. On RunPod, labels without an
+    exact SKU carry a note naming the pool they schedule on (see
+    services/compute/runpod_provider/gpu.py)."""
+    options = [
         {"value": "cpu", "label": "CPU", "blurb": "Default. Cheap pool, no GPU."},
         {
             "value": "T4",
@@ -190,6 +193,17 @@ async def deploy_compute_options():
         },
         {"value": "H100", "label": "H100 (80 GB)", "blurb": "Top-tier. Premium $/hr."},
     ]
+    if settings.compute_provider == "runpod":
+        runpod_notes = {
+            "T4": "Runs on RTX A4000-class 16 GB on RunPod (no T4 SKU).",
+            "A10G": "Runs on RTX A5000 / A40 24 GB on RunPod (no A10G SKU).",
+            "A100-40GB": "Schedules (and bills) as A100 80 GB on RunPod.",
+        }
+        for opt in options:
+            note = runpod_notes.get(opt["value"])
+            if note:
+                opt["note"] = note
+    return options
 
 
 @router.get("/models/{model_id}/serving-app")

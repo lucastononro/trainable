@@ -1,4 +1,12 @@
-"""Modal Sandbox integration for isolated Python code execution."""
+"""Sandbox execution — isolated Python code runs on the configured compute
+provider (Modal by default, RunPod via COMPUTE_PROVIDER=runpod).
+
+This module keeps all provider-agnostic mechanics (SDK preamble, OTel span,
+stdout metric parsing, SSE broadcast, usage recording) and delegates the
+actual sandbox lifecycle to services.compute. The Modal App/Image helpers
+(`get_app`/`get_image`) stay defined here — the Modal adapter and the
+notebook kernel resolve them through this module, and tests patch them
+here by name."""
 
 from __future__ import annotations
 
@@ -20,7 +28,11 @@ from services.metrics import (
     publish_chart_config,
 )
 from services.usage import record_sandbox_usage
-from services.volume import get_volume
+
+# Looks unused but is load-bearing: the Modal sandbox adapter
+# (services/compute/modal_provider/sandbox.py) resolves get_volume through
+# THIS module's namespace at call time.
+from services.volume import get_volume  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -154,8 +166,13 @@ async def run_code(
     agent_type: str | None = None,
     agent_id: str | None = None,
 ) -> dict:
-    """Execute Python code in a Modal Sandbox with data volume mounted at /data."""
+    """Execute Python code in an isolated sandbox with the shared data
+    volume mounted at /data. The sandbox runs on the configured compute
+    provider (Modal or RunPod)."""
 
+    from services.compute import get_sandbox_provider
+
+    provider = get_sandbox_provider()
     effective_timeout = timeout or settings.sandbox_timeout
     logger.info(
         "Creating sandbox for session %s (%d chars, gpu=%s, timeout=%ds)",
@@ -197,20 +214,15 @@ async def run_code(
                 logger.debug("pre-sandbox volume bootstrap skipped: %s", e)
 
             started = time.monotonic()
-            sb = await modal.Sandbox.create.aio(
-                "python",
-                "-u",
-                "-c",
-                full_code,
-                image=_get_image(),
-                volumes={"/data": get_volume()},
+            sb = await provider.create(
+                code=full_code,
+                session_id=session_id,
                 gpu=gpu,
                 timeout=effective_timeout,
                 # Anchor the process cwd inside the session workspace so relative
                 # file IO (open("data/x.parquet"), pd.to_parquet("models/m.pkl"))
                 # lands on the volume instead of /root.
                 workdir=f"/data/sessions/{session_id}",
-                app=await _get_app(),
             )
 
             logger.info("Running code in sandbox for session %s", session_id)
@@ -275,7 +287,7 @@ async def run_code(
                     if not isinstance(e, asyncio.CancelledError):
                         logger.debug("stderr drainer exited with: %s", e)
 
-            await sb.wait.aio()
+            await sb.wait()
 
             elapsed = time.monotonic() - started
             result = {
@@ -299,6 +311,7 @@ async def run_code(
                     agent_id=agent_id,
                     seconds=elapsed,
                     gpu=gpu,
+                    provider=provider.name,
                     is_error=sb.returncode != 0,
                     extra={"stage": stage, "code_chars": len(code)},
                 )
