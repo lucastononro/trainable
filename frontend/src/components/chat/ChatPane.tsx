@@ -1,0 +1,288 @@
+'use client';
+
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type Dispatch,
+  type MutableRefObject,
+  type RefObject,
+  type SetStateAction,
+} from 'react';
+import { Bot, FolderUp, HardDrive, Loader2, Plus, Send, Square, Upload } from 'lucide-react';
+import { isDraftEmpty } from '@/lib/mentions';
+import type { Draft, Experiment, Task, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
+import type { ChatItem } from '@/lib/chatItems';
+import { renderGroupedChatItems } from '@/components/chat/ChatItemView';
+import AttachedFilesPreview from '@/components/chat/AttachedFilesPreview';
+import InlineTasks from '@/components/InlineTasks';
+import MentionInput from '@/components/MentionInput';
+
+// ---------------------------------------------------------------------------
+// ChatPane — the left panel of the studio view: scrollable chat stream
+// (grouped chat items + inline tasks card + typing indicator) and the
+// in-session input bar (attach menu + mention input + stop/send).
+// How close (px) to the bottom of the chat pane the user must be for
+// auto-scroll to stay "pinned". Module-level so the binding is created once
+// and is unambiguously stable for the scroll-handler closure.
+const AUTO_SCROLL_PIN_THRESHOLD_PX = 96;
+
+export default function ChatPane({
+  activeSessionId,
+  activeProjectId,
+  experiments,
+  isRunning,
+  canvasOpen,
+  chatItems,
+  streamingItemIdRef,
+  pinnedToBottomRef,
+  tasks,
+  onTaskCreate,
+  onTaskUpdate,
+  onTaskDelete,
+  draft,
+  onDraftChange,
+  onSend,
+  onStop,
+  attachedFiles,
+  onRemoveAttachedFile,
+  onClearAttachedFiles,
+  attachingFiles,
+  showAttachMenu,
+  setShowAttachMenu,
+  attachMenuRef,
+  fileInputRef,
+  folderInputRef,
+  onFilesSelected,
+  onOpenS3Browser,
+  sessionAttachedFiles,
+}: {
+  // Session-scoped values passed as props (not read from AppContext) so the
+  // component stays reusable and testable outside the studio page.
+  activeSessionId: string | null;
+  activeProjectId: string | null;
+  experiments: Experiment[];
+  isRunning: boolean;
+  canvasOpen: boolean;
+  chatItems: ChatItem[];
+  streamingItemIdRef: MutableRefObject<string | null>;
+  pinnedToBottomRef: MutableRefObject<boolean>;
+  tasks: Task[];
+  onTaskCreate: (body: TaskCreatePayload) => Promise<void>;
+  onTaskUpdate: (id: number, body: TaskUpdatePayload) => Promise<void>;
+  onTaskDelete: (id: number) => Promise<void>;
+  draft: Draft;
+  onDraftChange: (draft: Draft) => void;
+  onSend: () => void;
+  onStop: () => void;
+  attachedFiles: File[];
+  onRemoveAttachedFile: (index: number) => void;
+  onClearAttachedFiles: () => void;
+  attachingFiles: boolean;
+  showAttachMenu: boolean;
+  setShowAttachMenu: Dispatch<SetStateAction<boolean>>;
+  /** Shared with WelcomeScreen — only one of the two inputs is mounted at a
+   *  time, and the outside-click close handler lives in the page. */
+  attachMenuRef: RefObject<HTMLDivElement>;
+  fileInputRef: RefObject<HTMLInputElement>;
+  folderInputRef: RefObject<HTMLInputElement>;
+  onFilesSelected: (files: FileList | File[]) => void;
+  onOpenS3Browser: () => void;
+  sessionAttachedFiles: { name: string; sandboxPath: string }[];
+}) {
+  const bottomRef = useRef<HTMLDivElement>(null);
+  // The actual scrollable chat pane (the `overflow-y-auto` div `bottomRef`
+  // sits at the bottom of). Used to measure scroll position for the
+  // pinned-to-bottom tracking below.
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll on new chat items — but only while the user is pinned near
+  // the bottom of the pane. `chatItems` changes many times per second while
+  // an assistant reply streams token-by-token; without the pin gate,
+  // `scrollIntoView` fired on every single one of those changes and
+  // hijacked the scroll position, making it impossible to scroll up and
+  // read earlier output. `behavior: 'auto'` (instant, no animation) is used
+  // unconditionally: a smooth scroll animates through intermediate positions,
+  // and each intermediate `scroll` event would make `handleChatScroll` see
+  // `distanceFromBottom > threshold` and un-pin mid-animation — so if the
+  // first streaming tokens arrived before the animation landed, auto-scroll
+  // silently stopped. An instant jump fires a single scroll event already at
+  // the bottom, which keeps the pin state consistent.
+  useEffect(() => {
+    if (!pinnedToBottomRef.current) return;
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' });
+  }, [chatItems, pinnedToBottomRef, streamingItemIdRef]);
+
+  // Track whether the user is pinned near the bottom of the chat pane via a
+  // scroll listener + threshold, rather than assuming every render should
+  // snap back down.
+  const handleChatScroll = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedToBottomRef.current = distanceFromBottom <= AUTO_SCROLL_PIN_THRESHOLD_PX;
+  }, [pinnedToBottomRef]);
+
+  return (
+    <div className="h-full flex flex-col min-w-0">
+      <div
+        ref={chatScrollRef}
+        onScroll={handleChatScroll}
+        className="flex-1 overflow-y-auto px-4 py-4"
+      >
+        <div className={`mx-auto w-full space-y-4 ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}>
+          {renderGroupedChatItems(chatItems, streamingItemIdRef.current, activeSessionId)}
+
+          {tasks.length > 0 && (
+            <InlineTasks
+              tasks={tasks}
+              onCreate={onTaskCreate}
+              onUpdate={onTaskUpdate}
+              onDelete={onTaskDelete}
+            />
+          )}
+
+          {isRunning &&
+            !streamingItemIdRef.current &&
+            (() => {
+              const last = chatItems[chatItems.length - 1];
+              return !last || last.type !== 'tool_start';
+            })() && (
+              <div className="flex gap-3 animate-fade-in">
+                <div className="w-7 h-7 rounded-full bg-emerald-500/20 flex items-center justify-center shrink-0">
+                  <Bot className="w-3.5 h-3.5 text-emerald-400" />
+                </div>
+                <div className="flex items-center gap-1.5 px-4 py-2.5 rounded-2xl rounded-bl-md bg-surface-elevated border border-surface-border">
+                  <span
+                    className="w-2 h-2 rounded-full bg-gray-400 animate-typing"
+                    style={{ animationDelay: '0ms' }}
+                  />
+                  <span
+                    className="w-2 h-2 rounded-full bg-gray-400 animate-typing"
+                    style={{ animationDelay: '150ms' }}
+                  />
+                  <span
+                    className="w-2 h-2 rounded-full bg-gray-400 animate-typing"
+                    style={{ animationDelay: '300ms' }}
+                  />
+                </div>
+              </div>
+            )}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+
+      {/* Input bar */}
+      <div className="bg-black px-4 py-3">
+        <div className={`mx-auto ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}>
+          {/* Attached files preview */}
+          <AttachedFilesPreview
+            files={attachedFiles}
+            onRemove={onRemoveAttachedFile}
+            onClearAll={onClearAttachedFiles}
+            variant="session"
+          />
+
+          <div className="flex items-center gap-1 bg-[#1e1f22] rounded-2xl px-2 py-1.5 transition-colors">
+            {/* Attach menu */}
+            <div className="relative" ref={attachMenuRef}>
+              <button
+                type="button"
+                onClick={() => setShowAttachMenu(!showAttachMenu)}
+                className={`p-2 rounded-xl transition-colors shrink-0 ${
+                  showAttachMenu
+                    ? 'bg-white/[0.1] text-white'
+                    : 'hover:bg-neutral-700 text-gray-400 hover:text-gray-300'
+                }`}
+                title="Attach files or data"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+              {showAttachMenu && (
+                <div className="absolute bottom-full left-0 mb-2 w-52 bg-black border border-white/[0.08] rounded-xl shadow-xl z-50 overflow-hidden animate-scale-in">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    multiple
+                    className="hidden"
+                    onChange={(e) => e.target.files && onFilesSelected(e.target.files)}
+                  />
+                  <input
+                    ref={folderInputRef}
+                    type="file"
+                    // @ts-ignore
+                    webkitdirectory=""
+                    directory=""
+                    multiple
+                    className="hidden"
+                    onChange={(e) => e.target.files && onFilesSelected(e.target.files)}
+                  />
+                  <button
+                    onClick={() => fileInputRef.current?.click()}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/[0.06] transition-colors"
+                  >
+                    <Upload className="w-4 h-4 text-gray-500" />
+                    Upload files
+                  </button>
+                  <button
+                    onClick={() => folderInputRef.current?.click()}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/[0.06] transition-colors"
+                  >
+                    <FolderUp className="w-4 h-4 text-gray-500" />
+                    Upload folder
+                  </button>
+                  <div className="border-t border-white/[0.06]" />
+                  <button
+                    onClick={() => {
+                      setShowAttachMenu(false);
+                      onOpenS3Browser();
+                    }}
+                    className="w-full flex items-center gap-2.5 px-3 py-2.5 text-sm text-gray-300 hover:bg-white/[0.06] transition-colors"
+                  >
+                    <HardDrive className="w-4 h-4 text-gray-500" />
+                    Browse S3 data
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <MentionInput
+              draft={draft}
+              onChange={onDraftChange}
+              onSubmit={() =>
+                isRunning && isDraftEmpty(draft) && attachedFiles.length === 0 ? onStop() : onSend()
+              }
+              placeholder="Ask anything"
+              className="flex-1 py-1.5"
+              projectId={activeProjectId}
+              experiments={experiments}
+              attachedFilesInSession={sessionAttachedFiles}
+            />
+            {isRunning && isDraftEmpty(draft) && attachedFiles.length === 0 ? (
+              <button
+                onClick={onStop}
+                className="p-2 bg-red-600 hover:bg-red-700 rounded-xl transition-colors shrink-0"
+                title="Stop agent"
+              >
+                <Square className="w-4 h-4 text-white" />
+              </button>
+            ) : (
+              <button
+                onClick={onSend}
+                disabled={isDraftEmpty(draft) && attachedFiles.length === 0}
+                title="Send message"
+                className="p-2 bg-primary-600 hover:bg-primary-700 disabled:opacity-30 rounded-xl transition-colors shrink-0"
+              >
+                {attachingFiles ? (
+                  <Loader2 className="w-4 h-4 text-white animate-spin" />
+                ) : (
+                  <Send className="w-4 h-4 text-white" />
+                )}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
