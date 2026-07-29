@@ -161,6 +161,11 @@ const SUGGESTIONS = [
   },
 ];
 
+// How close (px) to the bottom of the chat pane the user must be for
+// auto-scroll to stay "pinned". Module-level so the binding is created once
+// and is unambiguously stable for the scroll-handler closure.
+const AUTO_SCROLL_PIN_THRESHOLD_PX = 96;
+
 // ---------------------------------------------------------------------------
 // Main page component
 // ---------------------------------------------------------------------------
@@ -237,6 +242,17 @@ function HomePageContent() {
   const [htmlArtifacts, setHtmlArtifacts] = useState<Map<string, HtmlArtifact>>(() => new Map());
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  // The actual scrollable chat pane (the `overflow-y-auto` div `bottomRef`
+  // sits at the bottom of). Used to measure scroll position for the
+  // pinned-to-bottom tracking below.
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  // Whether the user is scrolled near the bottom of the chat pane. The
+  // auto-scroll effect below only fires while this stays true — otherwise a
+  // user who scrolls up to read earlier output during a long streaming
+  // response gets yanked back to the bottom on every token. A ref (not
+  // state) because the scroll handler runs on every native scroll event and
+  // we don't want that to trigger a re-render.
+  const pinnedToBottomRef = useRef(true);
   const sseRef = useRef<EventSource | null>(null);
   const inputRef = useRef<MentionInputHandle | null>(null);
   const prevExperimentIdRef = useRef<string | null>(null);
@@ -295,10 +311,32 @@ function HomePageContent() {
     fileNames: string[];
   } | null>(null);
 
-  // Auto-scroll on new chat items
+  // Auto-scroll on new chat items — but only while the user is pinned near
+  // the bottom of the pane. `chatItems` changes many times per second while
+  // an assistant reply streams token-by-token; without the pin gate,
+  // `scrollIntoView` fired on every single one of those changes and
+  // hijacked the scroll position, making it impossible to scroll up and
+  // read earlier output. `behavior: 'auto'` (instant, no animation) is used
+  // unconditionally: a smooth scroll animates through intermediate positions,
+  // and each intermediate `scroll` event would make `handleChatScroll` see
+  // `distanceFromBottom > threshold` and un-pin mid-animation — so if the
+  // first streaming tokens arrived before the animation landed, auto-scroll
+  // silently stopped. An instant jump fires a single scroll event already at
+  // the bottom, which keeps the pin state consistent.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!pinnedToBottomRef.current) return;
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [chatItems]);
+
+  // Track whether the user is pinned near the bottom of the chat pane via a
+  // scroll listener + threshold, rather than assuming every render should
+  // snap back down.
+  const handleChatScroll = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedToBottomRef.current = distanceFromBottom <= AUTO_SCROLL_PIN_THRESHOLD_PX;
+  }, []);
 
   // Seed the chat input with the suggested prompt handed off by the
   // sample-dataset gallery (first-run flow). Consumed exactly once, and
@@ -316,6 +354,9 @@ function HomePageContent() {
   // ---------------------------------------------------------------------------
 
   const addItem = useCallback((item: Omit<ChatItem, 'id' | 'timestamp'>) => {
+    // The user just sent something — they're at the input, not mid-read of
+    // scrollback, so re-pin to bottom even if they'd scrolled up earlier.
+    if (item.type === 'user') pinnedToBottomRef.current = true;
     setChatItems((prev) => [
       ...prev,
       { ...item, id: `${Date.now()}-${Math.random()}`, timestamp: Date.now() },
@@ -964,6 +1005,7 @@ function HomePageContent() {
     setDraft([]);
     setIsRunning(false);
     streamingItemIdRef.current = null;
+    pinnedToBottomRef.current = true;
     setSessionState('created');
     workspacePanelRef.current?.collapse();
     setCanvasContent('');
@@ -2064,7 +2106,11 @@ function HomePageContent() {
             {/* Chat panel */}
             <Panel defaultSize={canvasOpen ? 30 : 100} minSize={20}>
               <div className="h-full flex flex-col min-w-0">
-                <div className="flex-1 overflow-y-auto px-4 py-4">
+                <div
+                  ref={chatScrollRef}
+                  onScroll={handleChatScroll}
+                  className="flex-1 overflow-y-auto px-4 py-4"
+                >
                   <div
                     className={`mx-auto w-full space-y-4 ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}
                   >
