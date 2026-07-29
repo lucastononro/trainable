@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronDown, Cpu, Database, DollarSign, Sparkles } from 'lucide-react';
-import type { UsageEvent } from '@/lib/types';
+import { ChevronDown, Cpu, Database, DollarSign, ShieldAlert, Sparkles } from 'lucide-react';
+import type { BudgetInfo, UsageEvent } from '@/lib/types';
 
 export interface UsageTotals {
   cost_usd: number;
@@ -21,6 +21,8 @@ export interface UsageTotals {
 interface Props {
   totals: UsageTotals;
   recent?: UsageEvent[];
+  /** Project budget vs. project-wide spend. Omitted/null = no cap set. */
+  budget?: BudgetInfo | null;
 }
 
 const ZERO: UsageTotals = {
@@ -48,7 +50,7 @@ function formatCost(c: number): string {
   return `$${c.toFixed(2)}`;
 }
 
-export default function CostBadge({ totals = ZERO, recent = [] }: Props) {
+export default function CostBadge({ totals = ZERO, recent = [], budget = null }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -70,17 +72,36 @@ export default function CostBadge({ totals = ZERO, recent = [] }: Props) {
   const cacheHit =
     totalInputCharged > 0 ? (totals.cache_read_input_tokens / totalInputCharged) * 100 : 0;
 
+  const hasBudget = budget != null && budget.budget_usd != null;
+  const overBudget = hasBudget && budget!.exceeded;
+  const budgetPct = hasBudget
+    ? Math.min(100, (budget!.spent_usd / Math.max(budget!.budget_usd!, 1e-9)) * 100)
+    : 0;
+
   return (
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
         className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg transition-colors text-xs hover:bg-white/[0.06] text-gray-400"
-        title="Session cost & token usage"
+        title={
+          overBudget ? 'Project budget exceeded — agents are halted' : 'Session cost & token usage'
+        }
       >
-        <DollarSign className="w-3 h-3 text-emerald-400" />
-        <span className="tabular-nums font-medium text-gray-300">
+        {overBudget ? (
+          <ShieldAlert className="w-3 h-3 text-red-400" />
+        ) : (
+          <DollarSign className="w-3 h-3 text-emerald-400" />
+        )}
+        <span
+          className={`tabular-nums font-medium ${overBudget ? 'text-red-300' : 'text-gray-300'}`}
+        >
           {formatCost(totals.cost_usd)}
         </span>
+        {overBudget && (
+          <span className="text-[10px] uppercase tracking-wider text-red-400 font-semibold">
+            over budget
+          </span>
+        )}
         <ChevronDown
           className={`w-3 h-3 text-gray-500 transition-transform ${open ? 'rotate-180' : ''}`}
         />
@@ -100,6 +121,31 @@ export default function CostBadge({ totals = ZERO, recent = [] }: Props) {
               value={formatCost(totals.cost_usd)}
               icon={<DollarSign className="w-3 h-3 text-emerald-400" />}
             />
+
+            {hasBudget && (
+              <div className="space-y-1">
+                <Stat
+                  label="Project budget"
+                  value={`${formatCost(budget!.spent_usd)} / ${formatCost(budget!.budget_usd!)}`}
+                  hint={
+                    overBudget
+                      ? 'Budget exceeded — agents are halted until the cap is raised'
+                      : `${formatCost(budget!.remaining_usd ?? 0)} remaining (project-wide)`
+                  }
+                  icon={
+                    <ShieldAlert
+                      className={`w-3 h-3 ${overBudget ? 'text-red-400' : 'text-amber-300'}`}
+                    />
+                  }
+                />
+                <div className="ml-6 h-1 rounded-full bg-white/[0.06] overflow-hidden">
+                  <div
+                    className={`h-full rounded-full ${overBudget ? 'bg-red-500' : 'bg-emerald-500'}`}
+                    style={{ width: `${budgetPct}%` }}
+                  />
+                </div>
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <Stat
