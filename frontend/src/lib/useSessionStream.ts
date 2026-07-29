@@ -485,6 +485,23 @@ export function useSessionStream(
               addItem({ type: 'status', content: 'Agent stopped' });
               setIsRunning(false);
               break;
+            case 'session_resumed': {
+              // Backend relaunched the agent with recovered progress (resume/
+              // retry endpoint). The subsequent state_change → *_running event
+              // flips isRunning too, but set it eagerly so the UI reacts even
+              // if that event races the reconnect.
+              const data = event.data;
+              streamingItemIdRef.current = null;
+              addItem({
+                type: 'status',
+                content:
+                  data.mode === 'retry'
+                    ? 'Retrying — continuing from recovered progress'
+                    : 'Resuming — continuing from recovered progress',
+              });
+              setIsRunning(true);
+              break;
+            }
             case 'budget_exceeded': {
               // Hard-stop guardrail (#107): the runner halted the agent
               // because project spend crossed its cap.

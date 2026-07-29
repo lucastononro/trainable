@@ -134,6 +134,18 @@ class ClarificationReply(BaseModel):
     answer: str = Field(..., max_length=_CLARIFICATION_MAX)
 
 
+class SessionResume(BaseModel):
+    """Body for POST /sessions/{id}/resume. Everything is optional — the
+    default is 'relaunch with the same knobs the session already has'."""
+
+    # "resume" continues interrupted work; "retry" re-drives a failed stage.
+    # Both relaunch the same way — the mode only shades the agent prompt.
+    mode: Literal["resume", "retry"] = "resume"
+    model: Optional[str] = Field(default=None, max_length=_MODEL_ID_MAX)
+    agent_models: Optional[dict[str, str]] = Field(default=None)
+    agent_thinking: Optional[dict[str, str]] = Field(default=None)
+
+
 class TaskCreate(BaseModel):
     subject: str = Field(..., min_length=1, max_length=_NAME_MAX)
     short_description: str = Field(default="", max_length=_DESC_MAX)
