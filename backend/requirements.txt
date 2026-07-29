@@ -1,3 +1,7 @@
+# Human-edited dependency input. The hashed lockfile requirements.lock is
+# generated from this file (reproducible installs in CI + Docker, #128):
+#   uv pip compile requirements.txt -o requirements.lock --generate-hashes --universal
+# Re-run that command after any edit below and commit both files.
 fastapi==0.136.1
 uvicorn[standard]==0.30.0
 sqlalchemy[asyncio]==2.0.49

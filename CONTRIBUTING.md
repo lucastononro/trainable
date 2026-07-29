@@ -16,6 +16,12 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+For an exact, hash-verified reproduction of what CI and the Docker image
+run, install from the lockfile instead (`pip install --require-hashes -r
+requirements.lock`). `requirements.txt` is the human-edited input; after
+changing it, regenerate the lock with `uv pip compile requirements.txt -o
+requirements.lock --generate-hashes --universal` and commit both files.
+
 ### Frontend
 
 ```bash
