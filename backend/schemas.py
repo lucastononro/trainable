@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -155,6 +155,29 @@ class ReproduceReport(BaseModel):
     inputs: ReproduceInputs
     execution: ReproduceExecution
     metrics: ReproduceMetrics
+
+
+class RawColumnProfile(BaseModel):
+    """Per-column quick-profile stats for a raw uploaded dataset."""
+
+    name: str
+    dtype: str
+    missing_pct: float = Field(ge=0.0, le=100.0)
+    # Approximate distinct-value count (DuckDB approx_unique / HyperLogLog).
+    unique_count: int = Field(ge=0)
+
+
+class RawDatasetPreview(BaseModel):
+    """Head rows + quick profile of a raw uploaded file, pre-prep."""
+
+    path: str
+    name: str
+    format: Literal["csv", "tsv", "parquet"]
+    row_count: int = Field(ge=0)
+    column_count: int = Field(ge=0)
+    columns: list[RawColumnProfile]
+    head_columns: list[str]
+    head_rows: list[list[Any]]
 
 
 class ExperimentUpdate(BaseModel):

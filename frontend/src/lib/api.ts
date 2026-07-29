@@ -33,6 +33,7 @@ import type {
   SessionRow,
   ExperimentFullDetail,
   CompareResponse,
+  RawDatasetPreview,
 } from './types';
 
 const API_BASE = '/api';
@@ -92,6 +93,12 @@ export const api = {
       sandbox_checked?: boolean;
       sandbox_missing_count?: number;
     }>(`/projects/${id}/files`),
+
+  /** Raw (pre-prep) preview + quick profile of an uploaded CSV/TSV/Parquet. */
+  previewProjectDataset: (projectId: string, path: string, limit = 50) => {
+    const qs = new URLSearchParams({ path, limit: String(limit) });
+    return fetchJSON<RawDatasetPreview>(`/projects/${projectId}/datasets/preview?${qs.toString()}`);
+  },
 
   // Experiments
   listExperiments: (params?: {
