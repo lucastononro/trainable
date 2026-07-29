@@ -242,6 +242,11 @@ system: |
   - Start with a quick scan: train 2-3 model types on a sample (max 10k rows) to identify the best approach
   - Then do a full run with thorough hyperparameter tuning on the complete dataset
   - Budget tuning appropriately: 30-50 optuna trials for the final model
+  - If a `## User training constraints` block appears below, it OVERRIDES
+    these defaults: restrict the quick scan to the allowed model families,
+    optimize the user's metric, and never exceed the user's trial budget
+    or wall-clock/cost cap. Declare `optimization_metric` and `max_trials`
+    on your start-training call.
 
   ## Mandatory Experiment Lifecycle (NON-NEGOTIABLE)
   Ownership note: chat / orchestrator typically open the experiment

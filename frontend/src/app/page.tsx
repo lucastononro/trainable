@@ -2,6 +2,7 @@
 
 import { memo, useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/AppContext';
+import { SSEStreamProvider, useSSEStream } from '@/lib/SSEStreamContext';
 import { api } from '@/lib/api';
 import {
   SSEEvent,
@@ -18,8 +19,10 @@ import {
   TaskCreatePayload,
   TaskUpdatePayload,
   TaskEventData,
+  GeneratedFile,
 } from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
+import { takeSuggestedPrompt } from '@/lib/suggestedPrompt';
 import {
   ImperativePanelHandle,
   Panel,
@@ -66,13 +69,15 @@ import {
   GitBranch,
   Globe,
   ExternalLink,
+  Download,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import CostBadge, { UsageTotals } from '@/components/CostBadge';
 import InlineTasks from '@/components/InlineTasks';
-import type { UsageEvent } from '@/lib/types';
+import type { BudgetInfo, UsageEvent } from '@/lib/types';
 
 const ZERO_USAGE: UsageTotals = {
   cost_usd: 0,
@@ -112,22 +117,63 @@ SyntaxHighlighter.registerLanguage('python', python);
 SyntaxHighlighter.registerLanguage('json', json);
 
 // ---------------------------------------------------------------------------
-// SSE / Backend helpers
-// ---------------------------------------------------------------------------
-
-function getSSEBase() {
-  if (typeof window === 'undefined') return 'http://localhost:8000';
-  return `http://${window.location.hostname}:8000`;
-}
-
-function getBackendUrl() {
-  if (typeof window === 'undefined') return 'http://localhost:8000';
-  return `http://${window.location.hostname}:8000`;
-}
-
-// ---------------------------------------------------------------------------
 // ChatItem interface
 // ---------------------------------------------------------------------------
+
+// Flat, all-optional meta shape covering every `ChatItem.type`'s fields.
+// A precise per-type discriminated union would be more rigorous, but `meta`
+// flows untyped through ~8 render components (CollapsibleToolCard,
+// SubAgentCard, ClarificationCard, AgentToolCard, ToolGroupCard, …) that
+// each only read their own subset without first narrowing on `item.type` —
+// threading a strict per-variant type through all of them is a much larger,
+// riskier change than this issue calls for. This still replaces `any` with
+// real field names/types, which is what actually protects against a typo'd
+// or missing field from the (unvalidated) backend payload.
+interface ChatItemMeta {
+  // tool_start / tool_end / code_output
+  code?: string;
+  output?: string;
+  outputs?: Array<{ text: string; stream?: string }>;
+  // standalone code_output item (no matching tool_start found) — folded
+  // into the tool card, never rendered on its own, but still carried
+  stream?: string;
+  // tool_end + subagent_end
+  duration?: number | null;
+  // subagent_start / subagent_end
+  task?: string;
+  model?: string;
+  agent_id?: string;
+  summary?: string;
+  // clarification
+  question_id?: string;
+  asker_agent_id?: string;
+  why_needed?: string;
+  urgency?: string;
+  status?: 'pending' | 'resolved';
+  original_question?: string;
+  answer?: string;
+  answered_by?: string;
+  // agent_tool (+ shared with clarification/subagent above: asker_agent_type,
+  // answerer_agent_type, depth)
+  call_id?: string;
+  tool_name?: string;
+  asker_agent_type?: string;
+  target_agent_type?: string;
+  answerer_agent_type?: string;
+  answerer_agent_id?: string;
+  depth?: number;
+  duration_s?: number;
+  is_error?: boolean;
+  variant?: 'tool' | 'clarification_exchange';
+  // assistant
+  agent_type?: string;
+  // user
+  files?: string[];
+  mentions?: Mention[];
+  hidden?: boolean;
+  /** File(s) attached via the "Browse S3" picker rather than local upload. */
+  s3?: boolean;
+}
 
 interface ChatItem {
   id: string;
@@ -145,8 +191,20 @@ interface ChatItem {
     | 'clarification'
     | 'agent_tool';
   content: string;
-  meta?: any;
+  meta?: ChatItemMeta;
   timestamp: number;
+}
+
+// Small runtime-checked readers for `Message.metadata` (Record<string,
+// unknown> — persisted session history, not schema-validated on the way
+// back out of Postgres). Used when reconstructing `ChatItem.meta` on
+// session reload, so a malformed/missing field degrades to `undefined`
+// instead of a blind `as` cast lying about the shape.
+function metaStr(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined;
+}
+function metaNum(v: unknown): number | undefined {
+  return typeof v === 'number' ? v : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -172,11 +230,16 @@ const SUGGESTIONS = [
   },
 ];
 
+// How close (px) to the bottom of the chat pane the user must be for
+// auto-scroll to stay "pinned". Module-level so the binding is created once
+// and is unambiguously stable for the scroll-handler closure.
+const AUTO_SCROLL_PIN_THRESHOLD_PX = 96;
+
 // ---------------------------------------------------------------------------
 // Main page component
 // ---------------------------------------------------------------------------
 
-export default function HomePage() {
+function HomePageContent() {
   const {
     projects,
     experiments,
@@ -194,6 +257,10 @@ export default function HomePage() {
     isRunning,
     setIsRunning,
   } = useApp();
+  // Broadcasts every parsed message from the single connectSSE EventSource
+  // below to any other subscriber (e.g. the notebook) so nobody else has to
+  // open a second EventSource to the same `/api/sessions/{id}/stream`.
+  const { publish } = useSSEStream();
   // Keep a ref for stable access inside async handlers/closures
   const agentModelsRef = useRef<Record<string, string>>({});
   useEffect(() => {
@@ -223,7 +290,7 @@ export default function HomePage() {
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [canvasContent, setCanvasContent] = useState('');
   const [canvasTitle, setCanvasTitle] = useState('Report');
-  const [generatedFiles, setGeneratedFiles] = useState<any[]>([]);
+  const [generatedFiles, setGeneratedFiles] = useState<GeneratedFile[]>([]);
   const [fileTree, setFileTree] = useState<FileTreeNode>({
     name: 'workspace',
     path: '/',
@@ -244,6 +311,17 @@ export default function HomePage() {
   const [htmlArtifacts, setHtmlArtifacts] = useState<Map<string, HtmlArtifact>>(() => new Map());
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  // The actual scrollable chat pane (the `overflow-y-auto` div `bottomRef`
+  // sits at the bottom of). Used to measure scroll position for the
+  // pinned-to-bottom tracking below.
+  const chatScrollRef = useRef<HTMLDivElement>(null);
+  // Whether the user is scrolled near the bottom of the chat pane. The
+  // auto-scroll effect below only fires while this stays true — otherwise a
+  // user who scrolls up to read earlier output during a long streaming
+  // response gets yanked back to the bottom on every token. A ref (not
+  // state) because the scroll handler runs on every native scroll event and
+  // we don't want that to trigger a re-render.
+  const pinnedToBottomRef = useRef(true);
   const sseRef = useRef<EventSource | null>(null);
   const inputRef = useRef<MentionInputHandle | null>(null);
   const prevExperimentIdRef = useRef<string | null>(null);
@@ -271,6 +349,9 @@ export default function HomePage() {
   // Live usage totals for the active session (cost badge in header)
   const [usageTotals, setUsageTotals] = useState<UsageTotals>(ZERO_USAGE);
   const [recentUsage, setRecentUsage] = useState<UsageEvent[]>([]);
+  // Project budget vs. spend (issue #107) — hydrated with session usage,
+  // flipped to exceeded by the budget_exceeded SSE event.
+  const [budgetInfo, setBudgetInfo] = useState<BudgetInfo | null>(null);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -299,16 +380,52 @@ export default function HomePage() {
     fileNames: string[];
   } | null>(null);
 
-  // Auto-scroll on new chat items
+  // Auto-scroll on new chat items — but only while the user is pinned near
+  // the bottom of the pane. `chatItems` changes many times per second while
+  // an assistant reply streams token-by-token; without the pin gate,
+  // `scrollIntoView` fired on every single one of those changes and
+  // hijacked the scroll position, making it impossible to scroll up and
+  // read earlier output. `behavior: 'auto'` (instant, no animation) is used
+  // unconditionally: a smooth scroll animates through intermediate positions,
+  // and each intermediate `scroll` event would make `handleChatScroll` see
+  // `distanceFromBottom > threshold` and un-pin mid-animation — so if the
+  // first streaming tokens arrived before the animation landed, auto-scroll
+  // silently stopped. An instant jump fires a single scroll event already at
+  // the bottom, which keeps the pin state consistent.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!pinnedToBottomRef.current) return;
+    bottomRef.current?.scrollIntoView({ behavior: 'auto' });
   }, [chatItems]);
+
+  // Track whether the user is pinned near the bottom of the chat pane via a
+  // scroll listener + threshold, rather than assuming every render should
+  // snap back down.
+  const handleChatScroll = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    pinnedToBottomRef.current = distanceFromBottom <= AUTO_SCROLL_PIN_THRESHOLD_PX;
+  }, []);
+
+  // Seed the chat input with the suggested prompt handed off by the
+  // sample-dataset gallery (first-run flow). Consumed exactly once, and
+  // never clobbers something the user already typed.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const prompt = takeSuggestedPrompt(activeSessionId);
+    if (!prompt) return;
+    setDraft((prev) => (isDraftEmpty(prev) ? [{ kind: 'text', value: prompt }] : prev));
+    inputRef.current?.focus();
+  }, [activeSessionId]);
 
   // ---------------------------------------------------------------------------
   // addItem helper
   // ---------------------------------------------------------------------------
 
   const addItem = useCallback((item: Omit<ChatItem, 'id' | 'timestamp'>) => {
+    // The user just sent something — they're at the input, not mid-read of
+    // scrollback, so re-pin to bottom even if they'd scrolled up earlier.
+    if (item.type === 'user') pinnedToBottomRef.current = true;
     setChatItems((prev) => [
       ...prev,
       { ...item, id: `${Date.now()}-${Math.random()}`, timestamp: Date.now() },
@@ -322,17 +439,27 @@ export default function HomePage() {
   const connectSSE = useCallback(
     (sid: string) => {
       if (sseRef.current) sseRef.current.close();
-      const url = `${getSSEBase()}/api/sessions/${sid}/stream`;
+      const url = `/api/sessions/${sid}/stream`;
       const source = new EventSource(url);
 
       source.onopen = () => setSseConnected(true);
       source.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data) as SSEEvent;
-          const data = event.data as any;
+          // Fan out the parsed event to any other subscriber (e.g. the
+          // notebook) before/independent of the switch below — this is the
+          // single EventSource for the session, so everyone shares it. `sid`
+          // tags the event with its owning session so subscribers can ignore
+          // stale cross-session deliveries during a session switch.
+          publish(sid, event);
 
+          // Narrowing on `event.type` below gives each case a correctly
+          // typed `event.data` (see the `SSEEvent` union in lib/types.ts) —
+          // no blanket `as any` needed. Cases are wrapped in their own
+          // `{ }` block so each can bind its own locally-scoped `data`.
           switch (event.type) {
-            case 'state_change':
+            case 'state_change': {
+              const data = event.data;
               setSessionState(data.state);
               if (data.state.includes('running')) {
                 setIsRunning(true);
@@ -342,7 +469,7 @@ export default function HomePage() {
                 // before the reset propagated). Sub-agents (depth > 0) must
                 // NOT trigger this reset, otherwise they'd wipe their own
                 // siblings mid-flight.
-                const depth = (data.depth as number | undefined) ?? 0;
+                const depth = data.depth ?? 0;
                 if (depth === 0) {
                   setActiveAgents([]);
                   activeAgentsRef.current = [];
@@ -351,7 +478,8 @@ export default function HomePage() {
               if (
                 data.state.includes('done') ||
                 data.state === 'failed' ||
-                data.state === 'cancelled'
+                data.state === 'cancelled' ||
+                data.state === 'budget_exceeded'
               ) {
                 streamingItemIdRef.current = null;
                 setIsRunning(false);
@@ -404,14 +532,16 @@ export default function HomePage() {
                 }
               }
               break;
+            }
             case 'agent_token':
             case 'agent_message': {
+              const data = event.data;
               // Prefer the agent_type carried on the event itself — the
               // backend stamps it via agent_meta in save_and_publish, so it's
               // always the authoritative source for which agent produced the
               // text. Fall back to the activeAgents heuristic only when the
               // event is missing the field (legacy events).
-              const eventAgentType = (data.agent_type as string | undefined) || undefined;
+              const eventAgentType = data.agent_type || undefined;
               const running = activeAgentsRef.current.filter((a) => a.status === 'running');
               const fallbackType =
                 running.length > 0 ? running[running.length - 1].type : undefined;
@@ -444,11 +574,14 @@ export default function HomePage() {
               });
               break;
             }
-            case 'tool_start':
+            case 'tool_start': {
+              const data = event.data;
               streamingItemIdRef.current = null;
               addItem({ type: 'tool_start', content: data.tool, meta: data.input });
               break;
-            case 'tool_end':
+            }
+            case 'tool_end': {
+              const data = event.data;
               setChatItems((prev) => {
                 const idx = prev.findLastIndex(
                   (i) => i.type === 'tool_start' && i.content === data.tool,
@@ -483,7 +616,9 @@ export default function HomePage() {
                 ];
               });
               break;
-            case 'code_output':
+            }
+            case 'code_output': {
+              const data = event.data;
               setChatItems((prev) => {
                 const idx = prev.findLastIndex((i) => i.type === 'tool_start');
                 if (idx >= 0) {
@@ -513,13 +648,16 @@ export default function HomePage() {
                 ];
               });
               break;
-            case 'agent_error':
+            }
+            case 'agent_error': {
+              const data = event.data;
               streamingItemIdRef.current = null;
               addItem({ type: 'error', content: data.error });
               setIsRunning(false);
               break;
+            }
             case 'usage_event': {
-              const ev = data as UsageEvent;
+              const ev = event.data;
               setRecentUsage((prev) => [...prev.slice(-49), ev]);
               setUsageTotals((prev) => {
                 const c = ev.cost_usd || 0;
@@ -541,16 +679,19 @@ export default function HomePage() {
               });
               break;
             }
-            case 'report_ready':
+            case 'report_ready': {
+              const data = event.data;
               setCanvasContent(data.content);
               setCanvasTitle(`${(data.stage || 'EDA').toUpperCase()} Report`);
               openCanvas();
               break;
+            }
             case 'files_ready': {
-              const stage = (data.stage as string) || '';
-              const newFiles = (data.files || []) as { path: string; type: string }[];
+              const data = event.data;
+              const stage = data.stage || '';
+              const newFiles = data.files || [];
               setGeneratedFiles((prev) => {
-                const existingPaths = new Set(prev.map((f: any) => f.path));
+                const existingPaths = new Set(prev.map((f) => f.path));
                 const merged = [...prev];
                 for (const f of newFiles) {
                   if (!existingPaths.has(f.path)) merged.push(f);
@@ -578,13 +719,14 @@ export default function HomePage() {
               break;
             }
             case 'file_created': {
-              const stage = (data.stage as string) || '';
+              const data = event.data;
+              const stage = data.stage || '';
               setFileTree((prev) =>
                 insertNodeIntoTree(
                   prev,
                   {
-                    name: data.name as string,
-                    path: data.path as string,
+                    name: data.name,
+                    path: data.path,
                     type: 'file',
                   },
                   `/sessions/${sid}`,
@@ -604,8 +746,25 @@ export default function HomePage() {
               addItem({ type: 'status', content: 'Agent stopped' });
               setIsRunning(false);
               break;
+            case 'budget_exceeded': {
+              // Hard-stop guardrail (#107): the runner halted the agent
+              // because project spend crossed its cap.
+              const data = event.data;
+              streamingItemIdRef.current = null;
+              addItem({ type: 'error', content: data.error });
+              setBudgetInfo({
+                project_id: data.project_id,
+                budget_usd: data.budget_usd ?? null,
+                spent_usd: data.spent_usd ?? 0,
+                remaining_usd: 0,
+                exceeded: true,
+              });
+              setIsRunning(false);
+              break;
+            }
             case 'metrics_batch': {
-              const items = (data.items || []) as any[];
+              const data = event.data;
+              const items = data.items || [];
               const newPoints: MetricPoint[] = [];
               const now = new Date().toISOString();
               for (const m of items) {
@@ -631,6 +790,7 @@ export default function HomePage() {
               break;
             }
             case 'metric': {
+              const data = event.data;
               const key = `${data.step}:${data.name}:${data.run_tag || ''}`;
               if (!metricKeysRef.current.has(key)) {
                 metricKeysRef.current.add(key);
@@ -639,11 +799,11 @@ export default function HomePage() {
                   return [
                     ...prev,
                     {
-                      step: data.step as number,
-                      name: data.name as string,
-                      value: data.value as number,
-                      stage: data.stage as string,
-                      run_tag: (data.run_tag as string) || null,
+                      step: data.step,
+                      name: data.name,
+                      value: data.value,
+                      stage: data.stage,
+                      run_tag: data.run_tag || null,
                       created_at: new Date().toISOString(),
                     },
                   ];
@@ -652,17 +812,19 @@ export default function HomePage() {
               break;
             }
             case 'chart_config': {
-              const cfg = data as any;
-              if (cfg.charts && Array.isArray(cfg.charts)) {
-                setChartConfig({ charts: cfg.charts });
+              const data = event.data;
+              if (data.charts && Array.isArray(data.charts)) {
+                setChartConfig({ charts: data.charts });
               }
               break;
             }
             case 'log_event': {
               // Rich (non-scalar) panel payload — image grid, table,
               // confusion matrix, etc. Keyed by (key, step) so a backend
-              // resend or reload-hydrate doesn't double-append.
-              const ev = data as any;
+              // resend or reload-hydrate doesn't double-append. Fields are
+              // optional on the wire (unvalidated backend payload), hence
+              // the defensive checks below even though we have a real type.
+              const ev = event.data;
               if (!ev || !ev.key || ev.step === undefined || !ev.type) break;
               const dedupKey = `${ev.key}:${ev.step}:${ev.run_tag || ''}`;
               if (logEventKeysRef.current.has(dedupKey)) break;
@@ -673,7 +835,7 @@ export default function HomePage() {
                 type: ev.type,
                 stage: ev.stage,
                 run_tag: ev.run_tag || null,
-                payload: (ev.data || {}) as Record<string, unknown>,
+                payload: ev.data || {},
               };
               setLogEvents((prev) => {
                 if (prev.length === 0) openCanvas();
@@ -684,8 +846,9 @@ export default function HomePage() {
             case 'canvas_html': {
               // Agent published a self-contained HTML artifact. Overwrite
               // by key so regeneration reuses the tab. Open the canvas and
-              // ask the WorkspaceSidebar to open/focus the tab.
-              const ev = data as any;
+              // ask the WorkspaceSidebar to open/focus the tab. Fields are
+              // optional on the wire, hence the defensive checks.
+              const ev = event.data;
               if (!ev || !ev.key || !ev.path) break;
               const artifact: HtmlArtifact = {
                 key: String(ev.key),
@@ -711,6 +874,7 @@ export default function HomePage() {
             }
             // Multi-agent events
             case 'subagent_start': {
+              const data = event.data;
               const agentId = data.agent_id || `${Date.now()}`;
               addItem({
                 type: 'subagent_start',
@@ -737,6 +901,7 @@ export default function HomePage() {
               break;
             }
             case 'subagent_end': {
+              const data = event.data;
               const endAgentId = data.agent_id || '';
               const endAgentType = data.agent_type || 'sub-agent';
               setChatItems((prev) => {
@@ -785,6 +950,7 @@ export default function HomePage() {
             }
             // Inter-agent clarification: parent escalated to user
             case 'clarification_request': {
+              const data = event.data;
               addItem({
                 type: 'clarification',
                 content: data.question || '',
@@ -803,6 +969,7 @@ export default function HomePage() {
               break;
             }
             case 'clarification_resolved': {
+              const data = event.data;
               const qid = data.question_id;
               setChatItems((prev) =>
                 prev.map((it) =>
@@ -825,6 +992,7 @@ export default function HomePage() {
             // read_project_session). Single event per call. NO content preview is
             // surfaced — the user only sees that the agent did something.
             case 'agent_tool_call': {
+              const data = event.data;
               addItem({
                 type: 'agent_tool',
                 content: data.tool_name || 'tool',
@@ -846,6 +1014,7 @@ export default function HomePage() {
             // parent (no escalation). User sees only the fact that an
             // exchange happened — neither question nor answer text.
             case 'clarification_exchange': {
+              const data = event.data;
               addItem({
                 type: 'agent_tool',
                 content: 'request_clarification',
@@ -864,7 +1033,7 @@ export default function HomePage() {
             // Agent created a new notebook — auto-expand workspace + open it
             // so the user watches cells appear live.
             case 'notebook.created': {
-              const path = data.notebook_path as string | undefined;
+              const path = event.data.notebook_path;
               if (path) {
                 openCanvas();
                 window.dispatchEvent(new CustomEvent('trainable:open-file', { detail: { path } }));
@@ -899,7 +1068,7 @@ export default function HomePage() {
             // only update the tasks state here.
             case 'task_created':
             case 'task_updated': {
-              const t = data as TaskEventData;
+              const t = event.data;
               setTasks((prev) => {
                 const idx = prev.findIndex((x) => x.id === t.id);
                 if (idx >= 0) {
@@ -912,7 +1081,7 @@ export default function HomePage() {
               break;
             }
             case 'task_deleted': {
-              const id = data.id as number;
+              const id = event.data.id;
               setTasks((prev) => prev.filter((x) => x.id !== id));
               break;
             }
@@ -924,7 +1093,7 @@ export default function HomePage() {
       source.onerror = () => setSseConnected(false);
       sseRef.current = source;
     },
-    [addItem, openCanvas, refreshExperiments, setIsRunning],
+    [addItem, openCanvas, publish, refreshExperiments, setIsRunning],
   );
 
   // ---------------------------------------------------------------------------
@@ -936,6 +1105,7 @@ export default function HomePage() {
     setDraft([]);
     setIsRunning(false);
     streamingItemIdRef.current = null;
+    pinnedToBottomRef.current = true;
     setSessionState('created');
     workspacePanelRef.current?.collapse();
     setCanvasContent('');
@@ -962,6 +1132,7 @@ export default function HomePage() {
     activeAgentsRef.current = [];
     setUsageTotals(ZERO_USAGE);
     setRecentUsage([]);
+    setBudgetInfo(null);
     setTasks([]);
   }, [setIsRunning]);
 
@@ -1015,6 +1186,7 @@ export default function HomePage() {
             compute_runs: t.compute_runs || 0,
           });
           setRecentUsage(s.events ?? []);
+          setBudgetInfo(s.budget ?? null);
         })
         .catch(() => {
           /* historical usage is best-effort; live SSE will fill in */
@@ -1033,7 +1205,7 @@ export default function HomePage() {
         let restoredCanvasContent = '';
         let restoredCanvasTitle = 'Report';
         let restoredCanvasOpen = false;
-        let restoredFiles: any[] = [];
+        let restoredFiles: (GeneratedFile & { _stage?: string })[] = [];
         const restoredHtmlArtifacts = new Map<string, HtmlArtifact>();
 
         if (sessionData.messages?.length > 0) {
@@ -1085,7 +1257,7 @@ export default function HomePage() {
                 mkItem({
                   type: 'tool_start',
                   content: (msg.metadata?.tool as string) || 'execute_code',
-                  meta: msg.metadata?.input as Record<string, unknown>,
+                  meta: { code: metaStr((msg.metadata?.input as { code?: unknown })?.code) },
                 }),
               );
             } else if (eventType === 'tool_end') {
@@ -1096,8 +1268,8 @@ export default function HomePage() {
                   type: 'tool_end',
                   meta: {
                     ...restored[idx].meta,
-                    output: msg.metadata?.output,
-                    duration: msg.metadata?.duration || null,
+                    output: metaStr(msg.metadata?.output),
+                    duration: metaNum(msg.metadata?.duration) || null,
                   },
                 };
               } else {
@@ -1105,7 +1277,7 @@ export default function HomePage() {
                   mkItem({
                     type: 'tool_end',
                     content: (msg.metadata?.tool as string) || 'execute_code',
-                    meta: { output: msg.metadata?.output as string },
+                    meta: { output: metaStr(msg.metadata?.output) },
                   }),
                 );
               }
@@ -1121,7 +1293,10 @@ export default function HomePage() {
                     ...restored[idx].meta,
                     outputs: [
                       ...outputs,
-                      { text: msg.content || msg.metadata?.text, stream: msg.metadata?.stream },
+                      {
+                        text: msg.content || metaStr(msg.metadata?.text) || '',
+                        stream: metaStr(msg.metadata?.stream),
+                      },
                     ],
                   },
                 };
@@ -1134,11 +1309,8 @@ export default function HomePage() {
               restoredCanvasOpen = true;
             } else if (eventType === 'files_ready') {
               const stageHint = (msg.metadata?.stage as string) || '';
-              const newFiles = (msg.metadata?.files || []) as Array<{
-                path: string;
-                _stage?: string;
-              }>;
-              const existingPaths = new Set(restoredFiles.map((f: { path: string }) => f.path));
+              const newFiles = (msg.metadata?.files || []) as GeneratedFile[];
+              const existingPaths = new Set(restoredFiles.map((f) => f.path));
               for (const f of newFiles) {
                 if (!existingPaths.has(f.path)) {
                   restoredFiles.push({ ...f, _stage: stageHint });
@@ -1167,10 +1339,10 @@ export default function HomePage() {
                   type: 'subagent_start',
                   content: (msg.metadata?.agent_type as string) || 'sub-agent',
                   meta: {
-                    task: msg.metadata?.task || msg.metadata?.description || '',
-                    model: msg.metadata?.model || '',
-                    depth: msg.metadata?.depth || 1,
-                    agent_id: msg.metadata?.agent_id || '',
+                    task: metaStr(msg.metadata?.task) || metaStr(msg.metadata?.description) || '',
+                    model: metaStr(msg.metadata?.model) || '',
+                    depth: metaNum(msg.metadata?.depth) || 1,
+                    agent_id: metaStr(msg.metadata?.agent_id) || '',
                   },
                 }),
               );
@@ -1182,8 +1354,8 @@ export default function HomePage() {
                   type: 'subagent_end',
                   meta: {
                     ...restored[idx].meta,
-                    summary: msg.metadata?.summary || msg.metadata?.result || '',
-                    duration: msg.metadata?.duration || null,
+                    summary: metaStr(msg.metadata?.summary) || metaStr(msg.metadata?.result) || '',
+                    duration: metaNum(msg.metadata?.duration) || null,
                   },
                 };
               } else {
@@ -1192,8 +1364,9 @@ export default function HomePage() {
                     type: 'subagent_end',
                     content: (msg.metadata?.agent_type as string) || 'sub-agent',
                     meta: {
-                      summary: msg.metadata?.summary || msg.metadata?.result || '',
-                      duration: msg.metadata?.duration || null,
+                      summary:
+                        metaStr(msg.metadata?.summary) || metaStr(msg.metadata?.result) || '',
+                      duration: metaNum(msg.metadata?.duration) || null,
                     },
                   }),
                 );
@@ -1204,13 +1377,13 @@ export default function HomePage() {
                   type: 'agent_tool',
                   content: (msg.metadata?.tool_name as string) || 'tool',
                   meta: {
-                    call_id: msg.metadata?.call_id,
-                    tool_name: msg.metadata?.tool_name,
-                    asker_agent_type: msg.metadata?.asker_agent_type,
-                    target_agent_type: msg.metadata?.target_agent_type,
-                    answerer_agent_type: msg.metadata?.answerer_agent_type,
-                    depth: msg.metadata?.depth || 0,
-                    duration_s: msg.metadata?.duration_s,
+                    call_id: metaStr(msg.metadata?.call_id),
+                    tool_name: metaStr(msg.metadata?.tool_name),
+                    asker_agent_type: metaStr(msg.metadata?.asker_agent_type),
+                    target_agent_type: metaStr(msg.metadata?.target_agent_type),
+                    answerer_agent_type: metaStr(msg.metadata?.answerer_agent_type),
+                    depth: metaNum(msg.metadata?.depth) || 0,
+                    duration_s: metaNum(msg.metadata?.duration_s),
                     is_error: !!msg.metadata?.is_error,
                     variant: 'tool',
                   },
@@ -1222,12 +1395,12 @@ export default function HomePage() {
                   type: 'agent_tool',
                   content: 'request_clarification',
                   meta: {
-                    call_id: msg.metadata?.call_id,
+                    call_id: metaStr(msg.metadata?.call_id),
                     tool_name: 'request_clarification',
-                    asker_agent_type: msg.metadata?.asker_agent_type,
-                    answerer_agent_type: msg.metadata?.answerer_agent_type,
-                    depth: msg.metadata?.depth || 0,
-                    duration_s: msg.metadata?.duration_s,
+                    asker_agent_type: metaStr(msg.metadata?.asker_agent_type),
+                    answerer_agent_type: metaStr(msg.metadata?.answerer_agent_type),
+                    depth: metaNum(msg.metadata?.depth) || 0,
+                    duration_s: metaNum(msg.metadata?.duration_s),
                     variant: 'clarification_exchange',
                   },
                 }),
@@ -1824,7 +1997,9 @@ export default function HomePage() {
 
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
-          {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
+          {hasActiveSession && (
+            <CostBadge totals={usageTotals} recent={recentUsage} budget={budgetInfo} />
+          )}
 
           {hasActiveSession && (
             <>
@@ -2032,7 +2207,11 @@ export default function HomePage() {
             {/* Chat panel */}
             <Panel defaultSize={canvasOpen ? 30 : 100} minSize={20}>
               <div className="h-full flex flex-col min-w-0">
-                <div className="flex-1 overflow-y-auto px-4 py-4">
+                <div
+                  ref={chatScrollRef}
+                  onScroll={handleChatScroll}
+                  className="flex-1 overflow-y-auto px-4 py-4"
+                >
                   <div
                     className={`mx-auto w-full space-y-4 ${canvasOpen ? 'max-w-3xl' : 'max-w-5xl'}`}
                   >
@@ -2217,20 +2396,27 @@ export default function HomePage() {
               onExpand={() => setCanvasOpen(true)}
             >
               {canvasOpen && (
-                <WorkspaceSidebar
-                  experimentId={activeExperimentId || ''}
-                  sessionId={activeSessionId || ''}
-                  canvasContent={canvasContent}
-                  canvasTitle={canvasTitle}
-                  generatedFiles={generatedFiles}
-                  fileTree={fileTree}
-                  metricPoints={metricPoints}
-                  chartConfig={chartConfig}
-                  logEvents={logEvents}
-                  htmlArtifacts={htmlArtifacts}
-                  sessionState={sessionState}
-                  onClose={() => workspacePanelRef.current?.collapse()}
-                />
+                // Keyed by sessionId so switching sessions also clears any
+                // prior crash state, in addition to the panel's own "Try
+                // again" button. Agent-authored file content, markdown, and
+                // self-contained HTML artifacts all render inside here —
+                // without this boundary, a bad one blanks the whole SPA.
+                <ErrorBoundary key={activeSessionId} label="the workspace">
+                  <WorkspaceSidebar
+                    experimentId={activeExperimentId || ''}
+                    sessionId={activeSessionId || ''}
+                    canvasContent={canvasContent}
+                    canvasTitle={canvasTitle}
+                    generatedFiles={generatedFiles}
+                    fileTree={fileTree}
+                    metricPoints={metricPoints}
+                    chartConfig={chartConfig}
+                    logEvents={logEvents}
+                    htmlArtifacts={htmlArtifacts}
+                    sessionState={sessionState}
+                    onClose={() => workspacePanelRef.current?.collapse()}
+                  />
+                </ErrorBoundary>
               )}
             </Panel>
           </PanelGroup>
@@ -2254,6 +2440,17 @@ export default function HomePage() {
         />
       )}
     </div>
+  );
+}
+
+// SSEStreamProvider must sit above HomePageContent so `useSSEStream()` (and
+// anything nested under it, like the notebook) can reach the same
+// publish/subscribe bus that `connectSSE` feeds.
+export default function HomePage() {
+  return (
+    <SSEStreamProvider>
+      <HomePageContent />
+    </SSEStreamProvider>
   );
 }
 
@@ -2399,7 +2596,7 @@ const HtmlPanel = memo(function HtmlPanel({ artifact }: { artifact: HtmlArtifact
     );
   }
 
-  const rawUrl = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(artifact.path)}`;
+  const rawUrl = api.filesRawUrl(artifact.path);
   const sizeLabel = humanArtifactBytes(artifact.size);
 
   return (
@@ -2545,14 +2742,14 @@ const FileViewer = memo(function FileViewer({
           <div className="p-6 flex items-center justify-center bg-black">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={`${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(filePath)}`}
+              src={api.filesRawUrl(filePath)}
               alt={fileName}
               className="max-w-full max-h-[60vh] rounded-lg"
             />
           </div>
         ) : isPdf ? (
           <iframe
-            src={`${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(filePath)}#view=FitH`}
+            src={`${api.filesRawUrl(filePath)}#view=FitH`}
             title={fileName}
             className="w-full h-full min-h-[80vh] bg-white border-0"
           />
@@ -2585,30 +2782,32 @@ const FileViewer = memo(function FileViewer({
           </SyntaxHighlighter>
         ) : isMarkdown ? (
           <div className="p-6 markdown-content">
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              components={{
-                img: ({ src, alt }) => {
-                  let imgSrc = src || '';
-                  if (imgSrc.startsWith('/data/')) {
-                    imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
-                  } else if (imgSrc && !imgSrc.startsWith('http')) {
-                    const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-                    imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(dir + '/' + imgSrc)}`;
-                  }
-                  return (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={imgSrc}
-                      alt={alt || ''}
-                      className="max-w-full rounded-lg shadow-md my-4"
-                    />
-                  );
-                },
-              }}
-            >
-              {content || ''}
-            </ReactMarkdown>
+            <ErrorBoundary key={filePath} label="this file">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  img: ({ src, alt }) => {
+                    let imgSrc = src || '';
+                    if (imgSrc.startsWith('/data/')) {
+                      imgSrc = api.filesRawUrl(imgSrc);
+                    } else if (imgSrc && !imgSrc.startsWith('http')) {
+                      const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+                      imgSrc = api.filesRawUrl(dir + '/' + imgSrc);
+                    }
+                    return (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={imgSrc}
+                        alt={alt || ''}
+                        className="max-w-full rounded-lg shadow-md my-4"
+                      />
+                    );
+                  },
+                }}
+              >
+                {content || ''}
+              </ReactMarkdown>
+            </ErrorBoundary>
           </div>
         ) : (
           <pre className="p-4 text-[13px] text-gray-300 font-mono whitespace-pre-wrap leading-relaxed">
@@ -2640,10 +2839,10 @@ const ReportMarkdown = memo(function ReportMarkdown({
       img: ({ src, alt }: { src?: string; alt?: string }) => {
         let imgSrc = src || '';
         if (imgSrc.startsWith('/data/')) {
-          imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+          imgSrc = api.filesRawUrl(imgSrc);
         } else if (imgSrc && !imgSrc.startsWith('http')) {
           const workspace = `/sessions/${sessionId}/eda`;
-          imgSrc = `${getBackendUrl()}/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
+          imgSrc = api.filesRawUrl(workspace + '/' + imgSrc);
         }
         return (
           // eslint-disable-next-line @next/next/no-img-element
@@ -2656,9 +2855,11 @@ const ReportMarkdown = memo(function ReportMarkdown({
   return (
     <div className="h-full overflow-y-auto p-6 bg-black">
       <div className="markdown-content">
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-          {content}
-        </ReactMarkdown>
+        <ErrorBoundary label="this report">
+          <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+            {content}
+          </ReactMarkdown>
+        </ErrorBoundary>
       </div>
     </div>
   );
@@ -2701,7 +2902,7 @@ function WorkspaceSidebar({
   sessionId: string;
   canvasContent: string;
   canvasTitle: string;
-  generatedFiles: any[];
+  generatedFiles: GeneratedFile[];
   fileTree: FileTreeNode;
   metricPoints: MetricPoint[];
   chartConfig: ChartConfig | null;
@@ -3136,6 +3337,21 @@ function WorkspaceSidebar({
             >
               <BarChart3 className="w-3 h-3 text-gray-600" />
             </button>
+            <a
+              // Browser-native streamed zip download — Content-Disposition on
+              // the backend picks the filename. Routed through Next's /api
+              // rewrite so dev and prod both work with no host hard-coding.
+              href={sessionId ? `/api/sessions/${sessionId}/download` : undefined}
+              aria-disabled={!sessionId}
+              className={`p-1 rounded transition-colors ${
+                sessionId
+                  ? 'hover:bg-white/[0.06] cursor-pointer'
+                  : 'opacity-40 pointer-events-none'
+              }`}
+              title="Download workspace as zip"
+            >
+              <Download className="w-3 h-3 text-gray-600" />
+            </a>
             <button
               onClick={onClose}
               className="p-1 hover:bg-white/[0.06] rounded transition-colors"
@@ -3464,9 +3680,9 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
               {item.meta.code.length > 300 ? item.meta.code.slice(0, 300) + '...' : item.meta.code}
             </pre>
           )}
-          {item.meta?.outputs?.length > 0 && (
+          {(item.meta?.outputs?.length ?? 0) > 0 && (
             <div className="px-4 py-2 border-t border-surface-border max-h-32 overflow-y-auto">
-              {item.meta.outputs.map((o: { text: string; stream: string }, i: number) => (
+              {item.meta?.outputs?.map((o, i) => (
                 <pre
                   key={i}
                   className={`text-xs font-mono whitespace-pre-wrap break-all ${
@@ -3581,6 +3797,11 @@ function SubAgentCard({ item }: { item: ChatItem }) {
   const modelName = item.meta?.model
     ? item.meta.model.replace('claude-', '').replace(/-/g, ' ')
     : '';
+  // Truncated once here so the markdown path and the error-boundary fallback
+  // render the same bounded text (a summary can be megabytes of agent output).
+  const summary = item.meta?.summary;
+  const truncatedSummary =
+    summary && summary.length > 800 ? summary.slice(0, 800) + '\n\n...' : summary;
 
   useEffect(() => {
     if (!isStart) return;
@@ -3640,15 +3861,17 @@ function SubAgentCard({ item }: { item: ChatItem }) {
               {item.meta.task}
             </div>
           )}
-          {item.meta?.summary && (
+          {truncatedSummary && (
             <div className="text-xs text-gray-400 max-h-48 overflow-y-auto">
               <span className={`${colors.text} font-medium`}>Result: </span>
               <div className="mt-1 markdown-chat">
-                <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                  {item.meta.summary.length > 800
-                    ? item.meta.summary.slice(0, 800) + '\n\n...'
-                    : item.meta.summary}
-                </ReactMarkdown>
+                <ErrorBoundary
+                  fallback={() => (
+                    <div className="whitespace-pre-wrap break-words">{truncatedSummary}</div>
+                  )}
+                >
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{truncatedSummary}</ReactMarkdown>
+                </ErrorBoundary>
               </div>
             </div>
           )}
@@ -3879,7 +4102,17 @@ function renderGroupedChatItems(
       }
       result.push(<ToolGroupCard key={`tg-${group[0].id}`} items={group} />);
     } else {
-      result.push(renderChatItem(cur, streamingItemId, sessionId));
+      // Pass a per-item boolean instead of the shared streamingItemId string:
+      // when streaming starts/ends only the affected item sees a prop change,
+      // so `memo` still bails out for every other bubble.
+      result.push(
+        <ChatItemView
+          key={cur.id}
+          item={cur}
+          isStreaming={cur.id === streamingItemId}
+          sessionId={sessionId}
+        />,
+      );
       i++;
     }
   }
@@ -4033,14 +4266,31 @@ function AttachedFilesPreview({
 }
 
 // ---------------------------------------------------------------------------
-// renderChatItem
+// ChatItemView — memoized per-item renderer (formerly the plain
+// `renderChatItem` function). renderGroupedChatItems re-runs on every
+// `agent_token`/`agent_message` SSE event (each one calls `setChatItems`),
+// which previously re-invoked this as a plain function for every prior
+// message and re-parsed markdown for all of them — O(messages) ReactMarkdown
+// parses per streamed chunk. Wrapping it in `memo`, keyed by `item.id` at
+// the call site, means React bails out and skips re-render (and re-parse)
+// for every bubble except the one whose `item` object reference actually
+// changed (the currently-streaming assistant bubble).
 // ---------------------------------------------------------------------------
 
-function renderChatItem(
-  item: ChatItem,
-  streamingItemId?: string | null,
-  sessionId?: string | null,
-) {
+// Stable remark-plugins array for chat bubbles — a fresh `[remarkGfm]`
+// literal on every render would give ReactMarkdown a "new" plugin list each
+// time, undermining the memoization above even when `item` didn't change.
+const CHAT_MARKDOWN_PLUGINS = [remarkGfm];
+
+const ChatItemView = memo(function ChatItemView({
+  item,
+  isStreaming,
+  sessionId,
+}: {
+  item: ChatItem;
+  isStreaming?: boolean;
+  sessionId?: string | null;
+}) {
   switch (item.type) {
     case 'user': {
       const files: string[] = item.meta?.files || [];
@@ -4049,7 +4299,7 @@ function renderChatItem(
       const hasFiles = files.length > 0;
       const tokens = mentions && mentions.length > 0 ? wireToDraft(item.content, mentions) : null;
       return (
-        <div key={item.id} className="flex justify-end animate-fade-in">
+        <div className="flex justify-end animate-fade-in">
           <div className="max-w-[80%] rounded-2xl rounded-br-md bg-primary-600 text-white text-sm overflow-hidden">
             {hasFiles && <UserMessageFilePills files={files} hasText={Boolean(hasText)} />}
             {hasText && (
@@ -4077,10 +4327,9 @@ function renderChatItem(
       const agentColor = agentMeta ? AGENT_COLORS[agentMeta.color] : null;
       const avatarBg = agentColor ? agentColor.bg : 'bg-emerald-500/20';
       const avatarText = agentColor ? agentColor.text : 'text-emerald-400';
-      const isStreaming = item.id === streamingItemId;
 
       return (
-        <div key={item.id} className="flex gap-3 animate-fade-in">
+        <div className="flex gap-3 animate-fade-in">
           <div
             className={`w-7 h-7 rounded-full ${avatarBg} flex items-center justify-center shrink-0 mt-1`}
           >
@@ -4090,7 +4339,11 @@ function renderChatItem(
             {agentMeta && (
               <div className={`text-[10px] ${avatarText} font-medium mb-1`}>{agentMeta.label}</div>
             )}
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>{item.content}</ReactMarkdown>
+            <ErrorBoundary
+              fallback={() => <div className="whitespace-pre-wrap break-words">{item.content}</div>}
+            >
+              <ReactMarkdown remarkPlugins={CHAT_MARKDOWN_PLUGINS}>{item.content}</ReactMarkdown>
+            </ErrorBoundary>
             {isStreaming && (
               <span className="inline-block w-2 h-5 bg-primary-400 rounded-sm ml-0.5 animate-blink align-text-bottom" />
             )}
@@ -4100,29 +4353,26 @@ function renderChatItem(
     }
     case 'tool_start':
     case 'tool_end':
-      return <CollapsibleToolCard key={item.id} item={item} />;
+      return <CollapsibleToolCard item={item} />;
     case 'code_output':
       return null; // folded into the tool card above
     case 'subagent_start':
     case 'subagent_end':
-      return <SubAgentCard key={item.id} item={item} />;
+      return <SubAgentCard item={item} />;
     case 'clarification':
-      return <ClarificationCard key={item.id} item={item} sessionId={sessionId ?? null} />;
+      return <ClarificationCard item={item} sessionId={sessionId ?? null} />;
     case 'agent_tool':
-      return <AgentToolCard key={item.id} item={item} />;
+      return <AgentToolCard item={item} />;
     case 'error':
       return (
-        <div
-          key={item.id}
-          className="animate-fade-in flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800/50 rounded-lg text-sm text-red-400"
-        >
+        <div className="animate-fade-in flex items-center gap-2 px-3 py-2 bg-red-900/30 border border-red-800/50 rounded-lg text-sm text-red-400">
           <AlertCircle className="w-4 h-4 shrink-0" />
           {item.content}
         </div>
       );
     case 'status':
       return (
-        <div key={item.id} className="text-center">
+        <div className="text-center">
           <span
             className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium ${
               item.content.includes('running')
@@ -4142,7 +4392,7 @@ function renderChatItem(
       );
     case 'stage_complete':
       return (
-        <div key={item.id} className="flex items-center justify-center py-2 animate-fade-in">
+        <div className="flex items-center justify-center py-2 animate-fade-in">
           <div className="flex items-center gap-2 px-4 py-2 rounded-full bg-green-500/10 border border-green-500/20">
             <CheckCircle2 className="w-4 h-4 text-green-400" />
             <span className="text-sm font-medium text-green-300">{item.content} complete</span>
@@ -4152,4 +4402,4 @@ function renderChatItem(
     default:
       return null;
   }
-}
+});
