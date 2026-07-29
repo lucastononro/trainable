@@ -1,4 +1,6 @@
 import { useEffect, useRef } from 'react';
+import { useSSEStream } from '../SSEStreamContext';
+import type { SSEEvent } from '../types';
 import type {
   CellCompletedEvent,
   CellDisplayEvent,
@@ -7,15 +9,10 @@ import type {
   CellStreamEvent,
   KernelStateEvent,
   NotebookCreatedEvent,
+  StructureChangedEvent,
 } from './types';
 
-export interface StructureChangedEvent {
-  reason: 'agent_append' | string;
-  notebook_name: string;
-  notebook_path?: string;
-  cell_id?: string;
-  total_cells?: number;
-}
+export type { StructureChangedEvent } from './types';
 
 export interface NotebookSSEHandlers {
   onKernelState?: (e: KernelStateEvent) => void;
@@ -33,6 +30,11 @@ export interface NotebookSSEHandlers {
  * When `notebookName` is provided, cell-lifecycle events are filtered to
  * that notebook only — kernel/notebook-created/structure events always fire
  * (they inform listeners about cross-notebook state).
+ *
+ * This consumes the single page-level EventSource via `SSEStreamContext`
+ * rather than opening a second EventSource to the identical
+ * `/api/sessions/{id}/stream` endpoint — `HomePage.connectSSE` already owns
+ * that connection and republishes every parsed message here.
  */
 export function useNotebookSSE(
   sessionId: string | null,
@@ -40,6 +42,7 @@ export function useNotebookSSE(
   notebookName: string | null,
   handlers: NotebookSSEHandlers,
 ) {
+  const { subscribe } = useSSEStream();
   const handlersRef = useRef(handlers);
   handlersRef.current = handlers;
   const filterRef = useRef(notebookName);
@@ -47,51 +50,48 @@ export function useNotebookSSE(
 
   useEffect(() => {
     if (!sessionId || !enabled) return;
-    const es = new EventSource(`/api/sessions/${sessionId}/stream`);
 
-    const handler = (ev: MessageEvent) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        const type = msg?.type as string | undefined;
-        if (!type || !type.startsWith('notebook.')) return;
-        const data = msg.data ?? {};
-        const h = handlersRef.current;
-        const belongsToThisNotebook =
-          !filterRef.current || data.notebook_name === filterRef.current;
+    const handler = (eventSessionId: string, msg: SSEEvent) => {
+      // The bus is page-global while the old EventSource-per-hook design was
+      // implicitly session-scoped: during a session switch, events from the
+      // new connection can be published before React flushes this effect's
+      // cleanup. Drop anything not belonging to our session.
+      if (eventSessionId !== sessionId) return;
+      const type = msg?.type as string | undefined;
+      if (!type || !type.startsWith('notebook.')) return;
+      const data = (msg.data ?? {}) as any;
+      const h = handlersRef.current;
+      const belongsToThisNotebook = !filterRef.current || data.notebook_name === filterRef.current;
 
-        switch (type) {
-          case 'notebook.kernel.state':
-            h.onKernelState?.(data);
-            break;
-          case 'notebook.created':
-            h.onNotebookCreated?.(data);
-            break;
-          case 'notebook.structure.changed':
-            // Always fire — callers route on notebook_name themselves.
-            h.onStructureChanged?.(data);
-            break;
-          case 'notebook.cell.started':
-            if (belongsToThisNotebook) h.onCellStarted?.(data);
-            break;
-          case 'notebook.cell.stream':
-            if (belongsToThisNotebook) h.onCellStream?.(data);
-            break;
-          case 'notebook.cell.display':
-            if (belongsToThisNotebook) h.onCellDisplay?.(data);
-            break;
-          case 'notebook.cell.error':
-            if (belongsToThisNotebook) h.onCellError?.(data);
-            break;
-          case 'notebook.cell.completed':
-            if (belongsToThisNotebook) h.onCellCompleted?.(data);
-            break;
-        }
-      } catch {
-        // ignore malformed events
+      switch (type) {
+        case 'notebook.kernel.state':
+          h.onKernelState?.(data);
+          break;
+        case 'notebook.created':
+          h.onNotebookCreated?.(data);
+          break;
+        case 'notebook.structure.changed':
+          // Always fire — callers route on notebook_name themselves.
+          h.onStructureChanged?.(data);
+          break;
+        case 'notebook.cell.started':
+          if (belongsToThisNotebook) h.onCellStarted?.(data);
+          break;
+        case 'notebook.cell.stream':
+          if (belongsToThisNotebook) h.onCellStream?.(data);
+          break;
+        case 'notebook.cell.display':
+          if (belongsToThisNotebook) h.onCellDisplay?.(data);
+          break;
+        case 'notebook.cell.error':
+          if (belongsToThisNotebook) h.onCellError?.(data);
+          break;
+        case 'notebook.cell.completed':
+          if (belongsToThisNotebook) h.onCellCompleted?.(data);
+          break;
       }
     };
 
-    es.onmessage = handler;
-    return () => es.close();
-  }, [sessionId, enabled]);
+    return subscribe(handler);
+  }, [sessionId, enabled, subscribe]);
 }

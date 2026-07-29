@@ -28,6 +28,11 @@ logger = logging.getLogger(__name__)
 _STREAM_POLL_S = 0.5
 _TERMINAL_STATUSES = {"COMPLETED", "FAILED", "CANCELLED", "TIMED_OUT"}
 
+# Consecutive /stream failures tolerated before the job is declared lost.
+# A single transient network blip (429, 5xx, read timeout) must not
+# condemn a healthy job to FAILED/returncode -9.
+_MAX_STREAM_FAILURES = 5
+
 # /run payloads are capped around 10 MB; generated code is normally KBs.
 _MAX_CODE_BYTES = 5 * 1024 * 1024
 
@@ -73,9 +78,25 @@ class RunPodJobHandle:
 
     async def _poll(self) -> None:
         client = get_client()
+        failures = 0
         try:
             while True:
-                data = await client.stream(self._endpoint_id, self._job_id)
+                try:
+                    data = await client.stream(self._endpoint_id, self._job_id)
+                except Exception as e:
+                    failures += 1
+                    if failures <= _MAX_STREAM_FAILURES:
+                        logger.info(
+                            "[runpod] job %s stream poll error (%d/%d): %s",
+                            self._job_id,
+                            failures,
+                            _MAX_STREAM_FAILURES,
+                            e,
+                        )
+                        await asyncio.sleep(_STREAM_POLL_S)
+                        continue
+                    raise
+                failures = 0
                 for item in data.get("stream") or []:
                     self._consume(item.get("output"))
                 status = data.get("status")

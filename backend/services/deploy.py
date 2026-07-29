@@ -24,6 +24,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
+import httpx
 from sqlalchemy import select
 
 from config import settings
@@ -512,25 +513,7 @@ async def generate_serving_app(
         # metadata if it's available — the predict() endpoint needs them
         # to project incoming JSON in the right column order. Falls back
         # to None so the model picks them up from the pickled blob.
-        feature_cols: list[str] | None = None
-        target_col: str | None = None
-        try:
-            from models import DatasetVersion
-
-            train_id = (model.dataset_refs or {}).get("train", {}).get("dataset_id")
-            if train_id:
-                dv = (
-                    await db.execute(
-                        select(DatasetVersion).where(DatasetVersion.id == int(train_id))
-                    )
-                ).scalar_one_or_none()
-                if dv and dv.dataset_metadata:
-                    md = dv.dataset_metadata
-                    if isinstance(md, dict):
-                        feature_cols = md.get("feature_columns") or None
-                        target_col = md.get("target_column") or None
-        except Exception as e:
-            logger.debug("[deploy] could not resolve training metadata: %s", e)
+        feature_cols, target_col = await _resolve_training_metadata(db, model)
 
         code = backend.render_serving_code(
             app_name=app_name,
@@ -569,6 +552,196 @@ async def generate_serving_app(
             "api_secret_name": secret_name,
             "code_preview": code[:600] + ("…" if len(code) > 600 else ""),
         }
+
+
+async def _resolve_training_metadata(
+    db, model: RegisteredModel
+) -> tuple[list[str] | None, str | None]:
+    """Resolve (feature_columns, target_column) from the training
+    dataset's stored metadata.
+
+    The model row itself doesn't carry a schema — `dataset_refs["train"]`
+    points at the DatasetVersion whose `dataset_metadata` was extracted
+    at upload time. Both the serving-app codegen and the prediction
+    playground need the same lookup, so it lives here. Best-effort:
+    returns (None, None) when the ref/metadata is missing so callers can
+    fall back to schemaless behavior.
+    """
+    feature_cols: list[str] | None = None
+    target_col: str | None = None
+    try:
+        from models import DatasetVersion
+
+        train_id = (model.dataset_refs or {}).get("train", {}).get("dataset_id")
+        if train_id:
+            dv = (
+                await db.execute(
+                    select(DatasetVersion).where(DatasetVersion.id == int(train_id))
+                )
+            ).scalar_one_or_none()
+            if dv and dv.dataset_metadata:
+                md = dv.dataset_metadata
+                if isinstance(md, dict):
+                    feature_cols = md.get("feature_columns") or None
+                    target_col = md.get("target_column") or None
+    except Exception as e:
+        logger.debug("[deploy] could not resolve training metadata: %s", e)
+    return feature_cols, target_col
+
+
+async def get_predict_schema(model_id: str) -> dict[str, Any]:
+    """Input schema for the /models prediction playground.
+
+    Returns the trained feature columns (when the training dataset's
+    metadata is still around), the target column, and whether there's a
+    live endpoint to send requests to. `feature_columns: None` tells the
+    UI to fall back to CSV-upload-only mode — the deployed endpoint
+    itself accepts arbitrary record dicts in that case.
+    """
+    async with async_session() as db:
+        model = (
+            await db.execute(
+                select(RegisteredModel).where(RegisteredModel.id == model_id)
+            )
+        ).scalar_one_or_none()
+        if not model:
+            raise ValueError(f"Model {model_id} not found")
+
+        feature_cols, target_col = await _resolve_training_metadata(db, model)
+        live = (
+            (
+                await db.execute(
+                    select(Deployment)
+                    .where(
+                        Deployment.model_id == model_id,
+                        Deployment.status == "live",
+                    )
+                    .order_by(Deployment.id.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+        return {
+            "model_id": model_id,
+            "feature_columns": feature_cols,
+            "target_column": target_col,
+            "endpoint_url": live.endpoint_url if live else None,
+            "has_live_deployment": bool(live and live.endpoint_url),
+        }
+
+
+class PredictProxyError(Exception):
+    """Typed error for the predict proxy — carries the HTTP status the
+    router should surface. Keeps the service free of FastAPI imports."""
+
+    def __init__(self, status_code: int, detail: str):
+        self.status_code = status_code
+        self.detail = detail
+        super().__init__(detail)
+
+
+# Modal endpoints cold-start their container on the first request after
+# scaledown (image pull + artifact load) — 120s covers that comfortably
+# while still failing fast enough for the UI spinner to be honest.
+PREDICT_PROXY_TIMEOUT_S = 120.0
+# The playground is for smoke-testing, not batch scoring. Cap the batch
+# so a giant CSV upload can't turn the backend into a scoring pipe.
+PREDICT_PROXY_MAX_RECORDS = 200
+
+# Upstream statuses we pass through verbatim — they describe the
+# caller's request (bad records, key drift), not a proxy failure.
+# Anything else collapses to 502 so a Modal 500 isn't mistaken for a
+# Trainable backend bug.
+_PASSTHROUGH_STATUSES = {400, 401, 403, 404, 422, 429}
+
+
+async def proxy_predict(model_id: str, records: list[dict]) -> dict[str, Any]:
+    """Forward a prediction request to the model's live Modal endpoint.
+
+    This exists so the in-app "Test" panel never calls Modal from the
+    browser: direct calls would need the X-API-Key in client JS and can
+    trip CORS. The backend already holds the key, so we forward
+    server-side and relay the endpoint's JSON response untouched.
+
+    Raises PredictProxyError with the status the router should return:
+    404 unknown model, 409 no live deployment, 400 bad batch, upstream
+    4xx passed through, everything else 502.
+    """
+    if not records:
+        raise PredictProxyError(400, "`records` is empty — nothing to predict on.")
+    if len(records) > PREDICT_PROXY_MAX_RECORDS:
+        raise PredictProxyError(
+            400,
+            f"Too many records ({len(records)}). The test panel caps at "
+            f"{PREDICT_PROXY_MAX_RECORDS} per request — use the endpoint "
+            "directly (curl / SDK) for batch scoring.",
+        )
+
+    async with async_session() as db:
+        model = (
+            await db.execute(
+                select(RegisteredModel).where(RegisteredModel.id == model_id)
+            )
+        ).scalar_one_or_none()
+        if not model:
+            raise PredictProxyError(404, "Model not found")
+        live = (
+            (
+                await db.execute(
+                    select(Deployment)
+                    .where(
+                        Deployment.model_id == model_id,
+                        Deployment.status == "live",
+                    )
+                    .order_by(Deployment.id.desc())
+                )
+            )
+            .scalars()
+            .first()
+        )
+        if not live or not live.endpoint_url:
+            raise PredictProxyError(
+                409,
+                "No live deployment for this model. Deploy it first, then test.",
+            )
+        endpoint_url = live.endpoint_url
+        api_key = model.api_key
+
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-API-Key"] = api_key
+
+    try:
+        async with httpx.AsyncClient(timeout=PREDICT_PROXY_TIMEOUT_S) as client:
+            resp = await client.post(
+                endpoint_url, json={"records": records}, headers=headers
+            )
+    except httpx.HTTPError as e:
+        raise PredictProxyError(
+            502,
+            f"Could not reach the deployed endpoint at {endpoint_url}: {e}. "
+            "First request after idle cold-starts the container — retry in "
+            "a few seconds if this was a timeout.",
+        )
+
+    if resp.status_code >= 400:
+        try:
+            detail = resp.json().get("detail") or resp.text[:1000]
+        except Exception:
+            detail = resp.text[:1000]
+        status = resp.status_code if resp.status_code in _PASSTHROUGH_STATUSES else 502
+        raise PredictProxyError(
+            status, f"Endpoint returned {resp.status_code}: {detail}"
+        )
+    try:
+        return resp.json()
+    except Exception:
+        raise PredictProxyError(
+            502,
+            "Endpoint returned a non-JSON response — check the serving app "
+            "hasn't been customised away from the PredictResponse contract.",
+        )
 
 
 async def deploy_model(

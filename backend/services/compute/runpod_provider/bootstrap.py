@@ -127,6 +127,12 @@ async def ensure_runner_endpoint(gpu_label: str | None) -> str:
     slug = endpoint_slug(gpu_label)
     if slug in _runner_endpoints:
         return _runner_endpoints[slug]
+    # ensure_network_volume / ensure_runner_template take _lock themselves
+    # when their caches are cold — resolve them BEFORE acquiring it here,
+    # because asyncio.Lock is not reentrant (holding it across those calls
+    # deadlocks the first execution on a fresh RunPod setup).
+    volume_id = await ensure_network_volume()
+    template_id = await ensure_runner_template()
     async with _lock:
         if slug in _runner_endpoints:
             return _runner_endpoints[slug]
@@ -137,8 +143,6 @@ async def ensure_runner_endpoint(gpu_label: str | None) -> str:
                 _runner_endpoints[slug] = ep.get("id")
                 return _runner_endpoints[slug]
 
-        volume_id = await ensure_network_volume()
-        template_id = await ensure_runner_template()
         payload: dict = {
             "name": name,
             "templateId": template_id,

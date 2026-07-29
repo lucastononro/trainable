@@ -292,6 +292,38 @@ async def validate_serving_app(model_id: str):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@router.get("/models/{model_id}/predict-schema")
+async def predict_schema(model_id: str):
+    """Input schema for the in-app prediction playground: the trained
+    feature columns (from the training dataset's metadata) + whether a
+    live endpoint exists. `feature_columns: null` means the metadata is
+    gone — the UI falls back to CSV-upload-only mode."""
+    try:
+        return await deploy_svc.get_predict_schema(model_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+class PredictProxyRequest(BaseModel):
+    """Body for POST /api/models/{id}/predict — mirrors the deployed
+    endpoint's contract ({"records": [...]}) so the panel and curl users
+    speak the same shape."""
+
+    records: list[dict]
+
+
+@router.post("/models/{model_id}/predict")
+async def predict_via_proxy(model_id: str, body: PredictProxyRequest):
+    """Thin proxy to the model's live Modal endpoint. The browser never
+    talks to Modal directly (CORS + would leak the X-API-Key into client
+    JS) — the backend forwards with the stored key and relays the
+    endpoint's JSON response."""
+    try:
+        return await deploy_svc.proxy_predict(model_id, body.records)
+    except deploy_svc.PredictProxyError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail)
+
+
 @router.post("/models/{model_id}/rotate-key")
 async def rotate_model_key(model_id: str):
     """Regenerate the X-API-Key for a model + replace the Modal secret.

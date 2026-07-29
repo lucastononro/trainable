@@ -12,7 +12,9 @@ adapter, the kernel spawn path and tests that patch it by name.
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from typing import AsyncIterator
 
 import modal
 
@@ -91,6 +93,44 @@ def read_volume_file(path: str) -> bytes:
 async def read_volume_file_async(path: str) -> bytes:
     """Read a file from the volume without blocking the event loop."""
     return await _storage().read_file(path)
+
+
+async def iter_volume_file_chunks_async(
+    path: str, *, chunk_size: int = 1024 * 1024
+) -> AsyncIterator[bytes]:
+    """Yield volume file bytes without joining the whole file in memory.
+
+    Streaming is Modal-specific (the Volume handle's chunked read_file);
+    other storage backends fall back to a whole-object read through the
+    storage facade — their APIs have no streaming get.
+    """
+
+    if _storage().name != "modal":
+        data = await _storage().read_file(path)
+        for i in range(0, len(data), chunk_size):
+            yield data[i : i + chunk_size]
+        return
+
+    sentinel = object()
+
+    def _open():
+        return iter(get_volume().read_file(path))
+
+    def _next(iterator):
+        try:
+            return next(iterator)
+        except StopIteration:
+            return sentinel
+
+    loop = asyncio.get_running_loop()
+    iterator = await loop.run_in_executor(None, _open)
+    while True:
+        chunk = await loop.run_in_executor(None, _next, iterator)
+        if chunk is sentinel:
+            break
+        data = bytes(chunk)
+        for i in range(0, len(data), chunk_size):
+            yield data[i : i + chunk_size]
 
 
 async def listdir_async(path: str, recursive: bool = False) -> list:

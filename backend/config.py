@@ -4,10 +4,11 @@ All values can be overridden via environment variables or a .env file.
 Variable names match the field names in UPPER_CASE (e.g. SANDBOX_TIMEOUT=300).
 """
 
-from typing import Optional
+import json
+from typing import Annotated, Optional
 
-from pydantic import Field
-from pydantic_settings import BaseSettings
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode
 
 
 class Settings(BaseSettings):
@@ -25,6 +26,9 @@ class Settings(BaseSettings):
     aws_access_key_id: str = "test"
     aws_secret_access_key: str = "test"
     aws_region: str = "us-east-1"
+    # Buckets the app provisions at startup and that the S3 browser API is
+    # allowed to touch. Anything else is rejected with a 400.
+    s3_allowed_buckets: list[str] = ["datasets", "experiments"]
 
     # -- Compute provider --
     # Which GPU cloud runs sandboxes, notebook kernels, workspace storage
@@ -68,7 +72,11 @@ class Settings(BaseSettings):
     agent_max_turns: int = 30
     agent_timeout_seconds: int = Field(
         default=1800,
-        description="Overall wall-clock timeout for an agent run (seconds)",
+        description=(
+            "Wall-clock timeout for a single provider LLM call (seconds). "
+            "Enforced inside each provider around the HTTP request only, "
+            "so tool-execution time is never counted."
+        ),
     )
     agent_abort_timeout: float = 5.0
 
@@ -87,11 +95,78 @@ class Settings(BaseSettings):
     sse_keepalive_seconds: float = 30.0
     broadcaster_max_queue_size: int = 1000
 
+    # -- API auth --
+    # Opt-in bearer-token auth (env: API_AUTH_TOKEN). When unset (default),
+    # every endpoint is open — unchanged behavior. When set, /api/* requires
+    # `Authorization: Bearer <token>` (health/readyz exempt; the SSE stream
+    # endpoint also accepts ?token= since EventSource can't send headers).
+    api_auth_token: Optional[str] = None
+
     # -- CORS --
-    cors_origins: list[str] = ["*"]
+    # Allowed browser origins (env: CORS_ORIGINS, comma-separated, e.g.
+    # `CORS_ORIGINS=https://app.example.com,http://localhost:3000`; a JSON
+    # array is also accepted). Defaults to the local frontend. `*` alone is
+    # honored but never combined with credentials (see main.py); mixing `*`
+    # with explicit origins is rejected at startup.
+    cors_origins: Annotated[list[str], NoDecode] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ]
+
+    @field_validator("cors_origins", mode="before")
+    @classmethod
+    def _split_cors_origins(cls, v):
+        """Accept a comma-separated string (env var), a JSON array, or a list.
+
+        `NoDecode` hands us the raw env string, so the pre-NoDecode JSON-array
+        format (`CORS_ORIGINS=["http://..."]`) would otherwise be comma-split
+        into garbage like `['["http://..."]']` — parse it explicitly instead.
+        """
+        if isinstance(v, str):
+            stripped = v.strip()
+            if stripped.startswith("["):
+                try:
+                    decoded = json.loads(stripped)
+                except ValueError as exc:
+                    raise ValueError(
+                        "CORS_ORIGINS looks like a JSON array but is not valid "
+                        "JSON. Use a comma-separated list instead, e.g. "
+                        "CORS_ORIGINS=https://app.example.com,http://localhost:3000"
+                    ) from exc
+                if not isinstance(decoded, list) or not all(
+                    isinstance(o, str) for o in decoded
+                ):
+                    raise ValueError(
+                        "CORS_ORIGINS JSON value must be an array of strings."
+                    )
+                origins = [o.strip() for o in decoded if o.strip()]
+            else:
+                origins = [o.strip() for o in stripped.split(",") if o.strip()]
+        else:
+            origins = v
+        # Reject `*` mixed with explicit origins: main.py disables credentials
+        # whenever `*` is present, which would silently strip credentials from
+        # the explicit entries too. Fail fast with a clear message instead.
+        if (
+            isinstance(origins, list)
+            and "*" in origins
+            and any(o != "*" for o in origins)
+        ):
+            raise ValueError(
+                "CORS_ORIGINS: cannot mix '*' with explicit origins — list only "
+                "explicit origins to enable credentialed requests, or use '*' "
+                "alone (credentials will be disabled)."
+            )
+        return origins
 
     # -- Upload limits --
     max_upload_size_bytes: int = 500 * 1024 * 1024  # 500 MB
+
+    # -- Sample datasets --
+    # Directory holding the bundled sample datasets (repo-root `sample-data/`).
+    # When unset, well-known locations are probed (repo checkout sibling of
+    # backend/, or /app/sample-data inside the container).
+    sample_data_dir: Optional[str] = None
 
     # -- Data explorer --
     query_default_limit: int = 100
