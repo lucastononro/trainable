@@ -19,7 +19,7 @@ from typing import Any, AsyncIterator
 
 from .auth import resolve_credentials
 from .auth._base import Credentials, ProviderUnavailable
-from .base import LLMEvent, LLMProvider, ProviderCapabilities
+from .base import LLMEvent, LLMProvider, ProviderCapabilities, enforce_wall_clock
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +168,7 @@ class GeminiProvider(LLMProvider):
         model: str,
         tools: list[dict] | None,
         messages: list[dict] | None = None,
+        timeout_seconds: float | None = None,
     ) -> AsyncIterator[LLMEvent]:
         try:
             client = self._client_or_raise()
@@ -201,10 +202,17 @@ class GeminiProvider(LLMProvider):
                 else None,
             )
 
-            resp = await client.aio.models.generate_content(
-                model=model,
-                contents=contents,
-                config=cfg,
+            # google-genai has no default request timeout — a stalled HTTP
+            # call would otherwise hang this coroutine (and the session's
+            # background task) forever.
+            resp = await enforce_wall_clock(
+                client.aio.models.generate_content(
+                    model=model,
+                    contents=contents,
+                    config=cfg,
+                ),
+                timeout_seconds,
+                provider="gemini",
             )
 
             for cand in resp.candidates or []:
@@ -244,6 +252,11 @@ class GeminiProvider(LLMProvider):
                         "output_tokens": getattr(usage, "candidates_token_count", 0),
                     },
                 )
+        except TimeoutError:
+            # Propagate so the runner's TimeoutError handler publishes
+            # `agent_timeout` and frees the session task (issue #95).
+            logger.warning("GeminiProvider call exceeded the wall-clock timeout")
+            raise
         except Exception as e:
             logger.exception("GeminiProvider SDK run failed")
             yield LLMEvent.error(str(e))
@@ -266,6 +279,7 @@ class GeminiProvider(LLMProvider):
             model=model,
             tools=tools,
             messages=kwargs.get("messages"),
+            timeout_seconds=timeout_seconds,
         ):
             yield event
         yield LLMEvent.done()

@@ -1,0 +1,124 @@
+# Bundled sample datasets — the source of truth for the first-run
+# "Try a sample dataset" gallery tiles.
+#
+# Each entry maps a tile in the UI to files under sample-data/<dir> (repo
+# root). `files` are relative paths inside that directory; they are copied
+# into a fresh project through the normal dataset-upload path (S3 +
+# Modal Volume) by POST /api/projects/from-sample.
+#
+# `suggested_prompt` is dropped into the chat input when the user lands in
+# the new project, so the first message is one keystroke away.
+
+samples:
+  - id: titanic
+    name: Titanic Survival
+    task: classification
+    description: >-
+      The "hello world" of ML — 891 passengers, predict who survived.
+      Missing values and mixed feature types to exercise the agent.
+    dir: titanic
+    files:
+      - titanic.csv
+      - CONTEXT.md
+    suggested_prompt: >-
+      Explore the Titanic dataset (see CONTEXT.md next to the CSV for the
+      schema) and train a model that predicts passenger survival. Start
+      with EDA, handle the missing Age/Cabin/Embarked values, then compare
+      a few classifiers and show me which performs best.
+
+  - id: telco-churn
+    name: Telco Customer Churn
+    task: classification
+    description: >-
+      7k telecom customers — predict churn. Mixed types, missing values,
+      and class imbalance make it the best all-around tabular demo.
+    dir: telco-churn
+    files:
+      - telco-customer-churn.csv
+      - CONTEXT.md
+    suggested_prompt: >-
+      Build a customer-churn model on this telco dataset (schema in
+      CONTEXT.md). Run EDA first — watch out for the TotalCharges column,
+      it has blanks — then train and evaluate a classifier, and tell me
+      which customer traits drive churn the most.
+
+  - id: california-housing
+    name: California Housing
+    task: regression
+    description: >-
+      Classic regression benchmark — 20k census block groups, predict
+      median house value from 8 numeric features.
+    dir: california-housing
+    files:
+      - california-housing.csv
+      - CONTEXT.md
+    suggested_prompt: >-
+      Train a regression model that predicts median house value on this
+      California housing dataset (schema in CONTEXT.md). Start with EDA —
+      the target is capped at 5.0, see if you can spot it — then compare a
+      linear baseline against a tree-based model.
+
+  - id: heart-failure
+    name: Heart Failure Prediction
+    task: classification
+    description: >-
+      918 patients, 11 clinical features — small and fast, with
+      interpretable features that make great SHAP plots.
+    dir: heart-failure
+    files:
+      - heart.csv
+      - CONTEXT.md
+    suggested_prompt: >-
+      Predict heart disease from this clinical dataset (schema in
+      CONTEXT.md). After EDA, train a classifier and explain which
+      clinical features matter most for the prediction.
+
+  - id: wine-quality
+    name: Wine Quality
+    task: regression
+    description: >-
+      Red + white Vinho Verde wines with quality scores — works as
+      regression or classification, all-numeric and quick to train.
+    dir: wine-quality
+    files:
+      - winequality-red.csv
+      - winequality-white.csv
+      - CONTEXT.md
+    suggested_prompt: >-
+      Two wine-quality CSVs are attached (red and white — schema in
+      CONTEXT.md). Combine them with a color feature, explore what drives
+      quality, and train a model to predict the quality score.
+
+  - id: employee-attrition
+    name: Employee Attrition
+    task: classification
+    description: >-
+      IBM HR analytics — 1.5k employees, 35 features, ~16% attrition.
+      Rich ordinal/categorical mix for feature-engineering demos.
+    dir: employee-attrition
+    files:
+      - employee-attrition.csv
+      - CONTEXT.md
+    suggested_prompt: >-
+      Predict employee attrition on this IBM HR dataset (schema in
+      CONTEXT.md). It's imbalanced (~16% positive), so pick sensible
+      metrics, then train a model and summarize the top attrition drivers.
+
+  - id: license-plates
+    name: License Plate Detection
+    task: object-detection
+    description: >-
+      Computer-vision smoke test — 3 real vehicle photos with COCO
+      bounding-box annotations around the license plates.
+    dir: license-plates
+    files:
+      - valid-mini/_annotations.coco.json
+      - valid-mini/CarLongPlateGen2463_jpg.rf.8260ec31fc02bc01ea6098b316ecc48b.jpg
+      - valid-mini/CarLongPlateGen499_jpg.rf.3b65481c7c000871d647d08e185f0f7b.jpg
+      - valid-mini/Cars224_png_jpg.rf.352b61b42e9b76029cdb32e3b80b576f.jpg
+      - CONTEXT.md
+    suggested_prompt: >-
+      This project has a mini license-plate detection set: 3 images with
+      COCO annotations under valid-mini/ (details in CONTEXT.md). Load the
+      annotations, draw the bounding boxes on each image, and show me the
+      annotated images.
