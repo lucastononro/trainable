@@ -105,7 +105,9 @@ async def test_background_agent_error_captured_by_sentry(
     try:
         await asyncio.wait_for(asyncio.shield(task), timeout=5.0)
     except asyncio.TimeoutError:
-        pass  # task takes >5 s in a slow CI environment; still running, wait done
+        # Task takes >5 s in a slow CI environment; the shield keeps it
+        # running, so await it to completion before asserting on it.
+        await task
 
     # _run_followup swallows `boom` internally (it reports to Sentry and marks
     # the session failed), so the task itself must finish without an exception.
