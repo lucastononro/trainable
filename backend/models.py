@@ -79,6 +79,10 @@ class Project(Base):
     # compute, summed over usage_events). NULL = uncapped. Enforced by
     # services/budget.py via the agent runner.
     budget_usd = Column(Float, nullable=True)
+    # Pre-flight training controls (metric, model families, trial budget,
+    # wall-clock/cost cap) — see schemas.TrainingConfig. Empty dict = the
+    # trainer agent keeps full autonomy.
+    training_config = Column(JSON, default=dict)
     updated_at = Column(String, default=lambda: utcnow().isoformat())
 
     experiments = relationship(
@@ -119,6 +123,7 @@ class Project(Base):
             "description": self.description or "",
             "sandbox_config": self.sandbox_config or {},
             "budget_usd": self.budget_usd,
+            "training_config": self.training_config or {},
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "experiment_count": experiment_count,

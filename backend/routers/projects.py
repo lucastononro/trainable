@@ -60,6 +60,11 @@ async def create_project(body: ProjectCreate, db: AsyncSession = Depends(get_db)
         description=body.description or "",
         sandbox_config=body.sandbox_config.model_dump() if body.sandbox_config else {},
         budget_usd=body.budget_usd,
+        training_config=(
+            body.training_config.model_dump(exclude_none=True)
+            if body.training_config
+            else {}
+        ),
         created_at=now,
         updated_at=now,
     )
@@ -151,6 +156,9 @@ async def update_project(
     # omitted" from "field set to None" via model_fields_set.
     if "budget_usd" in body.model_fields_set:
         project.budget_usd = body.budget_usd
+    if body.training_config is not None:
+        # exclude_none so cleared fields drop out — {} means "no constraints".
+        project.training_config = body.training_config.model_dump(exclude_none=True)
     project.updated_at = _now()
 
     await db.commit()

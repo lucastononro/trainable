@@ -181,8 +181,11 @@ async def _load_conversation_history(session_id: str) -> list[dict]:
     return messages
 
 
-async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict]:
-    """Return (project_id, project_name, project_files_listing, sandbox_config).
+async def _load_project_context(
+    experiment_id: str,
+) -> tuple[str, str, str, dict, dict]:
+    """Return (project_id, project_name, project_files_listing, sandbox_config,
+    training_config).
 
     project_files_listing is a multi-line string describing all files currently
     present under /projects/{project_id}/datasets/. If the project has no data,
@@ -190,10 +193,15 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict
 
     sandbox_config is the project's per-profile compute settings (default and
     training profiles, each with optional gpu + timeout). Empty dict if unset.
+
+    training_config is the project's pre-flight training controls (optimization
+    metric, model families, trial budget, wall-clock/cost cap — see
+    schemas.TrainingConfig). Empty dict if unset.
     """
     project_id = ""
     project_name = ""
     sandbox_config: dict = {}
+    training_config: dict = {}
     try:
         async with async_session() as db:
             result = await db.execute(
@@ -209,6 +217,7 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict
                 if project:
                     project_name = project.name
                     sandbox_config = project.sandbox_config or {}
+                    training_config = project.training_config or {}
     except Exception as e:
         logger.warning("Failed to load project for experiment %s: %s", experiment_id, e)
 
@@ -258,7 +267,94 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict
                 + "/datasets/` directly)"
             )
 
-    return project_id, project_name, files_listing, sandbox_config
+    return project_id, project_name, files_listing, sandbox_config, training_config
+
+
+def _apply_training_wallclock_cap(sandbox_config: dict, training_config: dict) -> dict:
+    """Clamp the training sandbox profile's per-call timeout to the user's
+    wall-clock budget (training_config.max_wallclock_minutes).
+
+    This is the hard-enforcement half of the pre-flight controls: even if the
+    agent ignores the prompt-level constraint, a heavy execute-code call cannot
+    run past the cap. Returns a new dict; the input is not mutated.
+    """
+    cap_minutes = (training_config or {}).get("max_wallclock_minutes")
+    if not cap_minutes:
+        return sandbox_config
+    cap_seconds = int(cap_minutes) * 60
+    config = dict(sandbox_config or {})
+    training_profile = dict(config.get("training") or {})
+    current = training_profile.get("timeout") or settings.sandbox_timeout
+    training_profile["timeout"] = min(int(current), cap_seconds)
+    config["training"] = training_profile
+    return config
+
+
+def _format_training_constraints(training_config: dict) -> str:
+    """Render the user's pre-flight training controls as a prompt block.
+
+    Injected into the system prompt of any agent that can call start-training
+    (orchestrator, trainer, chat). Empty string when no constraint is set so
+    unconfigured projects behave exactly as before.
+    """
+    cfg = training_config or {}
+    metric = cfg.get("optimization_metric")
+    families = cfg.get("model_families") or []
+    max_trials = cfg.get("max_trials")
+    max_wallclock = cfg.get("max_wallclock_minutes")
+    max_cost = cfg.get("max_cost_usd")
+
+    constraints: list[str] = []
+    if metric:
+        constraints.append(
+            f"- **Optimization metric**: `{metric}`. Every model-selection and "
+            f"hyperparameter-tuning decision (including the Optuna objective) "
+            f"MUST optimize this metric. Report other metrics too, but select on this one."
+        )
+    if families:
+        fam_list = ", ".join(f"`{f}`" for f in families)
+        constraints.append(
+            f"- **Allowed model families**: {fam_list}. Do NOT train or tune "
+            f"models outside these families — not even for the quick scan. "
+            f"start-training rejects other frameworks."
+        )
+    if max_trials:
+        constraints.append(
+            f"- **Trial budget**: at most {max_trials} hyperparameter-search "
+            f"trials TOTAL across the whole run. This overrides any default "
+            f"trial count in your instructions (e.g. '30-50 optuna trials')."
+        )
+    if max_wallclock:
+        constraints.append(
+            f"- **Wall-clock cap**: {max_wallclock} minutes of training compute. "
+            f"The training sandbox profile's per-call timeout is clamped to this "
+            f"cap; plan fits/sweeps to finish within it."
+        )
+    if max_cost:
+        constraints.append(
+            f"- **Cost cap**: ${max_cost:g} for this training effort. Prefer "
+            f"cheaper models/fewer trials as you approach it."
+        )
+
+    if not constraints:
+        return ""
+
+    lines = [
+        "## User training constraints (MANDATORY)",
+        "",
+        "The user configured pre-flight training controls in Project Settings.",
+        "These are hard requirements, not suggestions — they OVERRIDE any",
+        "conflicting default strategy in your instructions:",
+        "",
+        *constraints,
+        "",
+        "When delegating training work to another agent, restate these",
+        "constraints verbatim in the delegation instructions so they are not",
+        "lost. The start-training skill validates its arguments against them,",
+        "and REQUIRES you to declare `optimization_metric` and `max_trials`",
+        "explicitly whenever the corresponding constraint is set above.",
+    ]
+    return "\n".join(lines)
 
 
 def _format_compute_env(sandbox_config: dict) -> str:
@@ -610,16 +706,20 @@ async def _drive_provider(
         # budget query can't land the session in `failed`.
         await _check_budget_failopen(session_id)
 
-    # Wall-clock cap hint for providers/SDKs. The runner no longer wraps its
+    # Wall-clock cap for provider LLM calls. The runner no longer wraps its
     # own loop with `asyncio.timeout(timeout_s)` — that competed with the
     # per-sandbox timeout configured per project and could kill a session
-    # mid-tool-call without surfacing the failure to the model. The single
-    # governing timeout is the sandbox's own (`sandbox_timeout`, override
-    # per project via the agent's `default`/`training` profile). When it
-    # fires, Modal kills the container and the execute-code handler returns
-    # an `is_error` tool_result so the model can recognise the timeout and
-    # adapt (smaller chunk, different approach) or stop. The value below is
-    # still passed as a hint to provider SDKs that accept one.
+    # mid-tool-call without surfacing the failure to the model. Tool
+    # execution stays governed by the sandbox's own timeout
+    # (`sandbox_timeout`, override per project via the agent's
+    # `default`/`training` profile): when it fires, Modal kills the
+    # container and the execute-code handler returns an `is_error`
+    # tool_result so the model can adapt or stop. The value below is
+    # enforced *inside each provider* around the HTTP call only (SDK
+    # timeout / `enforce_wall_clock`; Claude via API_TIMEOUT_MS), so a
+    # stalled provider request raises TimeoutError — handled by
+    # `run_agent`'s TimeoutError path, which ends the run and frees the
+    # session task — without ever counting tool time (issue #95).
     timeout_s = settings.agent_timeout_seconds
 
     # Translate the resolved thinking level into provider-shaped kwargs once
@@ -912,12 +1012,18 @@ async def run_agent(
             project_name,
             project_files,
             sandbox_config,
+            training_config,
         ) = await _load_project_context(experiment_id)
 
         # Budget pre-check: never start a run for a project that has already
         # spent past its cap. Raises BudgetExceededError (handled below);
         # any other error fails open rather than failing the run.
         await _check_budget_failopen(session_id)
+
+        # Hard enforcement of the user's wall-clock budget: clamp the training
+        # sandbox profile's per-call timeout before the config flows into
+        # execute-code / delegate-task handlers.
+        sandbox_config = _apply_training_wallclock_cap(sandbox_config, training_config)
 
         system_prompt = render_agent_system_prompt(
             agent_type,
@@ -951,6 +1057,14 @@ async def run_agent(
         # for agents that can actually call execute-code; others ignore it.
         if "execute-code" in get_agent_skills(agent_type):
             system_prompt += "\n\n" + _format_compute_env(sandbox_config)
+
+        # Pre-flight training controls (issue #104) — only meaningful for
+        # agents that can open a training window. Empty config renders to ""
+        # so unconfigured projects get a byte-identical prompt.
+        if "start-training" in get_agent_skills(agent_type):
+            constraints_block = _format_training_constraints(training_config)
+            if constraints_block:
+                system_prompt += "\n\n" + constraints_block
 
         if user_prompt:
             prompt = _apply_mentions(user_prompt, mentions)

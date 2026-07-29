@@ -23,7 +23,7 @@ import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
 import { useApp } from '@/lib/AppContext';
 import { api } from '@/lib/api';
-import type { Experiment, Project, SandboxConfig } from '@/lib/types';
+import type { Experiment, Project, SandboxConfig, TrainingConfig } from '@/lib/types';
 import ConfirmModal from './ConfirmModal';
 import ProjectSettingsModal from './ProjectSettingsModal';
 
@@ -517,10 +517,19 @@ export default function Sidebar() {
     setConfirmTarget({ kind: 'project', id: projectId });
   }, []);
 
-  const handleSaveSandboxConfig = useCallback(
-    async (projectId: string, config: SandboxConfig, budgetUsd: number | null) => {
+  const handleSaveProjectSettings = useCallback(
+    async (
+      projectId: string,
+      config: SandboxConfig,
+      budgetUsd: number | null,
+      training: TrainingConfig,
+    ) => {
       try {
-        await api.updateProject(projectId, { sandbox_config: config, budget_usd: budgetUsd });
+        await api.updateProject(projectId, {
+          sandbox_config: config,
+          budget_usd: budgetUsd,
+          training_config: training,
+        });
         await refreshProjects();
       } catch {
         // silent
@@ -922,8 +931,10 @@ export default function Sidebar() {
             projectName={settingsProject?.name ?? ''}
             sandboxConfig={settingsProject?.sandbox_config ?? {}}
             budgetUsd={settingsProject?.budget_usd ?? null}
-            onSave={(config, budgetUsd) => {
-              if (settingsProjectId) handleSaveSandboxConfig(settingsProjectId, config, budgetUsd);
+            trainingConfig={settingsProject?.training_config ?? {}}
+            onSave={(config, budgetUsd, training) => {
+              if (settingsProjectId)
+                handleSaveProjectSettings(settingsProjectId, config, budgetUsd, training);
             }}
             onClose={() => setSettingsProjectId(null)}
           />
