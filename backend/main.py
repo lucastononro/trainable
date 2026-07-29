@@ -1,14 +1,17 @@
 """Trainable v2 — FastAPI Backend"""
 
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
 
 from auth import BearerTokenAuthMiddleware
 from config import settings
-from db import init_db
+from db import engine, init_db
 from errors import generic_exception_handler
 from observability import init_telemetry
 from routers import (
@@ -115,4 +118,41 @@ app.include_router(lineage.router, prefix="/api")
 
 @app.get("/api/health")
 async def health():
+    """Cheap liveness check — static, no dependencies touched."""
     return {"status": "ok"}
+
+
+async def _readyz_check_db() -> str:
+    try:
+        async with engine.connect() as conn:
+            # Raw SQL on purpose: cheapest possible round-trip; no ORM model
+            # exists (or should) for a connectivity probe.
+            await conn.execute(text("SELECT 1"))
+        return "ok"
+    except Exception as e:
+        logger.warning("readyz: database check failed: %s", e)
+        return f"error: {e.__class__.__name__}"
+
+
+async def _readyz_check_s3() -> str:
+    try:
+        # boto3 is sync — run in a thread so we don't block the event loop.
+        # list_buckets is the cheapest call that doesn't assume a bucket exists.
+        await asyncio.to_thread(get_s3_client().list_buckets)
+        return "ok"
+    except Exception as e:
+        logger.warning("readyz: s3 check failed: %s", e)
+        return f"error: {e.__class__.__name__}"
+
+
+@app.get("/api/readyz")
+async def readyz():
+    """Readiness check — pings the DB and S3 concurrently; 503 if either is down."""
+    db_status, s3_status = await asyncio.gather(_readyz_check_db(), _readyz_check_s3())
+    checks = {"database": db_status, "s3": s3_status}
+
+    ready = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        status_code=200 if ready else 503,
+        content={"status": "ready" if ready else "not_ready", "checks": checks},
+    )
