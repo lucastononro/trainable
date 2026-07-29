@@ -8,8 +8,28 @@ properties:
     description: 'Set to true for heavy ML workloads (training, tuning, large transforms).
       Uses the project''s training sandbox profile with GPU and extended timeout.
       Leave false for lightweight tasks (EDA, plotting, data inspection).
+      Ignored for GPU selection when `gpu` is given.
 
       '
     default: false
+  gpu:
+    type: string
+    enum: [cpu, T4, L4, A10G, A100-40GB, A100-80GB, H100]
+    description: 'Optional. Explicitly choose the compute for THIS call, overriding
+      the profile picked by `heavy`. Only the values listed under "Compute
+      environment" in your system prompt are permitted for this project; anything
+      else returns an error naming the allowed set. Use "cpu" to force a CPU-only
+      sandbox (cheapest). Omit to fall back to the heavy/default profile.
+
+      '
+  timeout:
+    type: integer
+    minimum: 10
+    maximum: 7200
+    description: 'Optional. Per-call timeout in seconds. Values above the project''s
+      max (shown in your system prompt) are silently clamped down. Omit to use the
+      selected profile''s timeout.
+
+      '
 required:
 - code

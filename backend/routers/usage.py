@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import async_session
 from models import UsageEvent
+from services.budget import get_budget_status
 
 router = APIRouter()
 
@@ -204,14 +205,22 @@ async def _events_for(db: AsyncSession, where) -> list[dict]:
 async def project_usage(project_id: str):
     async with async_session() as db:
         events = await _events_for(db, UsageEvent.project_id == project_id)
-    return _summarize(events)
+    summary = _summarize(events)
+    status = await get_budget_status(project_id=project_id)
+    summary["budget"] = status.to_dict() if status else None
+    return summary
 
 
 @router.get("/sessions/{session_id}/usage")
 async def session_usage(session_id: str):
     async with async_session() as db:
         events = await _events_for(db, UsageEvent.session_id == session_id)
-    return _summarize(events)
+    summary = _summarize(events)
+    # Budget is project-scoped: spent_usd here is the whole project's spend,
+    # not just this session's — the cap protects the project as a unit.
+    status = await get_budget_status(session_id=session_id)
+    summary["budget"] = status.to_dict() if status else None
+    return summary
 
 
 @router.get("/usage/summary")

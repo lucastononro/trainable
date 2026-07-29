@@ -377,11 +377,20 @@ async def record_sandbox_usage(
     agent_id: str | None,
     seconds: float,
     gpu: str | None = None,
+    provider: str | None = None,
     is_error: bool = False,
     extra: dict | None = None,
 ) -> dict | None:
-    """Persist + broadcast a single sandbox execution's compute time."""
-    cost = compute_sandbox_cost(seconds, gpu)
+    """Persist + broadcast a single sandbox execution's compute time.
+
+    `provider` is the compute provider that ran the sandbox ("modal" |
+    "runpod"); defaults to the configured COMPUTE_PROVIDER so legacy
+    callers keep billing correctly.
+    """
+    from config import settings
+
+    provider = provider or settings.compute_provider or _DEFAULT_COMPUTE_PROVIDER
+    cost = compute_sandbox_cost(seconds, gpu, provider=provider)
 
     tracer = get_tracer()
     with tracer.start_as_current_span("sandbox.usage") as _span:
@@ -409,7 +418,7 @@ async def record_sandbox_usage(
                 kind="sandbox",
                 agent_type=agent_type,
                 agent_id=agent_id,
-                provider="modal",
+                provider=provider,
                 model=None,
                 sandbox_seconds=seconds,
                 gpu_type=gpu,
