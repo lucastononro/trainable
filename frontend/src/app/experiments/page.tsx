@@ -21,14 +21,22 @@ import {
   FlaskConical,
   Folder,
   Loader2,
+  MessageSquare,
+  PanelRight,
   RefreshCw,
   Search,
+  Trophy,
+  Sparkles,
 } from 'lucide-react';
 
 import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
+import { stashSuggestedPrompt } from '@/lib/suggestedPrompt';
 import Sidebar from '@/components/Sidebar';
-import type { Experiment, ExperimentFullDetail, Project } from '@/lib/types';
+import type { Experiment, ExperimentFullDetail, Project, SampleDataset } from '@/lib/types';
+
+// The /compare backend endpoint caps a comparison at 8 sessions.
+const COMPARE_LIMIT = 8;
 
 const STATE_TONE: Record<string, string> = {
   created: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
@@ -61,6 +69,181 @@ function formatTopMetric(metrics: Record<string, number> | undefined): string {
   return `${entry[0]} = ${v}`;
 }
 
+const TASK_TONE: Record<string, string> = {
+  classification: 'bg-sky-500/10 text-sky-300 border-sky-500/30',
+  regression: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30',
+  'object-detection': 'bg-violet-500/10 text-violet-300 border-violet-500/30',
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
+
+const TOUR_STEPS: Array<{ icon: typeof MessageSquare; title: string; body: string }> = [
+  {
+    icon: MessageSquare,
+    title: 'Chat on the left',
+    body: 'Tell the agent what to build — it plans the workflow and runs Python in a sandbox.',
+  },
+  {
+    icon: PanelRight,
+    title: 'Canvas on the right',
+    body: 'Code, live metrics, figures and reports stream into the workspace pane as the agent works.',
+  },
+  {
+    icon: Database,
+    title: 'Your data at /data',
+    body: 'Every file in the project is mounted at /data in the sandbox, ready for the agent to load.',
+  },
+];
+
+/** First-run empty state: one-click "Try a sample dataset" tiles plus a
+ *  short tour of the chat↔canvas split. Rendered only when the gallery has
+ *  nothing to show. */
+function FirstRunSamples() {
+  const router = useRouter();
+  const { refreshProjects, refreshExperiments, setActiveProject, setActiveExperiment } = useApp();
+  const [samples, setSamples] = useState<SampleDataset[]>([]);
+  const [samplesLoading, setSamplesLoading] = useState(true);
+  const [creatingId, setCreatingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .listSamples()
+      .then((list) => {
+        if (!cancelled) setSamples(list.filter((s) => s.available));
+      })
+      .catch(() => {
+        // No tiles is fine — the plain empty-state copy still shows below.
+      })
+      .finally(() => {
+        if (!cancelled) setSamplesLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleTrySample = useCallback(
+    async (sample: SampleDataset) => {
+      if (creatingId) return;
+      setCreatingId(sample.id);
+      setError(null);
+      try {
+        const result = await api.createProjectFromSample(sample.id);
+        await refreshProjects();
+        await refreshExperiments();
+        setActiveProject(result.project.id);
+        setActiveExperiment(result.experiment.id, result.session_id);
+        // Pre-fill the chat input once the studio picks up this session.
+        stashSuggestedPrompt(result.session_id, result.suggested_prompt);
+        router.push('/');
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        setCreatingId(null);
+      }
+    },
+    [
+      creatingId,
+      refreshProjects,
+      refreshExperiments,
+      setActiveProject,
+      setActiveExperiment,
+      router,
+    ],
+  );
+
+  if (samplesLoading) {
+    return (
+      <div className="flex items-center justify-center py-20 text-gray-500">
+        <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+        Loading sample datasets…
+      </div>
+    );
+  }
+
+  if (samples.length === 0) {
+    // Sample data isn't shipped on this server — fall back to the old copy.
+    return (
+      <div className="text-center py-20 text-gray-500">
+        <FlaskConical className="w-8 h-8 mx-auto mb-2 text-gray-700" />
+        <p className="text-sm">
+          No experiments yet. They&apos;ll appear here once an agent calls create-experiment in any
+          session.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto py-10">
+      <div className="text-center mb-8">
+        <Sparkles className="w-8 h-8 mx-auto mb-3 text-amber-400" />
+        <h2 className="text-lg font-semibold text-white">Start with a sample dataset</h2>
+        <p className="text-sm text-gray-500 mt-1">
+          One click creates a project pre-loaded with data and a suggested first prompt — just hit
+          send and watch the agent work.
+        </p>
+      </div>
+
+      {error ? (
+        <div className="mb-4 rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-300">
+          {error}
+        </div>
+      ) : null}
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {samples.map((s) => (
+          <button
+            key={s.id}
+            onClick={() => handleTrySample(s)}
+            disabled={creatingId !== null}
+            className="group text-left rounded-lg border border-surface-border bg-surface p-4 hover:border-amber-500/40 hover:bg-white/[0.03] transition-colors disabled:opacity-60"
+          >
+            <div className="flex items-center gap-2 mb-2">
+              <span
+                className={`text-[11px] px-2 py-0.5 rounded-full border ${
+                  TASK_TONE[s.task] ?? 'bg-white/[0.04] text-gray-400 border-white/[0.08]'
+                }`}
+              >
+                {s.task}
+              </span>
+              <div className="flex-1" />
+              {creatingId === s.id ? (
+                <Loader2 className="w-3.5 h-3.5 text-amber-400 animate-spin" />
+              ) : (
+                <ArrowRight className="w-3.5 h-3.5 text-gray-600 group-hover:text-amber-400 transition-colors" />
+              )}
+            </div>
+            <div className="text-sm font-medium text-gray-100">{s.name}</div>
+            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{s.description}</p>
+            <div className="text-[11px] text-gray-600 mt-2">
+              {s.file_count} {s.file_count === 1 ? 'file' : 'files'} · {formatBytes(s.size_bytes)}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="mt-10 grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {TOUR_STEPS.map((step) => (
+          <div
+            key={step.title}
+            className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4"
+          >
+            <step.icon className="w-4 h-4 text-gray-500 mb-2" />
+            <div className="text-xs font-medium text-gray-300">{step.title}</div>
+            <p className="text-[11px] text-gray-500 mt-1 leading-relaxed">{step.body}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function ExperimentsListPage() {
   const router = useRouter();
   const { projects } = useApp();
@@ -69,6 +252,9 @@ export default function ExperimentsListPage() {
   const [error, setError] = useState<string | null>(null);
   const [hydrating, setHydrating] = useState(false);
   const [query, setQuery] = useState('');
+  // Session ids picked for comparison (checkbox column). Only rows with a
+  // session can be compared — /compare aggregates per-session.
+  const [selectedSessions, setSelectedSessions] = useState<Set<string>>(new Set());
 
   const fetchExperiments = useCallback(async () => {
     setLoading(true);
@@ -176,6 +362,29 @@ export default function ExperimentsListPage() {
     router.push(`/experiments/${r.id}`);
   };
 
+  const toggleSelected = (sessionId: string) => {
+    setSelectedSessions((prev) => {
+      const next = new Set(prev);
+      if (next.has(sessionId)) next.delete(sessionId);
+      else if (next.size < COMPARE_LIMIT) next.add(sessionId);
+      return next;
+    });
+  };
+
+  const openCompare = () => {
+    const ids = Array.from(selectedSessions);
+    if (ids.length < 2) return;
+    // Scope the leaderboard to a project when the selection is homogeneous.
+    const projectIds = new Set(
+      rows
+        .filter((r) => r.session_id && selectedSessions.has(r.session_id))
+        .map((r) => r.project_id),
+    );
+    const qs = new URLSearchParams({ sessions: ids.join(',') });
+    if (projectIds.size === 1) qs.set('project', Array.from(projectIds)[0]);
+    router.push(`/compare?${qs.toString()}`);
+  };
+
   return (
     <div className="h-screen flex bg-black" id="main-content">
       <Sidebar />
@@ -185,6 +394,21 @@ export default function ExperimentsListPage() {
           <h1 className="text-sm font-semibold text-white">Experiments</h1>
           {hydrating ? <Loader2 className="w-3 h-3 text-gray-500 animate-spin" /> : null}
           <div className="flex-1" />
+          {selectedSessions.size > 0 ? (
+            <button
+              onClick={openCompare}
+              disabled={selectedSessions.size < 2}
+              className="inline-flex items-center gap-1.5 rounded-md text-xs font-medium px-2.5 py-1 transition-colors border border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 disabled:opacity-50 disabled:cursor-not-allowed"
+              title={
+                selectedSessions.size < 2
+                  ? 'Select at least 2 experiments to compare'
+                  : `Compare ${selectedSessions.size} sessions on the leaderboard`
+              }
+            >
+              <Trophy className="w-3.5 h-3.5" />
+              Compare selected ({selectedSessions.size}/{COMPARE_LIMIT})
+            </button>
+          ) : null}
           <div className="relative">
             <Search className="w-3.5 h-3.5 text-gray-500 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none" />
             <input
@@ -219,13 +443,7 @@ export default function ExperimentsListPage() {
               Loading experiments…
             </div>
           ) : rows.length === 0 ? (
-            <div className="text-center py-20 text-gray-500">
-              <FlaskConical className="w-8 h-8 mx-auto mb-2 text-gray-700" />
-              <p className="text-sm">
-                No experiments yet. They&apos;ll appear here once an agent calls create-experiment
-                in any session.
-              </p>
-            </div>
+            <FirstRunSamples />
           ) : (
             <div className="space-y-6">
               {grouped.map(({ project, rows: projectRows }) => (
@@ -246,6 +464,7 @@ export default function ExperimentsListPage() {
                   <table className="w-full text-sm">
                     <thead className="text-gray-500 text-[11px] uppercase tracking-wide">
                       <tr className="border-b border-surface-border">
+                        <th className="w-8 px-3 py-2" title="Select for comparison"></th>
                         <th className="text-left px-4 py-2 font-medium">Name</th>
                         <th className="text-left px-4 py-2 font-medium">State</th>
                         <th className="text-left px-4 py-2 font-medium">
@@ -270,6 +489,28 @@ export default function ExperimentsListPage() {
                           onClick={() => openLineage(r)}
                           className="border-b border-surface-border last:border-b-0 hover:bg-white/[0.04] cursor-pointer text-gray-300"
                         >
+                          <td
+                            className="px-3 py-2.5 text-center"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={r.session_id ? selectedSessions.has(r.session_id) : false}
+                              disabled={
+                                !r.session_id ||
+                                (!selectedSessions.has(r.session_id) &&
+                                  selectedSessions.size >= COMPARE_LIMIT)
+                              }
+                              onChange={() => r.session_id && toggleSelected(r.session_id)}
+                              className="accent-amber-400 cursor-pointer disabled:cursor-not-allowed"
+                              title={
+                                !r.session_id
+                                  ? 'No session yet — nothing to compare'
+                                  : 'Select for comparison'
+                              }
+                              aria-label={`Select ${r.name} for comparison`}
+                            />
+                          </td>
                           <td className="px-4 py-2.5">
                             <div className="font-medium text-gray-100">{r.name}</div>
                             {r.hypothesis ? (

@@ -125,7 +125,7 @@ def _save_image(img, dest_path: pathlib.Path) -> None:
     except Exception:
         pass
 
-    raise TypeError("log_image: unsupported image type %r" % (type(img),))
+    raise TypeError(f"log_image: unsupported image type {type(img)!r}")
 
 
 def _volume_path(path: pathlib.Path) -> str:
@@ -214,7 +214,7 @@ def log_figure(step, key, fig, run=None):
     try:
         fig.savefig(str(dest), format="png", bbox_inches="tight", dpi=120)
     except Exception as e:
-        raise TypeError("log_figure: object is not a matplotlib Figure (%s)" % e)
+        raise TypeError(f"log_figure: object is not a matplotlib Figure ({e})")
     item = {"path": _artifact_path(dest)}
     data = {"items": [item]} if _MODE == "sandbox" else item
     _log_event("image", step, key, data, run=run)
