@@ -38,7 +38,7 @@ This automatically runs ruff (lint + format), trailing whitespace fixes, and pri
 
 ### Python (backend)
 
-- Formatter/linter: [Ruff](https://docs.astral.sh/ruff/) (configured in `pyproject.toml`)
+- Formatter/linter: [Ruff](https://docs.astral.sh/ruff/) (configured in `backend/pyproject.toml`)
 - Run manually: `cd backend && ruff check . && ruff format .`
 - Type hints are expected on all function signatures
 - Use `logger` (not `print`) for all logging
