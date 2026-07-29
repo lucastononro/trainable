@@ -13,9 +13,11 @@ RUN npm install -g @anthropic-ai/claude-code
 RUN useradd -m -s /bin/bash trainable
 WORKDIR /app
 
-# Install Python deps
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python deps from the hashed lockfile (reproducible builds, #128).
+# requirements.txt stays the human-edited input; regenerate the lock with:
+#   uv pip compile requirements.txt -o requirements.lock --generate-hashes --universal
+COPY requirements.txt requirements.lock .
+RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 
 # Copy source
 COPY . .

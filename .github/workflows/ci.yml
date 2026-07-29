@@ -56,7 +56,9 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install -r requirements.txt
+      # Install from the hashed lockfile so CI resolves exactly what ships
+      # in the Docker image (#128). requirements.txt stays the edited input.
+      - run: pip install --require-hashes -r requirements.lock
       # Coverage is scoped to production code: backend/.coveragerc omits
       # tests/ so the gate reflects untested application code (with tests
       # included the total was ~66%; production-only it is ~51%).
@@ -117,7 +119,12 @@ jobs:
           # dependency resolution mirrors what actually ships.
           python-version: "3.13"
           cache: pip
-      - run: pip install -r requirements.txt pip-audit
+      # Install from the hashed lockfile (#128) so the audit covers exactly
+      # what ships in the Docker image; pip-audit itself is installed
+      # separately (it isn't part of the locked application tree).
+      - run: |
+          pip install --require-hashes -r requirements.lock
+          pip install pip-audit
       # Advisory only: known advisories (e.g. transitive starlette/mcp/
       # python-multipart CVEs) already exist in the dependency tree today,
       # and shouldn't block CI. Flip this to blocking (drop
