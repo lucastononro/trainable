@@ -79,10 +79,19 @@ if settings.api_auth_token:
     logger.info("API_AUTH_TOKEN set — bearer-token auth enabled on /api/*")
     app.add_middleware(BearerTokenAuthMiddleware, token=settings.api_auth_token)
 
+# Never pair a wildcard origin with credentials: that combination lets any
+# web page script credentialed cross-origin requests against the API. If `*`
+# is explicitly configured, honor it but disable credentials.
+_cors_wildcard = "*" in settings.cors_origins
+if _cors_wildcard:
+    logger.warning(
+        "CORS_ORIGINS contains '*' — allowing all origins WITHOUT credentials. "
+        "List explicit origins to re-enable credentialed requests."
+    )
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
-    allow_credentials=True,
+    allow_credentials=not _cors_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )
