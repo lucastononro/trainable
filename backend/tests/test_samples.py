@@ -12,13 +12,13 @@ from main import app
 @pytest_asyncio.fixture
 async def samples_client(client):
     """The shared `client` fixture patches the S3/volume seams that
-    routers.experiments uses; routers.samples binds its own imports, so
+    routers.experiments uses; services.samples binds its own imports, so
     patch those too and expose the mocks for assertions."""
     mock_s3 = MagicMock()
     with (
-        patch("routers.samples.get_s3_client", return_value=mock_s3),
+        patch("services.samples.get_s3_client", return_value=mock_s3),
         patch(
-            "routers.samples.upload_many_to_volume", new_callable=AsyncMock
+            "services.samples.upload_many_to_volume", new_callable=AsyncMock
         ) as mock_volume,
     ):
         transport = ASGITransport(app=app)
@@ -114,7 +114,7 @@ async def test_create_project_from_unknown_sample(samples_client):
 
 @pytest.mark.asyncio
 async def test_create_project_from_sample_missing_files(samples_client):
-    with patch("routers.samples._sample_data_root", return_value=None):
+    with patch("services.samples.sample_data_root", return_value=None):
         resp = await samples_client.post(
             "/api/projects/from-sample", json={"sample_id": "titanic"}
         )

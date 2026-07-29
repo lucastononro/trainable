@@ -32,12 +32,7 @@ import { api } from '@/lib/api';
 import { useApp } from '@/lib/AppContext';
 import { stashSuggestedPrompt } from '@/lib/suggestedPrompt';
 import Sidebar from '@/components/Sidebar';
-import type {
-  Experiment,
-  ExperimentFullDetail,
-  Project,
-  SampleDataset,
-} from '@/lib/types';
+import type { Experiment, ExperimentFullDetail, Project, SampleDataset } from '@/lib/types';
 
 const STATE_TONE: Record<string, string> = {
   created: 'bg-amber-500/10 text-amber-300 border-amber-500/30',
@@ -105,8 +100,7 @@ const TOUR_STEPS: Array<{ icon: typeof MessageSquare; title: string; body: strin
  *  nothing to show. */
 function FirstRunSamples() {
   const router = useRouter();
-  const { refreshProjects, refreshExperiments, setActiveProject, setActiveExperiment } =
-    useApp();
+  const { refreshProjects, refreshExperiments, setActiveProject, setActiveExperiment } = useApp();
   const [samples, setSamples] = useState<SampleDataset[]>([]);
   const [samplesLoading, setSamplesLoading] = useState(true);
   const [creatingId, setCreatingId] = useState<string | null>(null);
@@ -174,8 +168,8 @@ function FirstRunSamples() {
       <div className="text-center py-20 text-gray-500">
         <FlaskConical className="w-8 h-8 mx-auto mb-2 text-gray-700" />
         <p className="text-sm">
-          No experiments yet. They&apos;ll appear here once an agent calls create-experiment in
-          any session.
+          No experiments yet. They&apos;ll appear here once an agent calls create-experiment in any
+          session.
         </p>
       </div>
     );
@@ -187,8 +181,8 @@ function FirstRunSamples() {
         <Sparkles className="w-8 h-8 mx-auto mb-3 text-amber-400" />
         <h2 className="text-lg font-semibold text-white">Start with a sample dataset</h2>
         <p className="text-sm text-gray-500 mt-1">
-          One click creates a project pre-loaded with data and a suggested first prompt —
-          just hit send and watch the agent work.
+          One click creates a project pre-loaded with data and a suggested first prompt — just hit
+          send and watch the agent work.
         </p>
       </div>
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field
 
@@ -88,6 +88,60 @@ class ProjectFromSample(BaseModel):
 
     sample_id: str = Field(min_length=1, max_length=64)
     name: Optional[str] = Field(default=None, max_length=_NAME_MAX)
+
+
+class SampleDatasetEntry(BaseModel):
+    """One tile of the sample-dataset gallery (GET /samples)."""
+
+    id: str
+    name: str
+    task: str
+    description: str
+    suggested_prompt: str
+    file_count: int = Field(ge=0)
+    size_bytes: int = Field(ge=0)
+    # False when the sample's data files aren't shipped in this deployment.
+    available: bool
+
+
+class SampleProjectSummary(BaseModel):
+    """Project as returned by POST /projects/from-sample (Project.to_dict)."""
+
+    id: str
+    name: str
+    description: str
+    sandbox_config: dict[str, Any]
+    created_at: str
+    updated_at: str
+    experiment_count: int = Field(ge=0)
+    dataset_count: int = Field(ge=0)
+    model_count: int = Field(ge=0)
+
+
+class SampleExperimentSummary(BaseModel):
+    """Initial experiment created alongside a from-sample project."""
+
+    id: str
+    project_id: str
+    name: str
+    description: str
+    dataset_ref: str
+    instructions: str
+    created_at: str
+    updated_at: str
+    latest_session_id: str
+    latest_state: str
+
+
+class ProjectFromSampleResponse(BaseModel):
+    """POST /projects/from-sample response."""
+
+    project: SampleProjectSummary
+    experiment: SampleExperimentSummary
+    session_id: str
+    sample_id: str
+    suggested_prompt: str
+    uploaded_files: list[str]
 
 
 class ProjectUpdate(BaseModel):
