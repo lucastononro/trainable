@@ -1,5 +1,6 @@
 """Experiment CRUD routes."""
 
+import asyncio
 import logging
 import os
 import re
@@ -72,6 +73,27 @@ def _dataset_s3_key(project_id: str, relative_path: str) -> str:
 
 def _dataset_volume_path(project_id: str, relative_path: str) -> str:
     return f"/projects/{project_id}/datasets/{_safe_relative_path(relative_path)}"
+
+
+def _download_to_tempfile(s3, bucket: str, key: str) -> str:
+    """Stream an S3 object into a temp file in bounded 1 MB chunks.
+
+    Blocking (boto3) — call via asyncio.to_thread. Returns the temp path;
+    a partially-written file is removed if the download fails.
+    """
+    body = s3.get_object(Bucket=bucket, Key=key)["Body"]
+    with tempfile.NamedTemporaryFile(delete=False) as tmp:
+        try:
+            for chunk in iter(lambda: body.read(1024 * 1024), b""):
+                tmp.write(chunk)
+        except BaseException:
+            tmp.close()
+            try:
+                os.unlink(tmp.name)
+            except FileNotFoundError:
+                pass
+            raise
+        return tmp.name
 
 
 def _dataset_ref_for(project_id: str, uploaded: list[str]) -> str:
@@ -172,8 +194,10 @@ async def create_experiment(
                 chunk = await f.read(1024 * 1024)
             logger.info("Read %s: %d bytes", rel_path, len(content))
 
-            # Upload to S3 (for browser / S3 explorer)
-            s3.put_object(
+            # Upload to S3 (for browser / S3 explorer). boto3 is synchronous —
+            # run it in a worker thread to keep the event loop free.
+            await asyncio.to_thread(
+                s3.put_object,
                 Bucket="datasets",
                 Key=key,
                 Body=content,
@@ -295,10 +319,9 @@ async def create_experiment_from_s3(
                     )
                     if not rel_path or rel_path.endswith("/"):
                         continue
-                    data = s3.get_object(Bucket=bucket, Key=obj_key)["Body"].read()
-                    with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                        tmp.write(data)
-                        tmp_path = tmp.name
+                    tmp_path = await asyncio.to_thread(
+                        _download_to_tempfile, s3, bucket, obj_key
+                    )
                     staged.append(
                         (tmp_path, _dataset_volume_path(project_id, rel_path))
                     )
@@ -317,10 +340,9 @@ async def create_experiment_from_s3(
                     pass
     else:
         filename = key_or_prefix.split("/")[-1]
-        data = s3.get_object(Bucket=bucket, Key=key_or_prefix)["Body"].read()
-        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-            tmp.write(data)
-            tmp_path = tmp.name
+        tmp_path = await asyncio.to_thread(
+            _download_to_tempfile, s3, bucket, key_or_prefix
+        )
         try:
             await upload_to_volume(tmp_path, _dataset_volume_path(project_id, filename))
         except Exception as e:
@@ -457,10 +479,9 @@ async def attach_data(
                         )
                         if not rel_path or rel_path.endswith("/"):
                             continue
-                        data = s3.get_object(Bucket=bucket, Key=obj_key)["Body"].read()
-                        with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                            tmp.write(data)
-                            tmp_path = tmp.name
+                        tmp_path = await asyncio.to_thread(
+                            _download_to_tempfile, s3, bucket, obj_key
+                        )
                         staged.append(
                             (tmp_path, _dataset_volume_path(project_id, rel_path))
                         )
@@ -479,10 +500,9 @@ async def attach_data(
                         pass
         else:
             filename = key_or_prefix.split("/")[-1]
-            data = s3.get_object(Bucket=bucket, Key=key_or_prefix)["Body"].read()
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                tmp.write(data)
-                tmp_path = tmp.name
+            tmp_path = await asyncio.to_thread(
+                _download_to_tempfile, s3, bucket, key_or_prefix
+            )
             try:
                 await upload_to_volume(
                     tmp_path,
@@ -530,7 +550,8 @@ async def attach_data(
                         status_code=413, detail=f"File '{rel_path}' too large"
                     )
 
-                s3.put_object(
+                await asyncio.to_thread(
+                    s3.put_object,
                     Bucket="datasets",
                     Key=key,
                     Body=content,
