@@ -54,7 +54,16 @@ export function SSEStreamProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const publish = useCallback((sessionId: string, event: SSEEvent) => {
-    listenersRef.current.forEach((listener) => listener(sessionId, event));
+    listenersRef.current.forEach((listener) => {
+      // Isolate listener failures: `publish` runs inside connectSSE's try/catch
+      // before the UI switch, so a throwing listener would otherwise swallow the
+      // event and silently kill the page's own UI updates.
+      try {
+        listener(sessionId, event);
+      } catch (err) {
+        console.error('SSEStream listener threw:', err);
+      }
+    });
   }, []);
 
   const value = useMemo<SSEStreamState>(() => ({ subscribe, publish }), [subscribe, publish]);
