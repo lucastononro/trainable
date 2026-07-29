@@ -9,15 +9,10 @@ import type {
   CellStreamEvent,
   KernelStateEvent,
   NotebookCreatedEvent,
+  StructureChangedEvent,
 } from './types';
 
-export interface StructureChangedEvent {
-  reason: 'agent_append' | string;
-  notebook_name: string;
-  notebook_path?: string;
-  cell_id?: string;
-  total_cells?: number;
-}
+export type { StructureChangedEvent } from './types';
 
 export interface NotebookSSEHandlers {
   onKernelState?: (e: KernelStateEvent) => void;

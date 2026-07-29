@@ -19,6 +19,7 @@ import {
   TaskCreatePayload,
   TaskUpdatePayload,
   TaskEventData,
+  GeneratedFile,
 } from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
 import { takeSuggestedPrompt } from '@/lib/suggestedPrompt';
@@ -118,6 +119,61 @@ SyntaxHighlighter.registerLanguage('json', json);
 // ChatItem interface
 // ---------------------------------------------------------------------------
 
+// Flat, all-optional meta shape covering every `ChatItem.type`'s fields.
+// A precise per-type discriminated union would be more rigorous, but `meta`
+// flows untyped through ~8 render components (CollapsibleToolCard,
+// SubAgentCard, ClarificationCard, AgentToolCard, ToolGroupCard, …) that
+// each only read their own subset without first narrowing on `item.type` —
+// threading a strict per-variant type through all of them is a much larger,
+// riskier change than this issue calls for. This still replaces `any` with
+// real field names/types, which is what actually protects against a typo'd
+// or missing field from the (unvalidated) backend payload.
+interface ChatItemMeta {
+  // tool_start / tool_end / code_output
+  code?: string;
+  output?: string;
+  outputs?: Array<{ text: string; stream?: string }>;
+  // standalone code_output item (no matching tool_start found) — folded
+  // into the tool card, never rendered on its own, but still carried
+  stream?: string;
+  // tool_end + subagent_end
+  duration?: number | null;
+  // subagent_start / subagent_end
+  task?: string;
+  model?: string;
+  agent_id?: string;
+  summary?: string;
+  // clarification
+  question_id?: string;
+  asker_agent_id?: string;
+  why_needed?: string;
+  urgency?: string;
+  status?: 'pending' | 'resolved';
+  original_question?: string;
+  answer?: string;
+  answered_by?: string;
+  // agent_tool (+ shared with clarification/subagent above: asker_agent_type,
+  // answerer_agent_type, depth)
+  call_id?: string;
+  tool_name?: string;
+  asker_agent_type?: string;
+  target_agent_type?: string;
+  answerer_agent_type?: string;
+  answerer_agent_id?: string;
+  depth?: number;
+  duration_s?: number;
+  is_error?: boolean;
+  variant?: 'tool' | 'clarification_exchange';
+  // assistant
+  agent_type?: string;
+  // user
+  files?: string[];
+  mentions?: Mention[];
+  hidden?: boolean;
+  /** File(s) attached via the "Browse S3" picker rather than local upload. */
+  s3?: boolean;
+}
+
 interface ChatItem {
   id: string;
   type:
@@ -134,8 +190,20 @@ interface ChatItem {
     | 'clarification'
     | 'agent_tool';
   content: string;
-  meta?: any;
+  meta?: ChatItemMeta;
   timestamp: number;
+}
+
+// Small runtime-checked readers for `Message.metadata` (Record<string,
+// unknown> — persisted session history, not schema-validated on the way
+// back out of Postgres). Used when reconstructing `ChatItem.meta` on
+// session reload, so a malformed/missing field degrades to `undefined`
+// instead of a blind `as` cast lying about the shape.
+function metaStr(v: unknown): string | undefined {
+  return typeof v === 'string' ? v : undefined;
+}
+function metaNum(v: unknown): number | undefined {
+  return typeof v === 'number' ? v : undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +289,7 @@ function HomePageContent() {
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [canvasContent, setCanvasContent] = useState('');
   const [canvasTitle, setCanvasTitle] = useState('Report');
-  const [generatedFiles, setGeneratedFiles] = useState<any[]>([]);
+  const [generatedFiles, setGeneratedFiles] = useState<GeneratedFile[]>([]);
   const [fileTree, setFileTree] = useState<FileTreeNode>({
     name: 'workspace',
     path: '/',
@@ -377,7 +445,6 @@ function HomePageContent() {
       source.onmessage = (e) => {
         try {
           const event = JSON.parse(e.data) as SSEEvent;
-          const data = event.data as any;
           // Fan out the parsed event to any other subscriber (e.g. the
           // notebook) before/independent of the switch below — this is the
           // single EventSource for the session, so everyone shares it. `sid`
@@ -385,8 +452,13 @@ function HomePageContent() {
           // stale cross-session deliveries during a session switch.
           publish(sid, event);
 
+          // Narrowing on `event.type` below gives each case a correctly
+          // typed `event.data` (see the `SSEEvent` union in lib/types.ts) —
+          // no blanket `as any` needed. Cases are wrapped in their own
+          // `{ }` block so each can bind its own locally-scoped `data`.
           switch (event.type) {
-            case 'state_change':
+            case 'state_change': {
+              const data = event.data;
               setSessionState(data.state);
               if (data.state.includes('running')) {
                 setIsRunning(true);
@@ -396,7 +468,7 @@ function HomePageContent() {
                 // before the reset propagated). Sub-agents (depth > 0) must
                 // NOT trigger this reset, otherwise they'd wipe their own
                 // siblings mid-flight.
-                const depth = (data.depth as number | undefined) ?? 0;
+                const depth = data.depth ?? 0;
                 if (depth === 0) {
                   setActiveAgents([]);
                   activeAgentsRef.current = [];
@@ -459,14 +531,16 @@ function HomePageContent() {
                 }
               }
               break;
+            }
             case 'agent_token':
             case 'agent_message': {
+              const data = event.data;
               // Prefer the agent_type carried on the event itself — the
               // backend stamps it via agent_meta in save_and_publish, so it's
               // always the authoritative source for which agent produced the
               // text. Fall back to the activeAgents heuristic only when the
               // event is missing the field (legacy events).
-              const eventAgentType = (data.agent_type as string | undefined) || undefined;
+              const eventAgentType = data.agent_type || undefined;
               const running = activeAgentsRef.current.filter((a) => a.status === 'running');
               const fallbackType =
                 running.length > 0 ? running[running.length - 1].type : undefined;
@@ -499,11 +573,14 @@ function HomePageContent() {
               });
               break;
             }
-            case 'tool_start':
+            case 'tool_start': {
+              const data = event.data;
               streamingItemIdRef.current = null;
               addItem({ type: 'tool_start', content: data.tool, meta: data.input });
               break;
-            case 'tool_end':
+            }
+            case 'tool_end': {
+              const data = event.data;
               setChatItems((prev) => {
                 const idx = prev.findLastIndex(
                   (i) => i.type === 'tool_start' && i.content === data.tool,
@@ -538,7 +615,9 @@ function HomePageContent() {
                 ];
               });
               break;
-            case 'code_output':
+            }
+            case 'code_output': {
+              const data = event.data;
               setChatItems((prev) => {
                 const idx = prev.findLastIndex((i) => i.type === 'tool_start');
                 if (idx >= 0) {
@@ -568,13 +647,16 @@ function HomePageContent() {
                 ];
               });
               break;
-            case 'agent_error':
+            }
+            case 'agent_error': {
+              const data = event.data;
               streamingItemIdRef.current = null;
               addItem({ type: 'error', content: data.error });
               setIsRunning(false);
               break;
+            }
             case 'usage_event': {
-              const ev = data as UsageEvent;
+              const ev = event.data;
               setRecentUsage((prev) => [...prev.slice(-49), ev]);
               setUsageTotals((prev) => {
                 const c = ev.cost_usd || 0;
@@ -596,16 +678,19 @@ function HomePageContent() {
               });
               break;
             }
-            case 'report_ready':
+            case 'report_ready': {
+              const data = event.data;
               setCanvasContent(data.content);
               setCanvasTitle(`${(data.stage || 'EDA').toUpperCase()} Report`);
               openCanvas();
               break;
+            }
             case 'files_ready': {
-              const stage = (data.stage as string) || '';
-              const newFiles = (data.files || []) as { path: string; type: string }[];
+              const data = event.data;
+              const stage = data.stage || '';
+              const newFiles = data.files || [];
               setGeneratedFiles((prev) => {
-                const existingPaths = new Set(prev.map((f: any) => f.path));
+                const existingPaths = new Set(prev.map((f) => f.path));
                 const merged = [...prev];
                 for (const f of newFiles) {
                   if (!existingPaths.has(f.path)) merged.push(f);
@@ -633,13 +718,14 @@ function HomePageContent() {
               break;
             }
             case 'file_created': {
-              const stage = (data.stage as string) || '';
+              const data = event.data;
+              const stage = data.stage || '';
               setFileTree((prev) =>
                 insertNodeIntoTree(
                   prev,
                   {
-                    name: data.name as string,
-                    path: data.path as string,
+                    name: data.name,
+                    path: data.path,
                     type: 'file',
                   },
                   `/sessions/${sid}`,
@@ -659,9 +745,10 @@ function HomePageContent() {
               addItem({ type: 'status', content: 'Agent stopped' });
               setIsRunning(false);
               break;
-            case 'budget_exceeded':
+            case 'budget_exceeded': {
               // Hard-stop guardrail (#107): the runner halted the agent
               // because project spend crossed its cap.
+              const data = event.data;
               streamingItemIdRef.current = null;
               addItem({ type: 'error', content: data.error });
               setBudgetInfo({
@@ -673,8 +760,10 @@ function HomePageContent() {
               });
               setIsRunning(false);
               break;
+            }
             case 'metrics_batch': {
-              const items = (data.items || []) as any[];
+              const data = event.data;
+              const items = data.items || [];
               const newPoints: MetricPoint[] = [];
               const now = new Date().toISOString();
               for (const m of items) {
@@ -700,6 +789,7 @@ function HomePageContent() {
               break;
             }
             case 'metric': {
+              const data = event.data;
               const key = `${data.step}:${data.name}:${data.run_tag || ''}`;
               if (!metricKeysRef.current.has(key)) {
                 metricKeysRef.current.add(key);
@@ -708,11 +798,11 @@ function HomePageContent() {
                   return [
                     ...prev,
                     {
-                      step: data.step as number,
-                      name: data.name as string,
-                      value: data.value as number,
-                      stage: data.stage as string,
-                      run_tag: (data.run_tag as string) || null,
+                      step: data.step,
+                      name: data.name,
+                      value: data.value,
+                      stage: data.stage,
+                      run_tag: data.run_tag || null,
                       created_at: new Date().toISOString(),
                     },
                   ];
@@ -721,17 +811,19 @@ function HomePageContent() {
               break;
             }
             case 'chart_config': {
-              const cfg = data as any;
-              if (cfg.charts && Array.isArray(cfg.charts)) {
-                setChartConfig({ charts: cfg.charts });
+              const data = event.data;
+              if (data.charts && Array.isArray(data.charts)) {
+                setChartConfig({ charts: data.charts });
               }
               break;
             }
             case 'log_event': {
               // Rich (non-scalar) panel payload — image grid, table,
               // confusion matrix, etc. Keyed by (key, step) so a backend
-              // resend or reload-hydrate doesn't double-append.
-              const ev = data as any;
+              // resend or reload-hydrate doesn't double-append. Fields are
+              // optional on the wire (unvalidated backend payload), hence
+              // the defensive checks below even though we have a real type.
+              const ev = event.data;
               if (!ev || !ev.key || ev.step === undefined || !ev.type) break;
               const dedupKey = `${ev.key}:${ev.step}:${ev.run_tag || ''}`;
               if (logEventKeysRef.current.has(dedupKey)) break;
@@ -742,7 +834,7 @@ function HomePageContent() {
                 type: ev.type,
                 stage: ev.stage,
                 run_tag: ev.run_tag || null,
-                payload: (ev.data || {}) as Record<string, unknown>,
+                payload: ev.data || {},
               };
               setLogEvents((prev) => {
                 if (prev.length === 0) openCanvas();
@@ -753,8 +845,9 @@ function HomePageContent() {
             case 'canvas_html': {
               // Agent published a self-contained HTML artifact. Overwrite
               // by key so regeneration reuses the tab. Open the canvas and
-              // ask the WorkspaceSidebar to open/focus the tab.
-              const ev = data as any;
+              // ask the WorkspaceSidebar to open/focus the tab. Fields are
+              // optional on the wire, hence the defensive checks.
+              const ev = event.data;
               if (!ev || !ev.key || !ev.path) break;
               const artifact: HtmlArtifact = {
                 key: String(ev.key),
@@ -780,6 +873,7 @@ function HomePageContent() {
             }
             // Multi-agent events
             case 'subagent_start': {
+              const data = event.data;
               const agentId = data.agent_id || `${Date.now()}`;
               addItem({
                 type: 'subagent_start',
@@ -806,6 +900,7 @@ function HomePageContent() {
               break;
             }
             case 'subagent_end': {
+              const data = event.data;
               const endAgentId = data.agent_id || '';
               const endAgentType = data.agent_type || 'sub-agent';
               setChatItems((prev) => {
@@ -854,6 +949,7 @@ function HomePageContent() {
             }
             // Inter-agent clarification: parent escalated to user
             case 'clarification_request': {
+              const data = event.data;
               addItem({
                 type: 'clarification',
                 content: data.question || '',
@@ -872,6 +968,7 @@ function HomePageContent() {
               break;
             }
             case 'clarification_resolved': {
+              const data = event.data;
               const qid = data.question_id;
               setChatItems((prev) =>
                 prev.map((it) =>
@@ -894,6 +991,7 @@ function HomePageContent() {
             // read_project_session). Single event per call. NO content preview is
             // surfaced — the user only sees that the agent did something.
             case 'agent_tool_call': {
+              const data = event.data;
               addItem({
                 type: 'agent_tool',
                 content: data.tool_name || 'tool',
@@ -915,6 +1013,7 @@ function HomePageContent() {
             // parent (no escalation). User sees only the fact that an
             // exchange happened — neither question nor answer text.
             case 'clarification_exchange': {
+              const data = event.data;
               addItem({
                 type: 'agent_tool',
                 content: 'request_clarification',
@@ -933,7 +1032,7 @@ function HomePageContent() {
             // Agent created a new notebook — auto-expand workspace + open it
             // so the user watches cells appear live.
             case 'notebook.created': {
-              const path = data.notebook_path as string | undefined;
+              const path = event.data.notebook_path;
               if (path) {
                 openCanvas();
                 window.dispatchEvent(new CustomEvent('trainable:open-file', { detail: { path } }));
@@ -968,7 +1067,7 @@ function HomePageContent() {
             // only update the tasks state here.
             case 'task_created':
             case 'task_updated': {
-              const t = data as TaskEventData;
+              const t = event.data;
               setTasks((prev) => {
                 const idx = prev.findIndex((x) => x.id === t.id);
                 if (idx >= 0) {
@@ -981,7 +1080,7 @@ function HomePageContent() {
               break;
             }
             case 'task_deleted': {
-              const id = data.id as number;
+              const id = event.data.id;
               setTasks((prev) => prev.filter((x) => x.id !== id));
               break;
             }
@@ -1105,7 +1204,7 @@ function HomePageContent() {
         let restoredCanvasContent = '';
         let restoredCanvasTitle = 'Report';
         let restoredCanvasOpen = false;
-        let restoredFiles: any[] = [];
+        let restoredFiles: (GeneratedFile & { _stage?: string })[] = [];
         const restoredHtmlArtifacts = new Map<string, HtmlArtifact>();
 
         if (sessionData.messages?.length > 0) {
@@ -1157,7 +1256,7 @@ function HomePageContent() {
                 mkItem({
                   type: 'tool_start',
                   content: (msg.metadata?.tool as string) || 'execute_code',
-                  meta: msg.metadata?.input as Record<string, unknown>,
+                  meta: { code: metaStr((msg.metadata?.input as { code?: unknown })?.code) },
                 }),
               );
             } else if (eventType === 'tool_end') {
@@ -1168,8 +1267,8 @@ function HomePageContent() {
                   type: 'tool_end',
                   meta: {
                     ...restored[idx].meta,
-                    output: msg.metadata?.output,
-                    duration: msg.metadata?.duration || null,
+                    output: metaStr(msg.metadata?.output),
+                    duration: metaNum(msg.metadata?.duration) || null,
                   },
                 };
               } else {
@@ -1177,7 +1276,7 @@ function HomePageContent() {
                   mkItem({
                     type: 'tool_end',
                     content: (msg.metadata?.tool as string) || 'execute_code',
-                    meta: { output: msg.metadata?.output as string },
+                    meta: { output: metaStr(msg.metadata?.output) },
                   }),
                 );
               }
@@ -1193,7 +1292,10 @@ function HomePageContent() {
                     ...restored[idx].meta,
                     outputs: [
                       ...outputs,
-                      { text: msg.content || msg.metadata?.text, stream: msg.metadata?.stream },
+                      {
+                        text: msg.content || metaStr(msg.metadata?.text) || '',
+                        stream: metaStr(msg.metadata?.stream),
+                      },
                     ],
                   },
                 };
@@ -1206,11 +1308,8 @@ function HomePageContent() {
               restoredCanvasOpen = true;
             } else if (eventType === 'files_ready') {
               const stageHint = (msg.metadata?.stage as string) || '';
-              const newFiles = (msg.metadata?.files || []) as Array<{
-                path: string;
-                _stage?: string;
-              }>;
-              const existingPaths = new Set(restoredFiles.map((f: { path: string }) => f.path));
+              const newFiles = (msg.metadata?.files || []) as GeneratedFile[];
+              const existingPaths = new Set(restoredFiles.map((f) => f.path));
               for (const f of newFiles) {
                 if (!existingPaths.has(f.path)) {
                   restoredFiles.push({ ...f, _stage: stageHint });
@@ -1239,10 +1338,10 @@ function HomePageContent() {
                   type: 'subagent_start',
                   content: (msg.metadata?.agent_type as string) || 'sub-agent',
                   meta: {
-                    task: msg.metadata?.task || msg.metadata?.description || '',
-                    model: msg.metadata?.model || '',
-                    depth: msg.metadata?.depth || 1,
-                    agent_id: msg.metadata?.agent_id || '',
+                    task: metaStr(msg.metadata?.task) || metaStr(msg.metadata?.description) || '',
+                    model: metaStr(msg.metadata?.model) || '',
+                    depth: metaNum(msg.metadata?.depth) || 1,
+                    agent_id: metaStr(msg.metadata?.agent_id) || '',
                   },
                 }),
               );
@@ -1254,8 +1353,8 @@ function HomePageContent() {
                   type: 'subagent_end',
                   meta: {
                     ...restored[idx].meta,
-                    summary: msg.metadata?.summary || msg.metadata?.result || '',
-                    duration: msg.metadata?.duration || null,
+                    summary: metaStr(msg.metadata?.summary) || metaStr(msg.metadata?.result) || '',
+                    duration: metaNum(msg.metadata?.duration) || null,
                   },
                 };
               } else {
@@ -1264,8 +1363,9 @@ function HomePageContent() {
                     type: 'subagent_end',
                     content: (msg.metadata?.agent_type as string) || 'sub-agent',
                     meta: {
-                      summary: msg.metadata?.summary || msg.metadata?.result || '',
-                      duration: msg.metadata?.duration || null,
+                      summary:
+                        metaStr(msg.metadata?.summary) || metaStr(msg.metadata?.result) || '',
+                      duration: metaNum(msg.metadata?.duration) || null,
                     },
                   }),
                 );
@@ -1276,13 +1376,13 @@ function HomePageContent() {
                   type: 'agent_tool',
                   content: (msg.metadata?.tool_name as string) || 'tool',
                   meta: {
-                    call_id: msg.metadata?.call_id,
-                    tool_name: msg.metadata?.tool_name,
-                    asker_agent_type: msg.metadata?.asker_agent_type,
-                    target_agent_type: msg.metadata?.target_agent_type,
-                    answerer_agent_type: msg.metadata?.answerer_agent_type,
-                    depth: msg.metadata?.depth || 0,
-                    duration_s: msg.metadata?.duration_s,
+                    call_id: metaStr(msg.metadata?.call_id),
+                    tool_name: metaStr(msg.metadata?.tool_name),
+                    asker_agent_type: metaStr(msg.metadata?.asker_agent_type),
+                    target_agent_type: metaStr(msg.metadata?.target_agent_type),
+                    answerer_agent_type: metaStr(msg.metadata?.answerer_agent_type),
+                    depth: metaNum(msg.metadata?.depth) || 0,
+                    duration_s: metaNum(msg.metadata?.duration_s),
                     is_error: !!msg.metadata?.is_error,
                     variant: 'tool',
                   },
@@ -1294,12 +1394,12 @@ function HomePageContent() {
                   type: 'agent_tool',
                   content: 'request_clarification',
                   meta: {
-                    call_id: msg.metadata?.call_id,
+                    call_id: metaStr(msg.metadata?.call_id),
                     tool_name: 'request_clarification',
-                    asker_agent_type: msg.metadata?.asker_agent_type,
-                    answerer_agent_type: msg.metadata?.answerer_agent_type,
-                    depth: msg.metadata?.depth || 0,
-                    duration_s: msg.metadata?.duration_s,
+                    asker_agent_type: metaStr(msg.metadata?.asker_agent_type),
+                    answerer_agent_type: metaStr(msg.metadata?.answerer_agent_type),
+                    depth: metaNum(msg.metadata?.depth) || 0,
+                    duration_s: metaNum(msg.metadata?.duration_s),
                     variant: 'clarification_exchange',
                   },
                 }),
@@ -2790,7 +2890,7 @@ function WorkspaceSidebar({
   sessionId: string;
   canvasContent: string;
   canvasTitle: string;
-  generatedFiles: any[];
+  generatedFiles: GeneratedFile[];
   fileTree: FileTreeNode;
   metricPoints: MetricPoint[];
   chartConfig: ChartConfig | null;
@@ -3568,9 +3668,9 @@ function CollapsibleToolCard({ item, inline }: { item: ChatItem; inline?: boolea
               {item.meta.code.length > 300 ? item.meta.code.slice(0, 300) + '...' : item.meta.code}
             </pre>
           )}
-          {item.meta?.outputs?.length > 0 && (
+          {(item.meta?.outputs?.length ?? 0) > 0 && (
             <div className="px-4 py-2 border-t border-surface-border max-h-32 overflow-y-auto">
-              {item.meta.outputs.map((o: { text: string; stream: string }, i: number) => (
+              {item.meta?.outputs?.map((o, i) => (
                 <pre
                   key={i}
                   className={`text-xs font-mono whitespace-pre-wrap break-all ${

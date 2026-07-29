@@ -77,7 +77,7 @@ describe('useNotebookSSE', () => {
     const handlers = setup('sess-1', true, 'nb');
     publish('sess-1', {
       type: 'notebook.cell.completed',
-      data: { notebook_name: 'other-nb', cell_id: 'c9' },
+      data: { notebook_name: 'other-nb', cell_id: 'c9', exec_count: null },
     });
     publish('sess-1', {
       type: 'notebook.structure.changed',
