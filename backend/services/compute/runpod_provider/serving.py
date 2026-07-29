@@ -1,0 +1,387 @@
+"""RunPod implementation of ServingBackend — one serverless endpoint per
+deployed model.
+
+Keeps the Modal property "deploy = metadata, no image build": the
+generated handler.py lives on the network volume and the shared serving
+image (docker/runpod-worker, TRAINABLE_ROLE=serving) loads it at boot via
+the HANDLER_PATH env var. Deploys are pure REST — no CLI subprocess.
+
+Auth model: RunPod serverless always requires a RunPod API key at the
+HTTP layer (there is no anonymous URL like Modal's *.modal.run). The
+per-model trainable key additionally rides in `input.api_key` and is
+enforced in-handler, mirroring the Modal X-API-Key check. The key reaches
+the container via the per-model template's env; rotation updates the
+template and takes effect on the next cold start (same caveat as Modal
+secret rotation).
+
+Request shape (documented on the model card / docs):
+    POST https://api.runpod.ai/v2/{endpoint_id}/runsync
+    Authorization: Bearer <RunPod API key>
+    {"input": {"records": [...], "api_key": "<model key>"}}
+"""
+
+from __future__ import annotations
+
+import logging
+
+from sqlalchemy import select
+
+from config import settings
+from services.compute.base import DeployResult, ServingBackend
+from services.compute.runpod_provider.bootstrap import ensure_network_volume
+from services.compute.runpod_provider.client import get_client
+from services.compute.runpod_provider.gpu import gpu_type_ids
+
+logger = logging.getLogger(__name__)
+
+DATA_BASE = "https://api.runpod.ai/v2"
+
+
+def _serving_image() -> str:
+    return settings.runpod_serving_image or settings.runpod_worker_image
+
+
+def _handler_container_path(serving_app_path: str) -> str:
+    """Volume path -> in-container path. The worker entrypoint symlinks
+    /data -> /runpod-volume, so /data works in serverless workers too."""
+    return "/data" + (
+        serving_app_path if serving_app_path.startswith("/") else "/" + serving_app_path
+    )
+
+
+def _runpod_handler_code(
+    *,
+    fn_name: str,
+    model_name: str,
+    model_version: int,
+    artifact_uri: str,
+    framework: str,
+    feature_columns: list[str] | None,
+    enable_auth: bool,
+) -> str:
+    """Render the RunPod serving handler for a registered model.
+
+    Mirrors the loader-block selection in services/deploy.py's
+    `_serving_app_code` (Modal codegen) — keep the two in sync when
+    adding framework support.
+    """
+    feature_cols_repr = repr(feature_columns) if feature_columns else "None"
+
+    # Resolve the in-container artifact path; the agent sometimes supplies
+    # an already-/data-prefixed path. Same normalization as Modal codegen.
+    container_artifact_path = artifact_uri
+    if container_artifact_path.startswith("/data/"):
+        container_artifact_path = container_artifact_path[len("/data") :]
+    container_artifact_path = "/data" + container_artifact_path
+
+    ext = (
+        container_artifact_path.rsplit(".", 1)[-1].lower()
+        if "." in container_artifact_path
+        else ""
+    )
+    fw = (framework or "").lower()
+    IND = "        "  # 8 spaces (try body inside _load)
+    IND_NESTED = IND + "    "
+    if fw == "xgboost" and ext in ("json", "ubj", "bin"):
+        loader_block = (
+            f"import xgboost as xgb\n"
+            f"{IND}booster = xgb.Booster()\n"
+            f"{IND}booster.load_model(ARTIFACT_PATH)\n"
+            f"{IND}_MODEL = booster\n"
+            f"{IND}_FEATURE_COLS = FEATURE_COLUMNS"
+        )
+    elif fw in ("lightgbm", "lgbm") and ext in ("txt", "model"):
+        loader_block = (
+            f"import lightgbm as lgb\n"
+            f"{IND}_MODEL = lgb.Booster(model_file=ARTIFACT_PATH)\n"
+            f"{IND}_FEATURE_COLS = FEATURE_COLUMNS"
+        )
+    elif ext == "joblib":
+        loader_block = (
+            f"import joblib\n"
+            f"{IND}blob = joblib.load(ARTIFACT_PATH)\n"
+            f'{IND}if isinstance(blob, dict) and "model" in blob:\n'
+            f'{IND_NESTED}_MODEL = blob["model"]\n'
+            f'{IND_NESTED}_FEATURE_COLS = blob.get("feature_cols") or FEATURE_COLUMNS\n'
+            f"{IND}else:\n"
+            f"{IND_NESTED}_MODEL = blob\n"
+            f"{IND_NESTED}_FEATURE_COLS = FEATURE_COLUMNS"
+        )
+    else:
+        loader_block = (
+            f"import pickle\n"
+            f'{IND}with open(ARTIFACT_PATH, "rb") as f:\n'
+            f"{IND_NESTED}blob = pickle.load(f)\n"
+            f'{IND}if isinstance(blob, dict) and "model" in blob:\n'
+            f'{IND_NESTED}_MODEL = blob["model"]\n'
+            f'{IND_NESTED}_FEATURE_COLS = blob.get("feature_cols") or FEATURE_COLUMNS\n'
+            f"{IND}else:\n"
+            f"{IND_NESTED}_MODEL = blob\n"
+            f"{IND_NESTED}_FEATURE_COLS = FEATURE_COLUMNS"
+        )
+
+    auth_check = (
+        """
+    if API_KEY and inp.get("api_key") != API_KEY:
+        return {"error": "invalid or missing api_key", "status": 401}
+"""
+        if enable_auth
+        else ""
+    )
+
+    return f'''"""RunPod serving handler for {model_name} v{model_version}.
+
+Generated by Trainable's `create-serving-app` skill ({fn_name}).
+Edit freely — the deploy button ships whatever is on the volume.
+
+Invoke:
+    POST https://api.runpod.ai/v2/<endpoint_id>/runsync
+    Authorization: Bearer <RunPod API key>
+    {{"input": {{"records": [{{...feature values...}}], "api_key": "<model key>"}}}}
+
+Response: {{"output": {{"predictions": [...], "model": ..., "version": ...}}}}
+"""
+
+import os
+
+import runpod
+
+ARTIFACT_PATH = {container_artifact_path!r}
+FEATURE_COLUMNS = {feature_cols_repr}
+API_KEY = os.environ.get("API_KEY", "")
+
+_MODEL = None
+_FEATURE_COLS = None
+_LOAD_ERROR = None
+
+
+def _load():
+    global _MODEL, _FEATURE_COLS, _LOAD_ERROR
+    try:
+        {loader_block}
+    except Exception as e:
+        _LOAD_ERROR = f"{{type(e).__name__}}: {{e}} (artifact={{ARTIFACT_PATH}})"
+        _MODEL = None
+        _FEATURE_COLS = None
+        print("[serving] model load failed:", _LOAD_ERROR)
+
+
+_load()
+
+
+def handler(job):
+    inp = job.get("input") or {{}}
+{auth_check}
+    if _LOAD_ERROR or _MODEL is None:
+        return {{"error": _LOAD_ERROR or "model failed to load", "status": 500}}
+    records = inp.get("records") or []
+    if not records:
+        return {{"error": "`records` is empty.", "status": 400}}
+
+    import pandas as pd
+
+    if isinstance(records, dict):
+        records = [records]
+    df = pd.DataFrame(records)
+    if _FEATURE_COLS:
+        df = df[[c for c in _FEATURE_COLS if c in df.columns]]
+    # XGBoost low-level Booster needs a DMatrix, not a DataFrame; sniff
+    # the type at predict time so the same path works for any framework.
+    try:
+        import xgboost as _xgb  # noqa: F401
+
+        if isinstance(_MODEL, _xgb.Booster):
+            input_obj = _xgb.DMatrix(df)
+        else:
+            input_obj = df
+    except Exception:
+        input_obj = df
+    preds = _MODEL.predict(input_obj)
+    return {{
+        "predictions": [p.item() if hasattr(p, "item") else p for p in preds],
+        "model": {model_name!r},
+        "version": {model_version},
+    }}
+
+
+runpod.serverless.start({{"handler": handler}})
+'''
+
+
+class RunPodServingBackend(ServingBackend):
+    name = "runpod"
+    serving_filename = "handler.py"
+
+    def app_name(self, project_id: str) -> str:
+        # Same short-pid naming scheme as Modal so app labels stay
+        # recognizable across providers.
+        short_pid = project_id.split("-")[0][:12]
+        return f"{settings.modal_app_name}-srv-{short_pid}"[:63]
+
+    def fn_name(self, model_name: str, version: int) -> str:
+        from services import deploy
+
+        return deploy._modal_function_name(model_name, version)
+
+    def _endpoint_name(self, project_id: str, model_name: str, version: int) -> str:
+        return f"{self.app_name(project_id)}-{self.fn_name(model_name, version)}"[:191]
+
+    def render_serving_code(
+        self,
+        *,
+        app_name: str,
+        fn_name: str,
+        model_name: str,
+        model_version: int,
+        artifact_uri: str,
+        framework: str,
+        feature_columns: list[str] | None,
+        target_column: str | None,
+        compute: str,
+        enable_auth: bool,
+        model_id: str,
+    ) -> str:
+        return _runpod_handler_code(
+            fn_name=fn_name,
+            model_name=model_name,
+            model_version=model_version,
+            artifact_uri=artifact_uri,
+            framework=framework,
+            feature_columns=feature_columns,
+            enable_auth=enable_auth,
+        )
+
+    async def ensure_secret(self, model_id: str, api_key: str) -> str | None:
+        # The key is delivered through the per-model template env at
+        # deploy time — nothing to pre-provision.
+        return None
+
+    async def _ensure_model_template(
+        self, name: str, handler_path: str, api_key: str | None
+    ) -> str:
+        """Create-or-update the per-model serving template that carries
+        HANDLER_PATH + API_KEY env for the shared serving image."""
+        client = get_client()
+        env = {
+            "TRAINABLE_ROLE": "serving",
+            "HANDLER_PATH": handler_path,
+            "API_KEY": api_key or "",
+        }
+        payload = {
+            "name": name,
+            "imageName": _serving_image(),
+            "isServerless": True,
+            "containerDiskInGb": 20,
+            "env": env,
+        }
+        for tpl in await client.list_templates():
+            if tpl.get("name") == name:
+                template_id = tpl.get("id")
+                await client.update_template(template_id, payload)
+                return template_id
+        created = await client.create_template(payload)
+        template_id = created.get("id")
+        if not template_id:
+            raise RuntimeError(f"RunPod template create for {name} returned no id")
+        return template_id
+
+    async def deploy(
+        self,
+        *,
+        model,
+        serving_app_path: str,
+        compute: str,
+        api_key: str | None,
+    ) -> DeployResult:
+        client = get_client()
+        app_name = self.app_name(model.project_id)
+        fn_name = self.fn_name(model.name, model.version)
+        endpoint_name = self._endpoint_name(model.project_id, model.name, model.version)
+
+        template_id = await self._ensure_model_template(
+            endpoint_name, _handler_container_path(serving_app_path), api_key
+        )
+        volume_id = await ensure_network_volume()
+
+        payload: dict = {
+            "name": endpoint_name,
+            "templateId": template_id,
+            "workersMin": 0,
+            "workersMax": max(1, settings.runpod_max_workers),
+            "idleTimeout": 120,
+            "scalerType": "QUEUE_DELAY",
+            "scalerValue": 1,
+            "networkVolumeId": volume_id,
+            "dataCenterIds": [settings.runpod_datacenter_id],
+            "flashboot": True,
+        }
+        type_ids = gpu_type_ids(compute)
+        if type_ids:
+            payload["gpuTypeIds"] = type_ids
+            payload["gpuCount"] = 1
+        else:
+            payload["computeType"] = "CPU"
+            payload["instanceIds"] = ["cpu3c-2-8"]
+
+        endpoint_id = None
+        for ep in await client.list_endpoints():
+            if ep.get("name") == endpoint_name:
+                endpoint_id = ep.get("id")
+                break
+        if endpoint_id:
+            # Redeploy: template env / gpu changes roll on next cold start.
+            update = {k: v for k, v in payload.items() if k != "name"}
+            await client.update_endpoint(endpoint_id, update)
+        else:
+            created = await client.create_endpoint(payload)
+            endpoint_id = created.get("id")
+            if not endpoint_id:
+                raise RuntimeError(
+                    f"RunPod endpoint create for {endpoint_name} returned no id"
+                )
+        logger.info(
+            "[deploy] runpod endpoint %s (%s) for %s v%s",
+            endpoint_name,
+            endpoint_id,
+            model.name,
+            model.version,
+        )
+        return DeployResult(
+            endpoint_url=f"{DATA_BASE}/{endpoint_id}/runsync",
+            provider_app=app_name,
+            provider_function=fn_name,
+            endpoint_id=endpoint_id,
+        )
+
+    async def stop(self, deployment_row) -> None:
+        client = get_client()
+        endpoint_id = getattr(deployment_row, "provider_endpoint_id", None)
+        if not endpoint_id:
+            raise RuntimeError(
+                "deployment row has no provider_endpoint_id — tear down the "
+                "endpoint from the RunPod console"
+            )
+        try:
+            await client.update_endpoint(endpoint_id, {"workersMax": 0})
+        except Exception as e:
+            logger.debug("[runpod] workersMax=0 before delete failed: %s", e)
+        await client.delete_endpoint(endpoint_id)
+
+    async def rotate_key(self, model_id: str, new_key: str) -> str | None:
+        """Update the per-model template's API_KEY. Running workers keep
+        the old key until their next cold start (same caveat as Modal)."""
+        from db import async_session
+        from models import RegisteredModel
+
+        async with async_session() as db:
+            model = (
+                await db.execute(
+                    select(RegisteredModel).where(RegisteredModel.id == model_id)
+                )
+            ).scalar_one_or_none()
+            if not model:
+                raise ValueError(f"Model {model_id} not found")
+            name = self._endpoint_name(model.project_id, model.name, model.version)
+            handler_path = _handler_container_path(model.serving_app_path or "")
+        await self._ensure_model_template(name, handler_path, new_key)
+        return name

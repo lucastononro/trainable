@@ -11,15 +11,13 @@ import textwrap
 import time
 import urllib.request
 import webbrowser
+from importlib import metadata, resources
 from pathlib import Path
-
-REPO = "lucastononro/trainable"
-BRANCH = "main"
-RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 
 COMPOSE_FILE = "docker-compose.prod.yml"
 ENV_FILE = ".env"
 PROJECT_NAME = "trainable"
+PACKAGE_NAME = "trainable-ai"
 
 # Config lives in ~/.trainable so `trainable up` works from any directory.
 # Override via TRAINABLE_HOME env var for advanced users.
@@ -82,10 +80,33 @@ def prompt_choice(label: str, options: list[str]) -> int:
         warn(f"Please enter a number between 1 and {len(options)}")
 
 
-def download_file(filename: str, dest: Path):
-    url = f"{RAW_BASE}/{filename}"
-    urllib.request.urlretrieve(url, dest / filename)
-    success(f"Downloaded {filename}")
+def _cli_version() -> str:
+    """Return the installed wheel's version (matches the published image tag).
+
+    Falls back to "latest" if the package can't be introspected — happens
+    when running from a source checkout that hasn't been installed.
+    """
+    try:
+        return metadata.version(PACKAGE_NAME)
+    except metadata.PackageNotFoundError:
+        return "latest"
+
+
+def _write_compose_template(dest: Path) -> None:
+    """Write `docker-compose.prod.yml` from the template bundled in the wheel.
+
+    Called on every `trainable init` *and* every `trainable up` so existing
+    installs migrate to the env-var-tag-aware compose layout automatically.
+    """
+    template = resources.files("trainable_cli").joinpath(
+        "_templates", COMPOSE_FILE
+    )
+    (dest / COMPOSE_FILE).write_text(template.read_text(encoding="utf-8"))
+
+
+def write_compose_from_template(dest: Path) -> None:
+    _write_compose_template(dest)
+    success(f"Wrote {COMPOSE_FILE}")
 
 
 def check_docker():
@@ -113,6 +134,13 @@ _KNOWN_PROVIDER_KEYS = {
     "GOOGLE_API_KEY",
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET",
+    "COMPUTE_PROVIDER",
+    "RUNPOD_API_KEY",
+    "RUNPOD_S3_ACCESS_KEY_ID",
+    "RUNPOD_S3_SECRET_ACCESS_KEY",
+    "RUNPOD_DATACENTER_ID",
+    "RUNPOD_NETWORK_VOLUME_ID",
+    "RUNPOD_WORKER_IMAGE",
 }
 
 
@@ -172,13 +200,40 @@ def write_env(dest: Path, config: dict[str, str]):
 
     lines += [
         "",
-        "# Modal (sandboxed code execution)",
+        "# Compute provider (sandboxes, notebook kernels, deployments)",
+        f"COMPUTE_PROVIDER={config.get('COMPUTE_PROVIDER', 'modal')}",
+        "",
+        "# Modal (used when COMPUTE_PROVIDER=modal)",
         f"MODAL_TOKEN_ID={config.get('MODAL_TOKEN_ID', '')}",
         f"MODAL_TOKEN_SECRET={config.get('MODAL_TOKEN_SECRET', '')}",
     ]
 
+    if config.get("RUNPOD_API_KEY") or config.get("COMPUTE_PROVIDER") == "runpod":
+        lines += [
+            "",
+            "# RunPod (used when COMPUTE_PROVIDER=runpod)",
+            f"RUNPOD_API_KEY={config.get('RUNPOD_API_KEY', '')}",
+            f"RUNPOD_S3_ACCESS_KEY_ID={config.get('RUNPOD_S3_ACCESS_KEY_ID', '')}",
+            f"RUNPOD_S3_SECRET_ACCESS_KEY={config.get('RUNPOD_S3_SECRET_ACCESS_KEY', '')}",
+            f"RUNPOD_DATACENTER_ID={config.get('RUNPOD_DATACENTER_ID', 'US-KS-2')}",
+        ]
+        if config.get("RUNPOD_NETWORK_VOLUME_ID"):
+            lines.append(
+                f"RUNPOD_NETWORK_VOLUME_ID={config['RUNPOD_NETWORK_VOLUME_ID']}"
+            )
+        if config.get("RUNPOD_WORKER_IMAGE"):
+            lines.append(f"RUNPOD_WORKER_IMAGE={config['RUNPOD_WORKER_IMAGE']}")
+
     env_path = dest / ENV_FILE
-    env_path.write_text("\n".join(lines) + "\n")
+    # Secrets file: restrict to owner-only so other users on a shared machine
+    # can't read the plaintext API keys/tokens. Create with O_CREAT mode 0o600
+    # so the file is never visible at a looser permission even for an instant
+    # (avoids a TOCTOU window vs. write-then-chmod). The chmod afterwards
+    # tightens pre-existing files, where the O_CREAT mode doesn't apply.
+    fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(env_path, 0o600)
     success(f"Wrote {ENV_FILE}")
 
 
@@ -202,6 +257,63 @@ def configured_providers(config: dict[str, str]) -> list[str]:
         backends = [k.removesuffix("_API_KEY").lower() for k in litellm_keys]
         providers.append(f"LiteLLM ({', '.join(backends)})")
     return providers
+
+
+def _has_compute_creds(config: dict[str, str]) -> bool:
+    """True when the configured compute provider has its credentials."""
+    provider = (config.get("COMPUTE_PROVIDER") or "modal").lower()
+    if provider == "runpod":
+        return bool(
+            config.get("RUNPOD_API_KEY")
+            and config.get("RUNPOD_S3_ACCESS_KEY_ID")
+            and config.get("RUNPOD_S3_SECRET_ACCESS_KEY")
+        )
+    return bool(config.get("MODAL_TOKEN_ID") and config.get("MODAL_TOKEN_SECRET"))
+
+
+def prompt_compute_provider(existing: dict[str, str]) -> dict[str, str]:
+    """Pick the GPU cloud that runs sandboxes/kernels/deployments and
+    collect its credentials. Existing keys are kept and not re-prompted."""
+    print()
+    choice = prompt_choice(
+        "Which compute provider should run sandboxes and deployments?",
+        ["Modal (default)", "RunPod"],
+    )
+    out: dict[str, str] = {}
+    if choice == 1:
+        out["COMPUTE_PROVIDER"] = "modal"
+        if existing.get("MODAL_TOKEN_ID") and existing.get("MODAL_TOKEN_SECRET"):
+            return out
+        print()
+        print(f"  {DIM}Get your Modal tokens from https://modal.com/settings{RESET}\n")
+        out["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
+        out["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
+        return out
+
+    out["COMPUTE_PROVIDER"] = "runpod"
+    print()
+    print(
+        f"  {DIM}RunPod needs two key pairs from https://console.runpod.io:{RESET}\n"
+        f"  {DIM}  1. an API key      (Settings → API Keys){RESET}\n"
+        f"  {DIM}  2. an S3 API key   (Settings → S3 API Keys — for the network volume){RESET}\n"
+    )
+    out["RUNPOD_API_KEY"] = existing.get("RUNPOD_API_KEY") or prompt_secret(
+        "RunPod API Key"
+    )
+    out["RUNPOD_S3_ACCESS_KEY_ID"] = existing.get(
+        "RUNPOD_S3_ACCESS_KEY_ID"
+    ) or prompt_secret("RunPod S3 Access Key ID")
+    out["RUNPOD_S3_SECRET_ACCESS_KEY"] = existing.get(
+        "RUNPOD_S3_SECRET_ACCESS_KEY"
+    ) or prompt_secret("RunPod S3 Secret Access Key")
+    default_dc = existing.get("RUNPOD_DATACENTER_ID") or "US-KS-2"
+    print(
+        f"  {DIM}Datacenter must support the S3 API (e.g. US-KS-2, EU-RO-1, "
+        f"EU-CZ-1, EUR-IS-1).{RESET}"
+    )
+    dc = input(f"  RunPod datacenter {DIM}[{default_dc}]{RESET}: ").strip()
+    out["RUNPOD_DATACENTER_ID"] = dc or default_dc
+    return out
 
 
 def prompt_claude_auth() -> dict[str, str]:
@@ -319,6 +431,10 @@ def _existing_config_choice(existing: dict[str, str]) -> str:
             print(f"    {GREEN}✓{RESET} {p}")
         if existing.get("MODAL_TOKEN_ID"):
             print(f"    {GREEN}✓{RESET} Modal credentials")
+        if existing.get("RUNPOD_API_KEY"):
+            print(f"    {GREEN}✓{RESET} RunPod credentials")
+        provider = (existing.get("COMPUTE_PROVIDER") or "modal").lower()
+        print(f"    {GREEN}✓{RESET} Compute provider: {provider}")
     else:
         print(f"  {DIM}Existing .env appears empty.{RESET}")
     print()
@@ -337,18 +453,21 @@ def cmd_init():
     banner()
 
     dest = CONFIG_DIR
-    dest.mkdir(parents=True, exist_ok=True)
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # `mode` is ignored when the directory already exists, so chmod explicitly
+    # to tighten a pre-existing loose (e.g. 0755) config dir holding secrets.
+    os.chmod(dest, 0o700)
     print(f"  {DIM}Config directory: {dest}{RESET}")
 
     # Step 1 — check Docker
     step(1, 4, "Checking prerequisites")
     check_docker()
 
-    # Step 2 — download compose file
-    step(2, 4, "Downloading docker-compose.prod.yml")
+    # Step 2 — write compose file from the wheel's bundled template
+    step(2, 4, "Writing docker-compose.prod.yml")
     if (dest / COMPOSE_FILE).exists():
         warn(f"{COMPOSE_FILE} already exists, overwriting")
-    download_file(COMPOSE_FILE, dest)
+    write_compose_from_template(dest)
 
     # Step 3 — wizard. If config exists, give the user three paths so they
     # don't lose previously-entered keys when adding a new provider.
@@ -369,31 +488,23 @@ def cmd_init():
             print()
             print("  Pick what to add or replace; existing keys are preserved.")
             config.update(prompt_providers(required=False))
-            # Modal — only re-prompt if missing.
-            if not (config.get("MODAL_TOKEN_ID") and config.get("MODAL_TOKEN_SECRET")):
+            # Compute — only re-prompt when the configured provider is
+            # missing its credentials.
+            if not _has_compute_creds(config):
                 print()
                 print(
-                    f"  {DIM}Modal tokens missing — need both for sandbox execution.{RESET}\n"
+                    f"  {DIM}Compute credentials missing — needed for sandbox execution.{RESET}"
                 )
-                config["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
-                config["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
+                config.update(prompt_compute_provider(config))
         else:  # replace
             config = {}
             config.update(prompt_providers(required=True))
-            print()
-            print(
-                f"  {DIM}Get your Modal tokens from https://modal.com/settings{RESET}\n"
-            )
-            config["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
-            config["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
+            config.update(prompt_compute_provider(config))
     else:
         # Fresh install path
         config = {}
         config.update(prompt_providers(required=True))
-        print()
-        print(f"  {DIM}Get your Modal tokens from https://modal.com/settings{RESET}\n")
-        config["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
-        config["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
+        config.update(prompt_compute_provider(config))
 
     print()
     write_env(dest, config)
@@ -405,6 +516,10 @@ def cmd_init():
         print(f"  {BOLD}Configured providers:{RESET}")
         for p in providers:
             print(f"    {GREEN}✓{RESET} {p}")
+    print(
+        f"    {GREEN}✓{RESET} Compute: "
+        f"{(config.get('COMPUTE_PROVIDER') or 'modal').lower()}"
+    )
     print(
         f"\n  {DIM}Tip: re-run {BOLD}trainable init{RESET}{DIM} (or "
         f"{BOLD}trainable reconfigure{RESET}{DIM}) anytime to add more keys.{RESET}"
@@ -493,7 +608,21 @@ def _maybe_spawn_browser_opener(url: str) -> None:
 def cmd_up():
     _require_config()
 
-    print(f"\n{GREEN}{BOLD}Starting trainable...{RESET}")
+    # Pin the docker images to this CLI's version: the published image tag
+    # `:0.0.4` ships from the same release that produced this wheel. Without
+    # this, the compose file's `:${TRAINABLE_*_TAG:-latest}` defaults would
+    # pick up whichever stale `:latest` is in the user's docker cache.
+    version = _cli_version()
+    os.environ.setdefault("TRAINABLE_BACKEND_TAG", version)
+    os.environ.setdefault("TRAINABLE_FRONTEND_TAG", version)
+
+    # Refresh the compose file from the wheel's bundled template every time —
+    # users who upgraded the wheel but never re-ran `init` would otherwise
+    # keep an old compose layout (no env-var-tag indirection) and miss the
+    # version pinning entirely. Quiet by default; init handles the noisy path.
+    _write_compose_template(CONFIG_DIR)
+
+    print(f"\n{GREEN}{BOLD}Starting trainable {version}...{RESET}")
     print(f"{DIM}  Frontend:      {FRONTEND_URL}")
     print("  Backend API:   http://localhost:8000")
     print(f"  MinIO Console: http://localhost:9001{RESET}\n")

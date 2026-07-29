@@ -1,14 +1,16 @@
-"""Persistent Jupyter kernels running in Modal Sandboxes, one per session.
+"""Persistent Jupyter kernels, one per session, on the configured compute
+provider.
 
-Architecture: each session owns a long-lived Modal Sandbox that runs
-`python -u -c <KERNEL_PROXY_SCRIPT>`. The proxy starts a real `ipykernel`
+Architecture: each session owns a long-lived sandbox (Modal Sandbox or
+RunPod pod) that runs the kernel proxy. The proxy starts a real `ipykernel`
 subprocess inside the sandbox and speaks ZMQ to it *locally* via
-`jupyter_client`. The Trainable backend drives the proxy over the sandbox's
-stdin/stdout using newline-delimited JSON — no Modal tunnels required.
+`jupyter_client`. The Trainable backend drives the proxy over a
+KernelTransport carrying newline-delimited JSON — stdin/stdout for Modal,
+an HTTP gateway for RunPod. Transport selection lives in services.compute.
 
 Kernel events flow:
-    backend --stdin JSON--> proxy --ZMQ--> ipykernel
-    ipykernel --ZMQ--> proxy --stdout JSON--> backend --SSE--> frontend
+    backend --transport JSON--> proxy --ZMQ--> ipykernel
+    ipykernel --ZMQ--> proxy --transport JSON--> backend --SSE--> frontend
 """
 
 from __future__ import annotations
@@ -20,12 +22,21 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-import modal
+# modal + get_app/get_image/get_volume look unused but are load-bearing:
+# the Modal kernel transport (services/compute/modal_provider/kernel.py)
+# resolves them through THIS module's namespace at call time, and tests
+# patch `km.modal.Sandbox` / `km.get_app` / `km.get_image` / `km.get_volume`.
+import modal  # noqa: F401
 
 from services import notebook_store
 from services.broadcaster import broadcaster
-from services.sandbox import SDK_PREAMBLE, build_sdk_preamble, get_app, get_image
-from services.volume import ensure_session_workspace, get_volume
+from services.sandbox import (  # noqa: F401
+    SDK_PREAMBLE,
+    build_sdk_preamble,
+    get_app,
+    get_image,
+)
+from services.volume import ensure_session_workspace, get_volume  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -249,14 +260,13 @@ class CellExecution:
 @dataclass
 class KernelHandle:
     session_id: str
-    sandbox: modal.Sandbox
+    transport: object  # services.compute.KernelTransport
     state: str = "starting"  # starting | idle | busy | dead
     last_active: float = field(default_factory=time.time)
     created_at: float = field(default_factory=time.time)
     ready_event: asyncio.Event = field(default_factory=asyncio.Event)
     exec_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     reader_task: Optional[asyncio.Task] = None
-    stderr_task: Optional[asyncio.Task] = None
     pending: dict[str, CellExecution] = field(default_factory=dict)
 
 
@@ -311,23 +321,12 @@ class KernelManager:
             await ensure_session_workspace(session_id)
         except Exception as e:
             logger.debug("kernel workspace ensure skipped: %s", e)
-        sb = await modal.Sandbox.create.aio(
-            "python",
-            "-u",
-            "-c",
-            build_kernel_proxy_script(session_id),
-            image=get_image(),
-            volumes={"/data": get_volume()},
-            timeout=KERNEL_MAX_LIFETIME_S,
-            # Anchor cwd to the session workspace so notebook cells that use
-            # relative paths (`open("data/x.parquet")`) land on the volume.
-            workdir=f"/data/sessions/{session_id}",
-            app=await get_app(),
-        )
-        handle = KernelHandle(session_id=session_id, sandbox=sb)
+        from services.compute import get_kernel_transport_factory
+
+        transport = await get_kernel_transport_factory()(session_id)
+        handle = KernelHandle(session_id=session_id, transport=transport)
         self._kernels[session_id] = handle
         handle.reader_task = asyncio.create_task(self._reader_loop(handle))
-        handle.stderr_task = asyncio.create_task(self._stderr_loop(handle))
         return handle
 
     async def get_or_create(self, session_id: str) -> KernelHandle:
@@ -339,8 +338,16 @@ class KernelManager:
             if h and h.state != "dead":
                 return h
             h = await self._spawn(session_id)
+        # Provider-aware readiness budget: RunPod pods can spend minutes
+        # pulling the worker image on a fresh machine.
         try:
-            await asyncio.wait_for(h.ready_event.wait(), timeout=KERNEL_READY_TIMEOUT_S)
+            from services.compute import kernel_ready_timeout_s
+
+            ready_timeout = kernel_ready_timeout_s()
+        except Exception:
+            ready_timeout = KERNEL_READY_TIMEOUT_S
+        try:
+            await asyncio.wait_for(h.ready_event.wait(), timeout=ready_timeout)
         except asyncio.TimeoutError:
             logger.warning("Kernel for session %s never signaled ready", session_id)
             await self.shutdown(session_id)
@@ -349,24 +356,17 @@ class KernelManager:
 
     async def _reader_loop(self, handle: KernelHandle) -> None:
         sid = handle.session_id
-        buf = ""
         try:
-            async for chunk in handle.sandbox.stdout:
-                buf += chunk
-                while "\n" in buf:
-                    line, buf = buf.split("\n", 1)
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        logger.debug("non-JSON proxy stdout: %s", line[:200])
-                        continue
-                    try:
-                        await self._dispatch(handle, event)
-                    except Exception as e:
-                        logger.exception("dispatch error: %s", e)
+            async for line in handle.transport.events():
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    logger.debug("non-JSON proxy event: %s", line[:200])
+                    continue
+                try:
+                    await self._dispatch(handle, event)
+                except Exception as e:
+                    logger.exception("dispatch error: %s", e)
         except Exception as e:
             logger.exception("reader loop: %s", e)
         finally:
@@ -376,13 +376,6 @@ class KernelManager:
                     sid,
                     {"type": "notebook.kernel.state", "data": {"state": "dead"}},
                 )
-
-    async def _stderr_loop(self, handle: KernelHandle) -> None:
-        try:
-            async for chunk in handle.sandbox.stderr:
-                logger.debug("kernel[%s] stderr: %s", handle.session_id, chunk[:500])
-        except Exception:
-            pass
 
     async def _dispatch(self, handle: KernelHandle, event: dict) -> None:
         sid = handle.session_id
@@ -506,7 +499,7 @@ class KernelManager:
         notebook_name: str = notebook_store.DEFAULT_NOTEBOOK_NAME,
     ) -> None:
         handle = await self.get_or_create(session_id)
-        cmd = json.dumps({"action": "execute", "cell_id": cell_id, "code": code}) + "\n"
+        cmd = json.dumps({"action": "execute", "cell_id": cell_id, "code": code})
         async with handle.exec_lock:
             # Pre-register so dispatch can route cell_started / outputs to the
             # correct notebook regardless of which event arrives first.
@@ -518,10 +511,7 @@ class KernelManager:
                     notebook_name=notebook_name,
                 ),
             )
-            # Modal's _StreamWriter: `write` is a synchronous buffer call,
-            # only `drain` is awaited. Neither is a blueprint method.
-            handle.sandbox.stdin.write(cmd.encode("utf-8"))
-            await handle.sandbox.stdin.drain.aio()
+            await handle.transport.send(cmd)
             handle.last_active = time.time()
 
     async def execute_and_wait(
@@ -553,10 +543,8 @@ class KernelManager:
         handle = self._kernels.get(session_id)
         if not handle or handle.state == "dead":
             return False
-        cmd = json.dumps({"action": "interrupt"}) + "\n"
         try:
-            handle.sandbox.stdin.write(cmd.encode("utf-8"))
-            await handle.sandbox.stdin.drain.aio()
+            await handle.transport.send(json.dumps({"action": "interrupt"}))
         except Exception as e:
             logger.warning("interrupt write failed: %s", e)
             return False
@@ -569,19 +557,15 @@ class KernelManager:
         handle.state = "dead"
         # Ask the proxy to shut down gracefully, then terminate the sandbox.
         try:
-            handle.sandbox.stdin.write(
-                (json.dumps({"action": "shutdown"}) + "\n").encode("utf-8")
-            )
-            await handle.sandbox.stdin.drain.aio()
+            await handle.transport.send(json.dumps({"action": "shutdown"}))
         except Exception:
             pass
         try:
-            await handle.sandbox.terminate.aio()
+            await handle.transport.terminate()
         except Exception as e:
             logger.debug("terminate: %s", e)
-        for task in (handle.reader_task, handle.stderr_task):
-            if task and not task.done():
-                task.cancel()
+        if handle.reader_task and not handle.reader_task.done():
+            handle.reader_task.cancel()
         await broadcaster.publish(
             session_id, {"type": "notebook.kernel.state", "data": {"state": "dead"}}
         )

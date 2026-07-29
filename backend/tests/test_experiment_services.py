@@ -187,6 +187,39 @@ async def test_record_upload_writes_kind_raw():
 
 
 @pytest.mark.asyncio
+async def test_record_upload_streaming_hash_and_size():
+    """Streaming callers pass content_hash + size_bytes instead of content."""
+    pid = str(uuid.uuid4())
+    async with async_session() as db:
+        db.add(Project(id=pid, name="t"))
+        await db.commit()
+    out = await record_upload(
+        project_id=pid,
+        path=f"/projects/{pid}/datasets/big.csv",
+        content_hash="a" * 64,
+        size_bytes=12345,
+    )
+    assert out["hash"] == "a" * 64
+    assert out["size_bytes"] == 12345
+
+
+@pytest.mark.asyncio
+async def test_record_upload_hash_without_size_raises():
+    """Regression (review on #147): content_hash without size_bytes used to
+    silently record size_bytes=0 — now it's a hard error."""
+    pid = str(uuid.uuid4())
+    async with async_session() as db:
+        db.add(Project(id=pid, name="t"))
+        await db.commit()
+    with pytest.raises(ValueError, match="size_bytes is required"):
+        await record_upload(
+            project_id=pid,
+            path=f"/projects/{pid}/datasets/big.csv",
+            content_hash="b" * 64,
+        )
+
+
+@pytest.mark.asyncio
 async def test_transition_state_allowed_path():
     _, sid = await _seed_project_session()
     exp = await create_experiment_declared(

@@ -1,5 +1,6 @@
 """Sync processed data from Modal Volume to S3 after stage completion."""
 
+import asyncio
 import logging
 import mimetypes
 
@@ -55,7 +56,10 @@ async def sync_stage_to_s3(session_id: str, experiment_id: str, stage: str) -> d
 
         try:
             data = await read_volume_file_async(entry.path)
-            s3.put_object(
+            # boto3 is synchronous — run it in a worker thread so the
+            # per-file loop doesn't stall the event loop.
+            await asyncio.to_thread(
+                s3.put_object,
                 Bucket=bucket,
                 Key=s3_key,
                 Body=data,
