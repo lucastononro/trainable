@@ -1,3 +1,13 @@
+import type {
+  CellCompletedEvent,
+  CellDisplayEvent,
+  CellErrorEvent,
+  CellStartedEvent,
+  CellStreamEvent,
+  KernelStateEvent,
+  StructureChangedEvent,
+} from './notebook/types';
+
 export interface SandboxProfile {
   gpu?: string | null;
   timeout?: number | null;
@@ -8,11 +18,24 @@ export interface SandboxConfig {
   training?: SandboxProfile | null;
 }
 
+/** Pre-flight training controls (issue #104). Every field optional —
+ *  an empty config leaves the trainer agent fully autonomous. */
+export interface TrainingConfig {
+  optimization_metric?: string | null;
+  model_families?: string[] | null;
+  max_trials?: number | null;
+  max_wallclock_minutes?: number | null;
+  max_cost_usd?: number | null;
+}
+
 export interface Project {
   id: string;
   name: string;
   description: string;
   sandbox_config: SandboxConfig;
+  /** Hard-stop USD spend cap across the whole project. null = uncapped. */
+  budget_usd?: number | null;
+  training_config: TrainingConfig;
   created_at: string;
   updated_at: string;
   experiment_count: number;
@@ -28,6 +51,26 @@ export interface CreateProjectResponse {
   project: Project;
   experiment: Experiment;
   session_id: string;
+}
+
+/** A bundled demo dataset tile (GET /api/samples). */
+export interface SampleDataset {
+  id: string;
+  name: string;
+  /** classification | regression | object-detection */
+  task: string;
+  description: string;
+  suggested_prompt: string;
+  file_count: number;
+  size_bytes: number;
+  /** false when the server deployment doesn't ship sample-data/. */
+  available: boolean;
+}
+
+export interface CreateProjectFromSampleResponse extends CreateProjectResponse {
+  sample_id: string;
+  suggested_prompt: string;
+  uploaded_files: string[];
 }
 
 export interface Experiment {
@@ -148,6 +191,14 @@ export interface ChartConfig {
   charts: ChartConfigEntry[];
 }
 
+// Wire shape of the `chart_config` SSE event. Unlike the app-level
+// `ChartConfig`, `charts` is optional here: the payload is unvalidated
+// backend output, so handlers must guard before promoting it to a
+// `ChartConfig` (see the `chart_config` case in page.tsx).
+export interface ChartConfigSSEData {
+  charts?: ChartConfigEntry[];
+}
+
 // Rich (non-scalar) log payload streamed from the agent. Shape of
 // `payload` is per-`type`; renderers narrow it inside the panel.
 export interface LogEvent {
@@ -211,6 +262,27 @@ export interface FileTreeNode {
   path: string;
   type: 'file' | 'directory';
   children?: FileTreeNode[];
+}
+
+/** Per-column quick-profile stats for a raw uploaded dataset. */
+export interface RawColumnProfile {
+  name: string;
+  dtype: string;
+  missing_pct: number;
+  /** Approximate distinct-value count (DuckDB approx_unique). */
+  unique_count: number;
+}
+
+/** Head rows + quick profile of a raw uploaded file, pre-prep. */
+export interface RawDatasetPreview {
+  path: string;
+  name: string;
+  format: 'csv' | 'tsv' | 'parquet';
+  row_count: number;
+  column_count: number;
+  columns: RawColumnProfile[];
+  head_columns: string[];
+  head_rows: Array<Array<string | number | boolean | null>>;
 }
 
 // API response shapes
@@ -355,6 +427,14 @@ export interface NotebookCreatedData {
   notebook_name: string;
   notebook_path: string;
 }
+// Wire shape of the `budget_exceeded` SSE event (#107): the runner halted
+// the agent because project spend crossed its cap.
+export interface BudgetExceededSSEData {
+  error: string;
+  project_id: string;
+  budget_usd?: number | null;
+  spent_usd: number;
+}
 export interface TaskDeletedData {
   id: number;
 }
@@ -411,10 +491,10 @@ export interface ApprovalResolvedData {
 // Discriminated union of every SSE event the frontend understands. Narrow on
 // `event.type` (a plain switch/if works — each member's `type` is a string
 // literal) to get a correctly-typed `event.data` with no `as any` needed.
-// Events the app doesn't act on directly (e.g. the fine-grained
-// `notebook.cell.*` stream, consumed only by `useNotebookSSE` via the
-// shared `SSEStreamContext` bus) aren't modeled here; they still flow
-// through at runtime, just without page-level type narrowing.
+// The fine-grained `notebook.cell.*` stream is consumed only by
+// `useNotebookSSE` via the shared `SSEStreamContext` bus; its members are
+// modeled here (payload types live in `lib/notebook/types.ts`) so the bus
+// stays fully typed end to end.
 export type SSEEvent =
   | { type: 'state_change'; data: StateChangeData }
   | { type: 'agent_token' | 'agent_message'; data: AgentMessageData }
@@ -430,7 +510,7 @@ export type SSEEvent =
   | { type: 'session_resumed'; data: SessionResumedData }
   | { type: 'metrics_batch'; data: MetricsBatchData }
   | { type: 'metric'; data: MetricEventData }
-  | { type: 'chart_config'; data: ChartConfig }
+  | { type: 'chart_config'; data: ChartConfigSSEData }
   | { type: 'log_event'; data: LogEventSSEData }
   | { type: 'canvas_html'; data: CanvasHtmlData }
   | { type: 'subagent_start'; data: SubAgentStartData }
@@ -443,6 +523,14 @@ export type SSEEvent =
   | { type: 'agent_tool_call'; data: AgentToolCallData }
   | { type: 'clarification_exchange'; data: ClarificationExchangeData }
   | { type: 'notebook.created'; data: NotebookCreatedData }
+  | { type: 'notebook.kernel.state'; data: KernelStateEvent }
+  | { type: 'notebook.structure.changed'; data: StructureChangedEvent }
+  | { type: 'notebook.cell.started'; data: CellStartedEvent }
+  | { type: 'notebook.cell.stream'; data: CellStreamEvent }
+  | { type: 'notebook.cell.display'; data: CellDisplayEvent }
+  | { type: 'notebook.cell.error'; data: CellErrorEvent }
+  | { type: 'notebook.cell.completed'; data: CellCompletedEvent }
+  | { type: 'budget_exceeded'; data: BudgetExceededSSEData }
   | {
       type:
         | 'experiment_created'
@@ -537,6 +625,17 @@ export interface UsageSummary {
   }>;
   by_session: SessionUsageRow[];
   events: UsageEvent[];
+  /** Project-level budget vs. accumulated spend. null when the session has
+   *  no resolvable project. spent_usd is the WHOLE project's spend. */
+  budget?: BudgetInfo | null;
+}
+
+export interface BudgetInfo {
+  project_id: string;
+  budget_usd: number | null;
+  spent_usd: number;
+  remaining_usd: number | null;
+  exceeded: boolean;
 }
 
 export interface SkillCatalogEntry {
@@ -592,6 +691,26 @@ export interface ComputeOption {
   blurb: string;
 }
 
+// Input schema for the in-app prediction playground (Test panel on
+// /models). `feature_columns: null` means the training dataset's
+// metadata is gone — the panel falls back to CSV-upload-only mode.
+export interface PredictSchema {
+  model_id: string;
+  feature_columns: string[] | null;
+  target_column: string | null;
+  endpoint_url: string | null;
+  has_live_deployment: boolean;
+}
+
+// Relayed verbatim from the deployed Modal endpoint through the backend
+// proxy. `predictions` is one element per input record — class label
+// for classifiers, numeric value for regressors.
+export interface PredictProxyResponse {
+  predictions: unknown[];
+  model?: string;
+  version?: number;
+}
+
 export interface DeploymentRow {
   id: string;
   model_id: string;
@@ -616,6 +735,43 @@ export interface RunSnapshotRow {
   env_lockfile_size: number;
   manifest_uri: string | null;
   created_at: string;
+}
+
+// Result of the active "Reproduce" action: the snapshot's captured scripts
+// are re-executed in a sandbox and the resulting metrics diffed vs the
+// original run (POST /sessions/{id}/snapshot/reproduce).
+export interface MetricDiffRow {
+  name: string;
+  original: number | null;
+  reproduced: number | null;
+  abs_diff: number | null;
+  rel_diff: number | null;
+  status: 'match' | 'drift' | 'missing' | 'new';
+}
+
+export interface ReproduceReport {
+  session_id: string;
+  snapshot_id: number;
+  reproduced_at: string;
+  tolerance: number;
+  status: 'match' | 'drift' | 'error';
+  inputs: {
+    dataset_verified: boolean;
+    code_verified: boolean;
+    changed_files: { path: string; expected_sha256: string; actual_sha256: string | null }[];
+  };
+  execution: {
+    returncode: number;
+    scripts: string[];
+    stderr_tail: string;
+  };
+  metrics: {
+    original: Record<string, number>;
+    reproduced: Record<string, number>;
+    rows: MetricDiffRow[];
+    summary: { matched: number; drifted: number; missing: number; new: number };
+    drift_detected: boolean;
+  };
 }
 
 export interface DatasetVersionRow {
@@ -798,6 +954,57 @@ export type TaskUpdatePayload = Partial<TaskCreatePayload>;
 // SSE payloads for task_created and task_updated. Server pushes the full
 // Task dict — UI just upserts by id.
 export type TaskEventData = Task;
+
+// ---------------------------------------------------------------------------
+// /compare — session comparison payload (routers/compare.py)
+// ---------------------------------------------------------------------------
+
+// Session + experiment header row. When a requested id doesn't exist the
+// backend still returns a stub with `missing: true` so the UI can keep the
+// user-supplied ordering.
+export interface CompareSessionInfo {
+  id: string;
+  missing: boolean;
+  experiment_id?: string;
+  experiment_name?: string;
+  state?: string;
+  model?: string | null;
+  created_at?: string;
+}
+
+export interface CompareMetricSample {
+  step: number;
+  value: number;
+  stage?: string | null;
+}
+
+// One series per session for a given metric name.
+export interface CompareMetricSeries {
+  session_id: string;
+  points: CompareMetricSample[];
+}
+
+export interface CompareFeatureOverlap {
+  common: string[];
+  per_session: Record<string, string[]>;
+}
+
+export interface CompareSessionTotals {
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  sandbox_seconds: number;
+}
+
+export interface CompareResponse {
+  sessions: CompareSessionInfo[];
+  // metric name → per-session series (points ordered by step)
+  metrics: Record<string, CompareMetricSeries[]>;
+  // Backend quirk: initialized as an empty list and only replaced with the
+  // overlap object when at least one session has a prep summary.
+  feature_overlap: CompareFeatureOverlap | never[];
+  totals: Record<string, CompareSessionTotals>;
+}
 
 // Structured search result emitted by web-search and papers-search(search)
 // alongside the markdown text output. Used by the chat to render a rich

@@ -5,12 +5,7 @@ import { useApp } from '@/lib/AppContext';
 import { SSEStreamProvider } from '@/lib/SSEStreamContext';
 import { api } from '@/lib/api';
 import type { EdaFinding, Mention, Draft, TaskCreatePayload, TaskUpdatePayload } from '@/lib/types';
-import {
-  appendTextToDraft,
-  draftToWire,
-  isDraftEmpty,
-  draftToPlainText,
-} from '@/lib/mentions';
+import { appendTextToDraft, draftToWire, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
 import {
   ImperativePanelHandle,
   Panel,
@@ -19,7 +14,7 @@ import {
 } from 'react-resizable-panels';
 import { BarChart3, Database, GripVertical, Loader2, PanelRightOpen } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
-import ErrorBoundary from '@/components/ErrorBoundary';
+import { ErrorBoundary } from '@/components/ErrorBoundary';
 import AgentStatusIndicator from '@/components/AgentStatusIndicator';
 import CostBadge from '@/components/CostBadge';
 import S3FileBrowserModal from '@/components/S3FileBrowserModal';
@@ -124,6 +119,7 @@ function HomePageContent() {
     logEvents,
     usageTotals,
     recentUsage,
+    budgetInfo,
     activeAgents,
   } = useSessionStream(activeExperimentId, activeSessionId, {
     openCanvas,
@@ -250,9 +246,7 @@ function HomePageContent() {
   // Multiple clicks stack instructions line-by-line into one prompt.
   const handleApplyInPrep = useCallback((finding: EdaFinding) => {
     const cols =
-      finding.columns.length > 0
-        ? ` on ${finding.columns.map((c) => `\`${c}\``).join(', ')}`
-        : '';
+      finding.columns.length > 0 ? ` on ${finding.columns.map((c) => `\`${c}\``).join(', ')}` : '';
     const line = `In data prep, address the EDA finding [${finding.finding_type}]${cols}: ${finding.recommendation}`;
     setDraft((prev) => appendTextToDraft(prev, isDraftEmpty(prev) ? line : `\n${line}`));
   }, []);
@@ -608,7 +602,9 @@ function HomePageContent() {
 
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
-          {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
+          {hasActiveSession && (
+            <CostBadge totals={usageTotals} recent={recentUsage} budget={budgetInfo} />
+          )}
 
           {hasActiveSession && (
             <>
@@ -666,6 +662,9 @@ function HomePageContent() {
           // Welcome screen — shown whenever the chat has no user turn yet
           // -------------------------------------------------------------------
           <WelcomeScreen
+            activeSessionId={activeSessionId}
+            activeProjectId={activeProjectId}
+            experiments={experiments}
             draft={draft}
             onDraftChange={setDraft}
             onSend={handleSend}
@@ -694,6 +693,10 @@ function HomePageContent() {
             {/* Chat panel */}
             <Panel defaultSize={canvasOpen ? 30 : 100} minSize={20}>
               <ChatPane
+                activeSessionId={activeSessionId}
+                activeProjectId={activeProjectId}
+                experiments={experiments}
+                isRunning={isRunning}
                 canvasOpen={canvasOpen}
                 chatItems={chatItems}
                 streamingItemIdRef={streamingItemIdRef}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, type Dispatch, type RefObject, type SetStateAction } from 'react';
+import { useEffect, useRef, type Dispatch, type RefObject, type SetStateAction } from 'react';
 import {
   ArrowUp,
   BarChart3,
@@ -13,9 +13,9 @@ import {
   Terminal,
   Upload,
 } from 'lucide-react';
-import { useApp } from '@/lib/AppContext';
 import { isDraftEmpty } from '@/lib/mentions';
-import type { Draft } from '@/lib/types';
+import { takeSuggestedPrompt } from '@/lib/suggestedPrompt';
+import type { Draft, Experiment } from '@/lib/types';
 import MentionInput, { MentionInputHandle } from '@/components/MentionInput';
 import AttachedFilesPreview from '@/components/chat/AttachedFilesPreview';
 
@@ -48,6 +48,9 @@ const SUGGESTIONS = [
 // ---------------------------------------------------------------------------
 
 export default function WelcomeScreen({
+  activeSessionId,
+  activeProjectId,
+  experiments,
   draft,
   onDraftChange,
   onSend,
@@ -64,8 +67,13 @@ export default function WelcomeScreen({
   onOpenS3Browser,
   sessionAttachedFiles,
 }: {
+  // Passed as props (not read from AppContext) so the component stays
+  // reusable and testable outside the studio page.
+  activeSessionId: string | null;
+  activeProjectId: string | null;
+  experiments: Experiment[];
   draft: Draft;
-  onDraftChange: (draft: Draft) => void;
+  onDraftChange: Dispatch<SetStateAction<Draft>>;
   onSend: () => void;
   attachedFiles: File[];
   onRemoveAttachedFile: (index: number) => void;
@@ -82,8 +90,18 @@ export default function WelcomeScreen({
   onOpenS3Browser: () => void;
   sessionAttachedFiles: { name: string; sandboxPath: string }[];
 }) {
-  const { activeProjectId, experiments } = useApp();
   const inputRef = useRef<MentionInputHandle | null>(null);
+
+  // Seed the chat input with the suggested prompt handed off by the
+  // sample-dataset gallery (first-run flow). Consumed exactly once, and
+  // never clobbers something the user already typed.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const prompt = takeSuggestedPrompt(activeSessionId);
+    if (!prompt) return;
+    onDraftChange((prev) => (isDraftEmpty(prev) ? [{ kind: 'text', value: prompt }] : prev));
+    inputRef.current?.focus();
+  }, [activeSessionId, onDraftChange]);
 
   // Handle welcome-screen suggestion click
   const handleSuggestion = (prompt: string) => {
@@ -120,6 +138,7 @@ export default function WelcomeScreen({
             {/* Attach button */}
             <div className="relative" ref={attachMenuRef}>
               <button
+                type="button"
                 onClick={() => setShowAttachMenu(!showAttachMenu)}
                 className={`p-1.5 rounded-xl transition-colors shrink-0 ${
                   showAttachMenu

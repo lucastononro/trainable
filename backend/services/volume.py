@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import tempfile
+from typing import AsyncIterator
 
 import modal
 
@@ -93,6 +94,33 @@ async def read_volume_file_async(path: str) -> bytes:
         return b"".join(get_volume().read_file(path))
 
     return await asyncio.get_running_loop().run_in_executor(None, _sync)
+
+
+async def iter_volume_file_chunks_async(
+    path: str, *, chunk_size: int = 1024 * 1024
+) -> AsyncIterator[bytes]:
+    """Yield Modal Volume file bytes without joining the whole file in memory."""
+
+    sentinel = object()
+
+    def _open():
+        return iter(get_volume().read_file(path))
+
+    def _next(iterator):
+        try:
+            return next(iterator)
+        except StopIteration:
+            return sentinel
+
+    loop = asyncio.get_running_loop()
+    iterator = await loop.run_in_executor(None, _open)
+    while True:
+        chunk = await loop.run_in_executor(None, _next, iterator)
+        if chunk is sentinel:
+            break
+        data = bytes(chunk)
+        for i in range(0, len(data), chunk_size):
+            yield data[i : i + chunk_size]
 
 
 async def listdir_async(path: str, recursive: bool = False) -> list:

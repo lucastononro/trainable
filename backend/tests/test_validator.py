@@ -182,6 +182,69 @@ async def test_validate_prep_output_no_metadata_json():
 
 
 @pytest.mark.asyncio
+async def test_validate_prep_output_corrupt_train_parquet():
+    """A train.parquet that fails to parse must degrade to warnings on the
+    null and leakage checks (raising the captured read error), never crash
+    the whole validation. Exercises the shared parse-once + re-raise path."""
+    good = _make_parquet_bytes({"x": [1, 2], "y": [0, 1]})
+    files = {
+        "/sessions/s1/data/train.parquet": b"not a parquet file",
+        "/sessions/s1/data/val.parquet": good,
+        "/sessions/s1/data/test.parquet": good,
+    }
+    vol = MockVolume(files)
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
+        from services.validator import validate_prep_output
+
+        result = await validate_prep_output("s1", "exp1")
+
+    warning_texts = " ".join(result["warnings"])
+    assert "Could not check nulls" in warning_texts
+    assert "Could not check leakage" in warning_texts
+    # Validation still completed the rest of the checklist.
+    assert result["stage"] == "prep"
+    assert any("metadata.json" in w for w in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_validate_prep_output_parses_train_parquet_once(mock_volume_with_prep):
+    """Regression for the PR's core optimization: train.parquet must be
+    parsed into a DataFrame exactly once and reused by the null, leakage,
+    and constant-column checks."""
+    from unittest.mock import patch
+
+    import services.validator as validator_mod
+
+    real = validator_mod._read_parquet_df
+    calls = []
+
+    def counting(raw):
+        calls.append(1)
+        return real(raw)
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "services.validator"):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("services.validator._read_parquet_df", side_effect=counting)
+        )
+
+        result = await validator_mod.validate_prep_output(
+            "test-session", "test-experiment"
+        )
+
+    assert len(calls) == 1
+    passed_texts = " ".join(result["passed"])
+    assert "No null values" in passed_texts
+    assert "No row overlap" in passed_texts
+    assert "No constant columns" in passed_texts
+
+
+@pytest.mark.asyncio
 async def test_validate_train_output_all_good(mock_volume_with_train):
     with ExitStack() as stack:
         for p in mock_volume_patches(mock_volume_with_train, "services.validator"):

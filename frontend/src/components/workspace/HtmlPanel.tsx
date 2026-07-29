@@ -3,6 +3,7 @@
 import { memo, useEffect, useState } from 'react';
 import { AlertCircle, ExternalLink, Globe, Loader2 } from 'lucide-react';
 import type { HtmlArtifact } from '@/lib/types';
+import { api } from '@/lib/api';
 
 // ---------------------------------------------------------------------------
 // HtmlPanel -- renders an agent-published HTML artifact in a sandboxed
@@ -40,7 +41,7 @@ const HtmlPanel = memo(function HtmlPanel({ artifact }: { artifact: HtmlArtifact
     );
   }
 
-  const rawUrl = `/api/files/raw?path=${encodeURIComponent(artifact.path)}`;
+  const rawUrl = api.filesRawUrl(artifact.path);
   const sizeLabel = humanArtifactBytes(artifact.size);
 
   return (

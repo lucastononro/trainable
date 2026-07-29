@@ -15,6 +15,7 @@ import type {
   Task,
   GeneratedFile,
   UsageEvent,
+  BudgetInfo,
   EdaFinding,
 } from '@/lib/types';
 import { type ChatItem, metaStr, metaNum } from '@/lib/chatItems';
@@ -64,6 +65,9 @@ export interface SessionStream {
   // Live usage totals for the active session (cost badge in header)
   usageTotals: UsageTotals;
   recentUsage: UsageEvent[];
+  /** Project budget vs. spend (issue #107) — hydrated with session usage,
+   *  flipped to exceeded by the budget_exceeded SSE event. */
+  budgetInfo: BudgetInfo | null;
   // Active agents tracking (for header indicator)
   activeAgents: ActiveAgent[];
 }
@@ -151,6 +155,7 @@ export function useSessionStream(
   // Live usage totals for the active session (cost badge in header)
   const [usageTotals, setUsageTotals] = useState<UsageTotals>(ZERO_USAGE);
   const [recentUsage, setRecentUsage] = useState<UsageEvent[]>([]);
+  const [budgetInfo, setBudgetInfo] = useState<BudgetInfo | null>(null);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -221,8 +226,10 @@ export function useSessionStream(
           const event = JSON.parse(e.data) as SSEEvent;
           // Fan out the parsed event to any other subscriber (e.g. the
           // notebook) before/independent of the switch below — this is the
-          // single EventSource for the session, so everyone shares it.
-          publish(event);
+          // single EventSource for the session, so everyone shares it. `sid`
+          // tags the event with its owning session so subscribers can ignore
+          // stale cross-session deliveries during a session switch.
+          publish(sid, event);
 
           // Narrowing on `event.type` below gives each case a correctly
           // typed `event.data` (see the `SSEEvent` union in lib/types.ts) —
@@ -249,7 +256,8 @@ export function useSessionStream(
               if (
                 data.state.includes('done') ||
                 data.state === 'failed' ||
-                data.state === 'cancelled'
+                data.state === 'cancelled' ||
+                data.state === 'budget_exceeded'
               ) {
                 streamingItemIdRef.current = null;
                 setIsRunning(false);
@@ -531,6 +539,22 @@ export function useSessionStream(
                     : 'Resuming — continuing from recovered progress',
               });
               setIsRunning(true);
+              break;
+            }
+            case 'budget_exceeded': {
+              // Hard-stop guardrail (#107): the runner halted the agent
+              // because project spend crossed its cap.
+              const data = event.data;
+              streamingItemIdRef.current = null;
+              addItem({ type: 'error', content: data.error });
+              setBudgetInfo({
+                project_id: data.project_id,
+                budget_usd: data.budget_usd ?? null,
+                spent_usd: data.spent_usd ?? 0,
+                remaining_usd: 0,
+                exceeded: true,
+              });
+              setIsRunning(false);
               break;
             }
             case 'metrics_batch': {
@@ -910,6 +934,15 @@ export function useSessionStream(
       source.onerror = () => setSseConnected(false);
       sseRef.current = source;
     },
+    // INVARIANT: every dep here must be referentially stable, because
+    // `connectSSE` is itself a dep of the session-load effect below — a new
+    // identity would re-run that effect, tearing down the EventSource and
+    // reloading the session. Verified stable: `addItem` (useCallback []),
+    // `appendEdaFindings` (useCallback []), `openCanvas` (page-level
+    // useCallback [], per the options contract), `publish` (SSEStreamContext
+    // useCallback []), `refreshExperiments` (AppContext useCallback []),
+    // `setIsRunning` (raw useState setter).
+    // If you add a dep, keep it stable or the invariant breaks silently.
     [addItem, appendEdaFindings, openCanvas, publish, refreshExperiments, setIsRunning],
   );
 
@@ -951,6 +984,7 @@ export function useSessionStream(
     activeAgentsRef.current = [];
     setUsageTotals(ZERO_USAGE);
     setRecentUsage([]);
+    setBudgetInfo(null);
     setTasks([]);
   }, [collapseCanvas, onReset, setIsRunning]);
 
@@ -1004,6 +1038,7 @@ export function useSessionStream(
             compute_runs: t.compute_runs || 0,
           });
           setRecentUsage(s.events ?? []);
+          setBudgetInfo(s.budget ?? null);
         })
         .catch(() => {
           /* historical usage is best-effort; live SSE will fill in */
@@ -1455,6 +1490,7 @@ export function useSessionStream(
     logEvents,
     usageTotals,
     recentUsage,
+    budgetInfo,
     activeAgents,
   };
 }

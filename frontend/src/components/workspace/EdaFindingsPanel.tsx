@@ -65,7 +65,9 @@ function FindingCard({
         <span className="text-sm font-medium text-gray-100">
           {TYPE_LABEL[finding.finding_type] || TYPE_LABEL.other}
         </span>
-        <span className={`text-[10px] px-1.5 py-0.5 rounded-md uppercase tracking-wider ${style.badge}`}>
+        <span
+          className={`text-[10px] px-1.5 py-0.5 rounded-md uppercase tracking-wider ${style.badge}`}
+        >
           {finding.severity}
         </span>
       </div>
@@ -127,15 +129,13 @@ export function EdaFindingsPanel({
 }) {
   // Critical first, then warnings, then info — stable within each bucket.
   const order = { critical: 0, warning: 1, info: 2 } as const;
-  const sorted = [...findings].sort(
-    (a, b) => (order[a.severity] ?? 1) - (order[b.severity] ?? 1),
-  );
+  const sorted = [...findings].sort((a, b) => (order[a.severity] ?? 1) - (order[b.severity] ?? 1));
 
   return (
     <div className="h-full overflow-y-auto bg-black p-4">
       <div className="mb-3 text-xs text-gray-500">
-        Structured findings from the EDA pass. “Apply in prep” pre-fills the chat with a
-        data-prep instruction — review it, then send.
+        Structured findings from the EDA pass. “Apply in prep” pre-fills the chat with a data-prep
+        instruction — review it, then send.
       </div>
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         {sorted.map((f) => (

@@ -37,10 +37,22 @@ RESUMABLE_TERMINAL_STATES = {"failed", "cancelled", "timed_out", "done"}
 
 def is_resumable_state(state: str | None) -> bool:
     state = state or ""
-    return state in RESUMABLE_TERMINAL_STATES or state.endswith("_running") or state.endswith("_done")
+    return (
+        state in RESUMABLE_TERMINAL_STATES
+        or state.endswith("_running")
+        or state.endswith("_done")
+    )
 
 
-def _clip(text: str, limit: int = _MAX_BLOCK_CHARS) -> str:
+def _prior_run_outcome(prior_state: str) -> str:
+    """How the previous run ended, for prompt wording. `done` / `*_done`
+    sessions are resumed as re-runs of finished work, not interruptions."""
+    if prior_state == "done" or prior_state.endswith("_done"):
+        return "completed"
+    return "stopped early"
+
+
+def _clip(text: str | None, limit: int = _MAX_BLOCK_CHARS) -> str:
     if text is None:
         return ""
     text = str(text)
@@ -122,9 +134,10 @@ async def build_resume_context(session_id: str, prior_state: str) -> str:
     sections = [
         "## Resumed session — recovered progress",
         "",
-        f"This session's previous run stopped early (last recorded state: "
-        f"`{prior_state}`). The evidence of its progress is below. Use it to "
-        "skip steps whose outputs already exist instead of redoing them.",
+        f"This session's previous run {_prior_run_outcome(prior_state)} "
+        f"(last recorded state: `{prior_state}`). The evidence of its progress "
+        "is below. Use it to skip steps whose outputs already exist instead "
+        "of redoing them.",
     ]
 
     sections.append("\n### Task list at interruption")
@@ -133,7 +146,9 @@ async def build_resume_context(session_id: str, prior_state: str) -> str:
     else:
         sections.append("(no tasks were recorded)")
 
-    sections.append(f"\n### Recent tool activity (last {_MAX_TOOL_BLOCKS} blocks, oldest first)")
+    sections.append(
+        f"\n### Recent tool activity (last {_MAX_TOOL_BLOCKS} blocks, oldest first)"
+    )
     if tool_lines:
         sections.append("\n".join(tool_lines))
     else:
@@ -162,8 +177,9 @@ def build_resume_prompt(prior_state: str, mode: str) -> str:
     """The synthetic user prompt the relaunched agent is driven with."""
     verb = "Retry the failed work" if mode == "retry" else "Resume the work"
     return (
-        f"{verb} in this session. The previous run stopped early (last "
-        f"recorded state: `{prior_state}`). Review the 'Resumed session — "
+        f"{verb} in this session. The previous run "
+        f"{_prior_run_outcome(prior_state)} (last recorded state: "
+        f"`{prior_state}`). Review the 'Resumed session — "
         "recovered progress' section of your system prompt: skip steps whose "
         "artifacts already exist in the workspace, then continue from the "
         "first incomplete step through to completion. Do not re-ask questions "

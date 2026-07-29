@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect } from 'react';
+
 // Root-layout error boundary (Next.js App Router convention). `error.tsx`
 // only catches errors thrown *below* the root layout — if `layout.tsx`
 // itself (or anything providers it mounts, e.g. AppProvider/ToastProvider)
@@ -16,6 +18,10 @@ export default function GlobalError({
   error: Error & { digest?: string };
   reset: () => void;
 }) {
+  useEffect(() => {
+    console.error('Global error boundary caught:', error);
+  }, [error]);
+
   return (
     <html lang="en">
       <body
@@ -36,9 +42,7 @@ export default function GlobalError({
         }}
       >
         <div>
-          <h1 style={{ fontSize: '18px', fontWeight: 500, margin: 0 }}>
-            Trainable failed to load
-          </h1>
+          <h1 style={{ fontSize: '18px', fontWeight: 500, margin: 0 }}>Trainable failed to load</h1>
           <p style={{ marginTop: '8px', maxWidth: '420px', fontSize: '14px', color: '#a3a3a3' }}>
             Something went wrong before the app could start. Try again, or reload the page if it
             keeps happening.
