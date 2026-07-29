@@ -16,6 +16,7 @@ import type {
   GeneratedFile,
   UsageEvent,
   BudgetInfo,
+  EdaFinding,
 } from '@/lib/types';
 import { type ChatItem, metaStr, metaNum } from '@/lib/chatItems';
 import type { ActiveAgent } from '@/components/AgentStatusIndicator';
@@ -55,6 +56,8 @@ export interface SessionStream {
   generatedFiles: GeneratedFile[];
   fileTree: FileTreeNode;
   htmlArtifacts: Map<string, HtmlArtifact>;
+  /** Structured EDA findings (issue #111) — rendered as canvas action cards. */
+  edaFindings: EdaFinding[];
   // Metrics state
   metricPoints: MetricPoint[];
   chartConfig: ChartConfig | null;
@@ -132,6 +135,11 @@ export function useSessionStream(
   // Agent-published HTML artifacts: keyed by `key` so regenerating an
   // artifact in the same session overwrites instead of piling tabs.
   const [htmlArtifacts, setHtmlArtifacts] = useState<Map<string, HtmlArtifact>>(() => new Map());
+  // Structured EDA findings (issue #111). Appended per eda_findings batch,
+  // deduped on (type + columns + summary) so a backend resend or a re-run
+  // publishing the same findings doesn't double the cards.
+  const [edaFindings, setEdaFindings] = useState<EdaFinding[]>([]);
+  const edaFindingKeysRef = useRef(new Set<string>());
 
   // Whether the user is scrolled near the bottom of the chat pane. The
   // auto-scroll effect (in ChatPane) only fires while this stays true —
@@ -170,6 +178,37 @@ export function useSessionStream(
       { ...item, id: `${Date.now()}-${Math.random()}`, timestamp: Date.now() },
     ]);
   }, []);
+
+  // Append a batch of structured EDA findings (live SSE or reload-hydrate),
+  // deduped so resends don't double the cards. Opens the canvas when new
+  // cards land — same contract as metrics/log events.
+  const appendEdaFindings = useCallback(
+    (items: unknown) => {
+      if (!Array.isArray(items)) return;
+      const fresh: EdaFinding[] = [];
+      for (const raw of items) {
+        const f = raw as Partial<EdaFinding> | null;
+        if (!f || typeof f.summary !== 'string' || typeof f.recommendation !== 'string') continue;
+        if (!f.summary || !f.recommendation) continue;
+        const columns = Array.isArray(f.columns) ? f.columns.map(String) : [];
+        const key = `${f.finding_type || 'other'}:${columns.join(',')}:${f.summary}`;
+        if (edaFindingKeysRef.current.has(key)) continue;
+        edaFindingKeysRef.current.add(key);
+        fresh.push({
+          finding_type: f.finding_type || 'other',
+          columns,
+          severity: f.severity === 'info' || f.severity === 'critical' ? f.severity : 'warning',
+          summary: f.summary,
+          recommendation: f.recommendation,
+        });
+      }
+      if (fresh.length > 0) {
+        setEdaFindings((prev) => [...prev, ...fresh]);
+        openCanvas();
+      }
+    },
+    [openCanvas],
+  );
 
   // ---------------------------------------------------------------------------
   // SSE connection
@@ -744,6 +783,11 @@ export function useSessionStream(
               );
               break;
             }
+            // Structured EDA findings (issue #111) — canvas action cards.
+            case 'eda_findings': {
+              appendEdaFindings(event.data.findings);
+              break;
+            }
             // HITL approval gate (issue #108): agent posted a consequential
             // decision and is blocked until the user approves or edits it.
             case 'approval_request': {
@@ -894,11 +938,12 @@ export function useSessionStream(
     // `connectSSE` is itself a dep of the session-load effect below — a new
     // identity would re-run that effect, tearing down the EventSource and
     // reloading the session. Verified stable: `addItem` (useCallback []),
-    // `openCanvas` (page-level useCallback [], per the options contract),
-    // `publish` (SSEStreamContext useCallback []), `refreshExperiments`
-    // (AppContext useCallback []), `setIsRunning` (raw useState setter).
+    // `appendEdaFindings` (useCallback []), `openCanvas` (page-level
+    // useCallback [], per the options contract), `publish` (SSEStreamContext
+    // useCallback []), `refreshExperiments` (AppContext useCallback []),
+    // `setIsRunning` (raw useState setter).
     // If you add a dep, keep it stable or the invariant breaks silently.
-    [addItem, openCanvas, publish, refreshExperiments, setIsRunning],
+    [addItem, appendEdaFindings, openCanvas, publish, refreshExperiments, setIsRunning],
   );
 
   // ---------------------------------------------------------------------------
@@ -928,6 +973,8 @@ export function useSessionStream(
     setLogEvents([]);
     logEventKeysRef.current = new Set();
     setHtmlArtifacts(new Map());
+    setEdaFindings([]);
+    edaFindingKeysRef.current = new Set();
     // Critical: clear per-session agent indicators. If we don't, the previous
     // session's running sub-agents leak into the new one and `agent_message`
     // events get mis-tagged with the wrong agent_type (the stale entry from
@@ -1012,6 +1059,7 @@ export function useSessionStream(
         let restoredCanvasOpen = false;
         let restoredFiles: (GeneratedFile & { _stage?: string })[] = [];
         const restoredHtmlArtifacts = new Map<string, HtmlArtifact>();
+        const restoredEdaFindings: unknown[] = [];
 
         if (sessionData.messages?.length > 0) {
           // Events persisted for introspection/telemetry only — never rendered as bubbles.
@@ -1210,6 +1258,11 @@ export function useSessionStream(
                   },
                 }),
               );
+            } else if (eventType === 'eda_findings') {
+              // Structured EDA findings (issue #111) — restored into the
+              // canvas cards, never rendered as a chat bubble.
+              const items = msg.metadata?.findings;
+              if (Array.isArray(items)) restoredEdaFindings.push(...items);
             } else if (eventType === 'approval_request') {
               // Restore the approval card (pending until a matching
               // approval_resolved row flips it). Critical for reload-mid-gate:
@@ -1318,6 +1371,7 @@ export function useSessionStream(
         }
 
         setChatItems(restored);
+        appendEdaFindings(restoredEdaFindings);
         setCanvasContent(restoredCanvasContent);
         setCanvasTitle(restoredCanvasTitle);
         if (restoredHtmlArtifacts.size > 0) {
@@ -1410,6 +1464,7 @@ export function useSessionStream(
     activeSessionId,
     connectSSE,
     addItem,
+    appendEdaFindings,
     resetSessionState,
     openCanvas,
     setIsRunning,
@@ -1429,6 +1484,7 @@ export function useSessionStream(
     generatedFiles,
     fileTree,
     htmlArtifacts,
+    edaFindings,
     metricPoints,
     chartConfig,
     logEvents,

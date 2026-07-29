@@ -10,11 +10,13 @@ import {
   FolderOpen,
   GitBranch,
   Globe,
+  ListChecks,
   X,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import type {
   ChartConfig,
+  EdaFinding,
   FileTreeNode,
   GeneratedFile,
   HtmlArtifact,
@@ -29,6 +31,7 @@ import NodeMetadataPanel from '@/components/lineage/NodeMetadataPanel';
 import FileTreeRow from '@/components/workspace/FileTreeRow';
 import FileViewer from '@/components/workspace/FileViewer';
 import HtmlPanel from '@/components/workspace/HtmlPanel';
+import { EdaFindingsPanel } from '@/components/workspace/EdaFindingsPanel';
 import MetricsPanel from '@/components/workspace/MetricsPanel';
 import ReportMarkdown from '@/components/workspace/ReportMarkdown';
 import { getFileIconInfo } from '@/components/workspace/fileIcons';
@@ -43,7 +46,7 @@ interface OpenTab {
   label: string;
   icon: typeof FileText;
   iconColor: string;
-  type: 'file' | 'report' | 'metrics' | 'lineage' | 'html';
+  type: 'file' | 'report' | 'metrics' | 'lineage' | 'html' | 'findings';
   /** For type='html': the artifact key (also the suffix of the tab id). */
   htmlKey?: string;
 }
@@ -51,6 +54,7 @@ interface OpenTab {
 const REPORT_TAB_ID = '__report__';
 const METRICS_TAB_ID = '__metrics__';
 const LINEAGE_TAB_ID = '__lineage__';
+const FINDINGS_TAB_ID = '__findings__';
 const HTML_TAB_PREFIX = '__html__:';
 
 export default function WorkspaceCanvas({
@@ -64,6 +68,8 @@ export default function WorkspaceCanvas({
   chartConfig,
   logEvents,
   htmlArtifacts,
+  edaFindings,
+  onApplyInPrep,
   sessionState,
   onClose,
 }: {
@@ -77,6 +83,10 @@ export default function WorkspaceCanvas({
   chartConfig: ChartConfig | null;
   logEvents: LogEvent[];
   htmlArtifacts: Map<string, HtmlArtifact>;
+  /** Structured EDA findings (issue #111) — rendered as action cards. */
+  edaFindings: EdaFinding[];
+  /** "Apply in prep": pre-fill the chat input with a data_prep instruction. */
+  onApplyInPrep: (finding: EdaFinding) => void;
   sessionState: string;
   onClose: () => void;
 }) {
@@ -285,6 +295,28 @@ export default function WorkspaceCanvas({
       setActiveTabId((prev) => prev || REPORT_TAB_ID);
     }
   }, [canvasContent, canvasTitle]);
+
+  // Auto-open the findings tab when structured EDA findings arrive. Only
+  // steals focus when no tab is active — same contract as report/metrics.
+  const hasFindings = edaFindings.length > 0;
+  useEffect(() => {
+    if (hasFindings) {
+      setOpenTabs((prev) => {
+        if (prev.find((t) => t.id === FINDINGS_TAB_ID)) return prev;
+        return [
+          ...prev,
+          {
+            id: FINDINGS_TAB_ID,
+            label: 'Findings',
+            icon: ListChecks,
+            iconColor: 'text-amber-400',
+            type: 'findings',
+          },
+        ];
+      });
+      setActiveTabId((prev) => prev || FINDINGS_TAB_ID);
+    }
+  }, [hasFindings]);
 
   // Auto-open metrics tab when the first metric OR rich log payload arrives
   const hasMetrics = metricPoints.length > 0 || logEvents.length > 0;
@@ -659,6 +691,8 @@ export default function WorkspaceCanvas({
                   </div>
                 ) : tab.type === 'html' ? (
                   <HtmlPanel artifact={tab.htmlKey ? htmlArtifacts.get(tab.htmlKey) : undefined} />
+                ) : tab.type === 'findings' ? (
+                  <EdaFindingsPanel findings={edaFindings} onApplyInPrep={onApplyInPrep} />
                 ) : null}
               </div>
             );

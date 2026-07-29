@@ -442,6 +442,33 @@ export interface SessionResumedData {
   mode?: 'resume' | 'retry';
   prior_state?: string;
 }
+export type EdaFindingType =
+  | 'leakage'
+  | 'class_imbalance'
+  | 'high_cardinality'
+  | 'multicollinearity'
+  | 'missing_values'
+  | 'outliers'
+  | 'duplicates'
+  | 'skewed_target'
+  | 'id_column'
+  | 'constant_column'
+  | 'datetime_leakage'
+  | 'other';
+export interface EdaFinding {
+  finding_type: EdaFindingType;
+  columns: string[];
+  severity: 'info' | 'warning' | 'critical';
+  summary: string;
+  /** Concrete prep instruction — the "Apply in prep" payload. */
+  recommendation: string;
+}
+export interface EdaFindingsData {
+  findings?: EdaFinding[];
+  count?: number;
+  stage?: string;
+  content?: string;
+}
 export type ApprovalKind = 'target_column' | 'prep_plan' | 'model_shortlist' | 'other';
 export interface ApprovalRequestData {
   approval_id?: string;
@@ -492,6 +519,7 @@ export type SSEEvent =
   | { type: 'clarification_resolved'; data: ClarificationResolvedData }
   | { type: 'approval_request'; data: ApprovalRequestData }
   | { type: 'approval_resolved'; data: ApprovalResolvedData }
+  | { type: 'eda_findings'; data: EdaFindingsData }
   | { type: 'agent_tool_call'; data: AgentToolCallData }
   | { type: 'clarification_exchange'; data: ClarificationExchangeData }
   | { type: 'notebook.created'; data: NotebookCreatedData }
