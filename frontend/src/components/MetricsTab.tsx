@@ -116,9 +116,10 @@ interface RichPanel {
 
 // ---------------------------------------------------------------------------
 // Color palette — 16 distinct, ordered for max contrast between neighbors
+// (exported for reuse by the /compare leaderboard charts)
 // ---------------------------------------------------------------------------
 
-const PALETTE = [
+export const PALETTE = [
   '#3B82F6', // blue
   '#F97316', // orange
   '#10B981', // emerald
@@ -150,15 +151,15 @@ function inferGroup(name: string): string {
   return 'Other';
 }
 
-function isLowerBetter(name: string): boolean {
+export function isLowerBetter(name: string): boolean {
   return LOSS_PATTERN.test(name);
 }
 
-function prettyMetricName(name: string): string {
+export function prettyMetricName(name: string): string {
   return name.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function smartFormat(v: number): string {
+export function smartFormat(v: number): string {
   if (v === 0) return '0';
   const abs = Math.abs(v);
   if (abs >= 10000) return v.toLocaleString('en-US', { maximumFractionDigits: 0 });
@@ -168,7 +169,7 @@ function smartFormat(v: number): string {
   return v.toExponential(2);
 }
 
-function compactFormat(v: number): string {
+export function compactFormat(v: number): string {
   const abs = Math.abs(v);
   if (abs >= 1000000) return (v / 1000000).toFixed(1) + 'M';
   if (abs >= 1000) return (v / 1000).toFixed(1) + 'K';
@@ -182,7 +183,20 @@ function compactFormat(v: number): string {
 // Custom Tooltip
 // ---------------------------------------------------------------------------
 
-function ChartTooltip({ active, payload, label }: any) {
+interface ChartTooltipPayloadEntry {
+  color?: string;
+  name?: string;
+  value?: number;
+}
+
+interface ChartTooltipProps {
+  active?: boolean;
+  payload?: ChartTooltipPayloadEntry[];
+  label?: string | number;
+}
+
+// Exported for the compare page (#161); typed per #157 (no `any`).
+export function ChartTooltip({ active, payload, label }: ChartTooltipProps) {
   if (!active || !payload?.length) return null;
   return (
     <div className="bg-black border border-white/10 rounded-lg px-3 py-2.5 shadow-xl shadow-black/50 min-w-[180px]">
@@ -190,7 +204,7 @@ function ChartTooltip({ active, payload, label }: any) {
         Step {label}
       </div>
       <div className="space-y-1.5">
-        {payload.map((entry: any, i: number) => (
+        {payload.map((entry, i) => (
           <div key={i} className="flex items-center justify-between gap-4 text-xs">
             <div className="flex items-center gap-2 min-w-0">
               <div
@@ -200,7 +214,7 @@ function ChartTooltip({ active, payload, label }: any) {
               <span className="text-gray-400 truncate">{entry.name}</span>
             </div>
             <span className="text-white font-mono font-medium tabular-nums">
-              {smartFormat(entry.value)}
+              {typeof entry.value === 'number' ? smartFormat(entry.value) : '—'}
             </span>
           </div>
         ))}
