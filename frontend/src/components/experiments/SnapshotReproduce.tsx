@@ -52,8 +52,7 @@ export function SnapshotReproduce({ sessionId }: { sessionId: string }) {
     }
   };
 
-  const inputsDirty =
-    report && (!report.inputs.dataset_verified || !report.inputs.code_verified);
+  const inputsDirty = report && (!report.inputs.dataset_verified || !report.inputs.code_verified);
 
   return (
     <div className="mt-3 space-y-3">
@@ -99,10 +98,9 @@ export function SnapshotReproduce({ sessionId }: { sessionId: string }) {
 
       {inputsDirty ? (
         <div className="rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-300">
-          Workspace no longer matches the snapshot (
-          {report!.inputs.changed_files.length} file
-          {report!.inputs.changed_files.length === 1 ? '' : 's'} changed) — the replay
-          ran against the current files, not the frozen ones.
+          Workspace no longer matches the snapshot ({report!.inputs.changed_files.length} file
+          {report!.inputs.changed_files.length === 1 ? '' : 's'} changed) — the replay ran against
+          the current files, not the frozen ones.
         </div>
       ) : null}
 
