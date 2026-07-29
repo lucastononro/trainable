@@ -252,6 +252,12 @@ def log_table(step, key, columns, rows, run=None):
 
 
 def log_confusion_matrix(step, key, y_true, y_pred, labels=None, run=None):
+    # Materialize once up front: y_true/y_pred may be generators, and both
+    # the label inference (labels=None) and the matrix computation iterate
+    # them — without this, label inference exhausts them and the matrix
+    # silently comes out all-zero.
+    y_true = list(y_true)
+    y_pred = list(y_pred)
     try:
         from sklearn.metrics import confusion_matrix as _cm  # type: ignore
 
