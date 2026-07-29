@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "trainable-ai"
-version = "0.0.1"
+version = "0.0.4"
 description = "AI-powered ML experimentation platform — local installer"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -24,7 +24,6 @@ packages = ["trainable_cli"]
 
 [project.scripts]
 trainable = "trainable_cli.main:main"
-trainable-ai = "trainable_cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/lucastononro/trainable"

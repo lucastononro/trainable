@@ -10,8 +10,11 @@ import {
   File as FileIcon,
   FolderOpen,
   AlertTriangle,
+  ArrowLeft,
+  Eye,
 } from 'lucide-react';
 import { api } from '@/lib/api';
+import { DatasetPreviewPanel } from '@/components/DatasetPreviewPanel';
 
 interface ProjectFile {
   path: string;
@@ -36,6 +39,7 @@ function fileIcon(name: string) {
   const n = name.toLowerCase();
   if (n.endsWith('.csv') || n.endsWith('.tsv')) return FileSpreadsheet;
   if (n.endsWith('.parquet') || n.endsWith('.feather')) return Database;
+  if (n.endsWith('.pdf')) return FileText;
   if (n.endsWith('.json') || n.endsWith('.md') || n.endsWith('.txt')) return FileText;
   return FileIcon;
 }
@@ -44,6 +48,7 @@ function fileIconColor(name: string): string {
   const n = name.toLowerCase();
   if (n.endsWith('.csv') || n.endsWith('.tsv')) return 'text-green-400';
   if (n.endsWith('.parquet') || n.endsWith('.feather')) return 'text-amber-400';
+  if (n.endsWith('.pdf')) return 'text-rose-400';
   if (n.endsWith('.json')) return 'text-orange-400';
   if (n.endsWith('.md') || n.endsWith('.txt')) return 'text-blue-400';
   return 'text-gray-400';
@@ -57,6 +62,112 @@ function humanSize(bytes: number | null): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
+/** Raw-preview support matches the backend's CSV/TSV/Parquet DuckDB scan. */
+function isPreviewable(name: string): boolean {
+  const n = name.toLowerCase();
+  return n.endsWith('.csv') || n.endsWith('.tsv') || n.endsWith('.parquet');
+}
+
+// Per-folder render budget — folders with thousands of files used to render
+// every row eagerly, blowing up DOM size and initial-render time. Cap to
+// this many; the rest collapse behind a "+N more" toggle.
+const FOLDER_FILE_PREVIEW = 50;
+
+function FolderGroup({
+  group,
+  onPreview,
+}: {
+  group: { folder: string; files: ProjectFile[] };
+  onPreview: (file: ProjectFile) => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const overflow = group.files.length - FOLDER_FILE_PREVIEW;
+  const visible =
+    expanded || overflow <= 0 ? group.files : group.files.slice(0, FOLDER_FILE_PREVIEW);
+
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-2 text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
+        <FolderOpen className="w-3 h-3" />
+        <span className="truncate">{group.folder || '(project root)'}</span>
+        <span className="text-gray-700 normal-case tracking-normal">
+          · {group.files.length} file{group.files.length === 1 ? '' : 's'}
+        </span>
+      </div>
+      <div className="space-y-0.5">
+        {visible.map((f) => {
+          const Icon = fileIcon(f.name);
+          const color = fileIconColor(f.name);
+          const notInSandbox = f.in_sandbox === false;
+          // Show the sub-path inside the folder (if nested) so
+          // uploads like "folder/sub/file.csv" read naturally.
+          const rel = f.relative_path || f.name;
+          const subPath =
+            group.folder && rel.startsWith(group.folder + '/')
+              ? rel.slice(group.folder.length + 1)
+              : rel;
+          // Preview needs the file in the volume — a raw DuckDB scan can't
+          // run against an S3-only upload that never reached the sandbox.
+          const canPreview = isPreviewable(f.name) && !notInSandbox;
+          const rowContent = (
+            <>
+              <Icon className={`w-4 h-4 shrink-0 ${color}`} />
+              <span className="text-sm text-gray-300 flex-1 truncate text-left">{subPath}</span>
+              {canPreview && (
+                <Eye className="w-3.5 h-3.5 shrink-0 text-gray-600 group-hover:text-emerald-400 transition-colors" />
+              )}
+              {notInSandbox && (
+                <span
+                  className="text-[10px] text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5 shrink-0"
+                  title="Uploaded to storage but not synced to the agent sandbox"
+                >
+                  not synced
+                </span>
+              )}
+              <span className="text-[11px] text-gray-600 shrink-0 tabular-nums">
+                {humanSize(f.size)}
+              </span>
+            </>
+          );
+          if (canPreview) {
+            return (
+              <button
+                type="button"
+                key={f.path}
+                onClick={() => onPreview(f)}
+                className="group w-full flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors"
+                title={`${f.path} — click to preview`}
+              >
+                {rowContent}
+              </button>
+            );
+          }
+          return (
+            <div
+              key={f.path}
+              className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors"
+              title={notInSandbox ? `${f.path} — not synced to sandbox` : f.path}
+            >
+              {rowContent}
+            </div>
+          );
+        })}
+        {overflow > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="w-full text-left px-3 py-2 text-[11px] text-gray-500 hover:text-gray-300 hover:bg-white/[0.04] rounded-lg transition-colors"
+          >
+            {expanded
+              ? '— show less'
+              : `+ ${overflow} more file${overflow === 1 ? '' : 's'} — show all`}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ProjectDataModal({ projectId, projectName, isOpen, onClose }: Props) {
   const [loading, setLoading] = useState(false);
   const [files, setFiles] = useState<ProjectFile[] | null>(null);
@@ -64,9 +175,11 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
   const [sandboxMissingCount, setSandboxMissingCount] = useState(0);
   const [sandboxChecked, setSandboxChecked] = useState(true);
   const [s3Error, setS3Error] = useState<string | null>(null);
+  const [previewFile, setPreviewFile] = useState<ProjectFile | null>(null);
 
   useEffect(() => {
     if (!isOpen || !projectId) return;
+    setPreviewFile(null);
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -136,12 +249,27 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
       >
         {/* Header */}
         <div className="flex items-center gap-3 px-5 py-4 border-b border-white/[0.06] shrink-0">
-          <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
-            <Database className="w-4 h-4 text-emerald-400" />
-          </div>
+          {previewFile ? (
+            <button
+              type="button"
+              onClick={() => setPreviewFile(null)}
+              title="Back to file list"
+              className="p-1.5 rounded-lg hover:bg-white/[0.06] text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              <ArrowLeft className="w-4 h-4" />
+            </button>
+          ) : (
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+              <Database className="w-4 h-4 text-emerald-400" />
+            </div>
+          )}
           <div className="flex-1 min-w-0">
-            <h2 className="text-sm font-semibold text-white truncate">Project data</h2>
-            <p className="text-xs text-gray-500 truncate">{projectName}</p>
+            <h2 className="text-sm font-semibold text-white truncate">
+              {previewFile ? previewFile.relative_path || previewFile.name : 'Project data'}
+            </h2>
+            <p className="text-xs text-gray-500 truncate">
+              {previewFile ? 'Raw preview — before any prep' : projectName}
+            </p>
           </div>
           <button
             onClick={onClose}
@@ -154,14 +282,17 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading && (
+          {previewFile && <DatasetPreviewPanel projectId={projectId} path={previewFile.path} />}
+          {!previewFile && loading && (
             <div className="flex items-center gap-2 text-sm text-gray-500 py-8 justify-center">
               <Loader2 className="w-4 h-4 animate-spin" />
               Loading files…
             </div>
           )}
-          {error && !loading && <div className="text-sm text-red-400 py-4">Error: {error}</div>}
-          {!loading && !error && s3Error && (
+          {!previewFile && error && !loading && (
+            <div className="text-sm text-red-400 py-4">Error: {error}</div>
+          )}
+          {!previewFile && !loading && !error && s3Error && (
             <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-red-500/10 border border-red-500/20 text-xs text-red-300">
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <div>
@@ -170,24 +301,29 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               </div>
             </div>
           )}
-          {!loading && !error && files && sandboxChecked && sandboxMissingCount > 0 && (
-            <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-              <div>
-                <div className="font-medium">
-                  {sandboxMissingCount} file{sandboxMissingCount === 1 ? '' : 's'} not yet synced to
-                  the agent sandbox.
-                </div>
-                <div className="text-amber-400/70 mt-0.5">
-                  The upload reached storage but the Modal Volume didn&apos;t pick it up — agents
-                  won&apos;t see these files yet. Try re-uploading, or check backend logs for{' '}
-                  <code className="px-1 bg-black/40 rounded">Modal Volume upload failed</code>{' '}
-                  entries.
+          {!previewFile &&
+            !loading &&
+            !error &&
+            files &&
+            sandboxChecked &&
+            sandboxMissingCount > 0 && (
+              <div className="flex items-start gap-2 px-3 py-2 mb-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-xs text-amber-300">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <div>
+                  <div className="font-medium">
+                    {sandboxMissingCount} file{sandboxMissingCount === 1 ? '' : 's'} not yet synced
+                    to the agent sandbox.
+                  </div>
+                  <div className="text-amber-400/70 mt-0.5">
+                    The upload reached storage but the Modal Volume didn&apos;t pick it up — agents
+                    won&apos;t see these files yet. Try re-uploading, or check backend logs for{' '}
+                    <code className="px-1 bg-black/40 rounded">Modal Volume upload failed</code>{' '}
+                    entries.
+                  </div>
                 </div>
               </div>
-            </div>
-          )}
-          {!loading && !error && files && files.length === 0 && (
+            )}
+          {!previewFile && !loading && !error && files && files.length === 0 && (
             <div className="text-center py-12">
               <FolderOpen className="w-10 h-10 text-gray-700 mx-auto mb-3" />
               <p className="text-sm text-gray-400">No data uploaded in this project yet.</p>
@@ -196,53 +332,14 @@ export default function ProjectDataModal({ projectId, projectName, isOpen, onClo
               </p>
             </div>
           )}
-          {!loading && !error && files && files.length > 0 && (
+          {!previewFile && !loading && !error && files && files.length > 0 && (
             <div className="space-y-5">
               {groups.map((group) => (
-                <div key={group.folder || '__root__'}>
-                  <div className="flex items-center gap-2 mb-2 text-[10px] uppercase tracking-wider text-gray-500 font-semibold">
-                    <FolderOpen className="w-3 h-3" />
-                    <span className="truncate">{group.folder || '(project root)'}</span>
-                    <span className="text-gray-700 normal-case tracking-normal">
-                      · {group.files.length} file{group.files.length === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <div className="space-y-0.5">
-                    {group.files.map((f) => {
-                      const Icon = fileIcon(f.name);
-                      const color = fileIconColor(f.name);
-                      const notInSandbox = f.in_sandbox === false;
-                      // Show the sub-path inside the folder (if nested) so
-                      // uploads like "folder/sub/file.csv" read naturally.
-                      const rel = f.relative_path || f.name;
-                      const subPath =
-                        group.folder && rel.startsWith(group.folder + '/')
-                          ? rel.slice(group.folder.length + 1)
-                          : rel;
-                      return (
-                        <div
-                          key={f.path}
-                          className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-white/[0.04] transition-colors"
-                          title={notInSandbox ? `${f.path} — not synced to sandbox` : f.path}
-                        >
-                          <Icon className={`w-4 h-4 shrink-0 ${color}`} />
-                          <span className="text-sm text-gray-300 flex-1 truncate">{subPath}</span>
-                          {notInSandbox && (
-                            <span
-                              className="text-[10px] text-amber-400/80 bg-amber-500/10 border border-amber-500/20 rounded px-1.5 py-0.5 shrink-0"
-                              title="Uploaded to storage but not synced to the agent sandbox"
-                            >
-                              not synced
-                            </span>
-                          )}
-                          <span className="text-[11px] text-gray-600 shrink-0 tabular-nums">
-                            {humanSize(f.size)}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                <FolderGroup
+                  key={group.folder || '__root__'}
+                  group={group}
+                  onPreview={setPreviewFile}
+                />
               ))}
             </div>
           )}

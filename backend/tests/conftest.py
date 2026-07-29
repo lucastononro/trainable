@@ -13,8 +13,30 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
-# Use in-memory SQLite for tests (no Postgres needed)
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
+
+def pytest_configure(config):
+    """Register custom markers so pytest doesn't warn on @pytest.mark.e2e."""
+    config.addinivalue_line(
+        "markers",
+        "e2e: marks tests that hit live LLM APIs; gated on RUN_LLM_E2E=1.",
+    )
+
+
+# Use in-memory SQLite for tests by default (no Postgres needed). CI's
+# backend-test job runs a Postgres service container and sets
+# TEST_DATABASE_URL so the suite exercises real Postgres semantics —
+# Column(JSON) storage, FK ON DELETE CASCADE, and the hand-rolled
+# db._run_migrations — instead of only ever validating against an engine
+# we don't ship. See .github/workflows/ci.yml.
+#
+# Only the explicit TEST_DATABASE_URL opt-in is honored: an ambient
+# DATABASE_URL (e.g. pointing at a dev database in a developer's shell) is
+# deliberately overwritten, because the setup_db fixture drops all tables
+# after every test.
+if os.environ.get("TEST_DATABASE_URL"):
+    os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
+else:
+    os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 
 # Mock claude_agent_sdk if it's not installed (it's a private package)
 if "claude_agent_sdk" not in sys.modules:
@@ -42,8 +64,8 @@ if "mcp" not in sys.modules:
     sys.modules["mcp.server.lowlevel"] = _mock_mcp_server_ll
     sys.modules["mcp.types"] = _mock_mcp_types
 
-from db import Base, engine
-from main import app
+from db import Base, engine  # noqa: E402  (must follow the mcp.* mocks above)
+from main import app  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -76,10 +98,12 @@ async def client():
     ):
         mock_client = MagicMock()
         mock_client.put_object = MagicMock()
-        # Mock get_object to return bytes for from-s3 endpoint
-        mock_body = MagicMock()
-        mock_body.read.return_value = b"col1,col2\n1,2\n"
-        mock_client.get_object.return_value = {"Body": mock_body}
+        # Mock get_object to return bytes for from-s3 endpoint. Use a fresh
+        # BytesIO per call so chunked reads (`body.read(n)`) terminate at EOF
+        # like a real botocore StreamingBody.
+        mock_client.get_object.side_effect = lambda **kwargs: {
+            "Body": io.BytesIO(b"col1,col2\n1,2\n")
+        }
         mock_client.list_objects_v2.return_value = {
             "Contents": [{"Key": "my-data/raw.csv"}]
         }
@@ -196,31 +220,94 @@ def sample_metadata_json():
 class MockVolumeEntry:
     """Mimics a Modal Volume directory entry."""
 
-    def __init__(self, path: str, is_file: bool = True):
+    def __init__(self, path: str, is_file: bool = True, size: int = 0):
         self.path = path
         self.type = SimpleNamespace(name="FILE" if is_file else "DIRECTORY")
+        self.size = size
 
 
 class MockVolume:
     """Mock Modal Volume backed by an in-memory file dict."""
 
-    def __init__(self, files: dict[str, bytes]):
+    def __init__(
+        self, files: dict[str, bytes], read_error_paths: set[str] | None = None
+    ):
         self._files = files
+        self._read_error_paths = read_error_paths or set()
+        self.read_paths: list[str] = []
 
     def reload(self):
         pass
 
     def read_file(self, path: str):
         if path in self._files:
+            self.read_paths.append(path)
             return [self._files[path]]
         raise FileNotFoundError(f"Mock volume: {path} not found")
+
+    def read_file_bytes(self, path: str) -> bytes:
+        if path in self._files:
+            self.read_paths.append(path)
+            return self._files[path]
+        raise FileNotFoundError(f"Mock volume: {path} not found")
+
+    async def read_file_chunks(self, path: str, *, chunk_size: int = 1024 * 1024):
+        if path not in self._files:
+            raise FileNotFoundError(f"Mock volume: {path} not found")
+        self.read_paths.append(path)
+        payload = self._files[path]
+        for i in range(0, len(payload), chunk_size):
+            yield payload[i : i + chunk_size]
+            if path in self._read_error_paths:
+                raise OSError(f"Mock volume read failed for {path}")
 
     def listdir(self, prefix: str, recursive: bool = False):
         entries = []
         for path in self._files:
             if path.startswith(prefix + "/") or path == prefix:
-                entries.append(MockVolumeEntry(path, is_file=True))
+                entries.append(
+                    MockVolumeEntry(path, is_file=True, size=len(self._files[path]))
+                )
         return entries
+
+
+def mock_volume_patches(vol: MockVolume, *modules: str):
+    """Return a list of patch context managers for the async volume functions
+    in each given module path (e.g. 'services.validator').
+
+    Usage::
+
+        with ExitStack() as stack:
+            for p in mock_volume_patches(vol, "services.validator"):
+                stack.enter_context(p)
+            ...
+    """
+    patches = []
+    for mod in modules:
+        patches.append(patch(f"{mod}.reload_volume_async", new_callable=AsyncMock))
+        patches.append(
+            patch(
+                f"{mod}.listdir_async",
+                new_callable=AsyncMock,
+                side_effect=vol.listdir,
+            )
+        )
+        patches.append(
+            patch(
+                f"{mod}.read_volume_file_async",
+                new_callable=AsyncMock,
+                side_effect=vol.read_file_bytes,
+                create=True,
+            )
+        )
+        patches.append(
+            patch(
+                f"{mod}.iter_volume_file_chunks_async",
+                side_effect=vol.read_file_chunks,
+                create=True,
+            )
+        )
+    return patches
 
 
 @pytest.fixture

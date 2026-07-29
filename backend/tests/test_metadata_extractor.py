@@ -1,22 +1,50 @@
 """Tests for services/metadata_extractor.py — automated metadata extraction."""
 
-from unittest.mock import patch
+from contextlib import ExitStack
 
 import pytest
 from sqlalchemy import select
 
-from tests.conftest import MockVolume, _make_parquet_bytes
+from tests.conftest import MockVolume, _make_parquet_bytes, mock_volume_patches
+
+
+async def _seed_parents(session_id: str, experiment_id: str) -> None:
+    """Insert Project + Experiment + Session rows so dependent tables can FK.
+
+    The metadata extractor writes ProcessedDatasetMeta rows referencing both
+    session_id and experiment_id; SQLite now enforces FKs, so the parents
+    must exist.
+    """
+    from db import async_session
+    from models import Experiment, Project, Session as SessionModel
+
+    async with async_session() as db:
+        project_id = f"proj-{experiment_id}"
+        db.add(Project(id=project_id, name="t"))
+        await db.flush()
+        db.add(
+            Experiment(
+                id=experiment_id,
+                project_id=project_id,
+                name="t",
+                dataset_ref="",
+            )
+        )
+        await db.flush()
+        db.add(SessionModel(id=session_id, experiment_id=experiment_id))
+        await db.commit()
 
 
 @pytest.mark.asyncio
 async def test_extract_metadata_with_agent_metadata(mock_volume_with_prep):
     """When agent produces metadata.json, extractor should use it for target/features."""
-    with (
-        patch("services.metadata_extractor.reload_volume"),
-        patch(
-            "services.metadata_extractor.get_volume", return_value=mock_volume_with_prep
-        ),
-    ):
+    await _seed_parents("test-session", "test-experiment")
+    with ExitStack() as stack:
+        for p in mock_volume_patches(
+            mock_volume_with_prep, "services.metadata_extractor"
+        ):
+            stack.enter_context(p)
+
         from services.metadata_extractor import extract_and_store_metadata
 
         await extract_and_store_metadata("test-session", "test-experiment")
@@ -48,6 +76,7 @@ async def test_extract_metadata_with_agent_metadata(mock_volume_with_prep):
 @pytest.mark.asyncio
 async def test_extract_metadata_without_agent_metadata():
     """Without metadata.json, extractor should use heuristics for target detection."""
+    await _seed_parents("s1", "exp1")
     train = _make_parquet_bytes(
         {"age": [25, 30, 35], "salary": [50, 60, 70], "target": [0, 1, 0]}
     )
@@ -61,10 +90,10 @@ async def test_extract_metadata_without_agent_metadata():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.metadata_extractor.reload_volume"),
-        patch("services.metadata_extractor.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.metadata_extractor"):
+            stack.enter_context(p)
+
         from services.metadata_extractor import extract_and_store_metadata
 
         await extract_and_store_metadata("s1", "exp1")
@@ -89,12 +118,13 @@ async def test_extract_metadata_without_agent_metadata():
 @pytest.mark.asyncio
 async def test_extract_metadata_quality_stats(mock_volume_with_prep):
     """Quality stats should be computed from the train split."""
-    with (
-        patch("services.metadata_extractor.reload_volume"),
-        patch(
-            "services.metadata_extractor.get_volume", return_value=mock_volume_with_prep
-        ),
-    ):
+    await _seed_parents("test-session", "test-experiment")
+    with ExitStack() as stack:
+        for p in mock_volume_patches(
+            mock_volume_with_prep, "services.metadata_extractor"
+        ):
+            stack.enter_context(p)
+
         from services.metadata_extractor import extract_and_store_metadata
 
         await extract_and_store_metadata("test-session", "test-experiment")
@@ -124,10 +154,10 @@ async def test_extract_metadata_no_parquet_files():
     """No parquet files should result in no DB record."""
     vol = MockVolume({})
 
-    with (
-        patch("services.metadata_extractor.reload_volume"),
-        patch("services.metadata_extractor.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.metadata_extractor"):
+            stack.enter_context(p)
+
         from services.metadata_extractor import extract_and_store_metadata
 
         await extract_and_store_metadata("empty-session", "exp1")
@@ -149,12 +179,13 @@ async def test_extract_metadata_no_parquet_files():
 @pytest.mark.asyncio
 async def test_extract_metadata_to_dict(mock_volume_with_prep):
     """to_dict() should return a serializable dict with all fields."""
-    with (
-        patch("services.metadata_extractor.reload_volume"),
-        patch(
-            "services.metadata_extractor.get_volume", return_value=mock_volume_with_prep
-        ),
-    ):
+    await _seed_parents("test-session", "test-experiment")
+    with ExitStack() as stack:
+        for p in mock_volume_patches(
+            mock_volume_with_prep, "services.metadata_extractor"
+        ):
+            stack.enter_context(p)
+
         from services.metadata_extractor import extract_and_store_metadata
 
         await extract_and_store_metadata("test-session", "test-experiment")

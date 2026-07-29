@@ -7,6 +7,7 @@ scanning /sessions/{session_id} — agents are free to organize their workspace
 however they like.
 """
 
+import asyncio
 import io
 import json
 import logging
@@ -17,15 +18,68 @@ from sqlalchemy import select
 
 from db import async_session
 from models import Artifact
-from services.volume import get_volume, read_volume_file, reload_volume
+from services.volume import (
+    listdir_async,
+    read_volume_file_async,
+    reload_volume_async,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _read_volume_file_safe(path: str):
+def _read_parquet_df(raw: bytes) -> pd.DataFrame:
+    """Parse parquet bytes into a DataFrame.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    """
+    return pd.read_parquet(io.BytesIO(raw))
+
+
+def _count_nulls(df: pd.DataFrame) -> pd.Series:
+    """Return per-column null counts, filtered to columns with nulls.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    """
+    null_counts = df.isnull().sum()
+    return null_counts[null_counts > 0]
+
+
+def _check_row_overlap(train_df: pd.DataFrame, test_raw: bytes) -> set:
+    """Hash-based row-overlap check between train and test splits.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    Returns the set of overlapping row hashes.
+    """
+    test_df = pd.read_parquet(io.BytesIO(test_raw))
+    # Hash rows for comparison (sample for large datasets)
+    sample_size = min(1000, len(train_df), len(test_df))
+    train_sample = (
+        train_df.sample(n=sample_size, random_state=42)
+        if len(train_df) > sample_size
+        else train_df
+    )
+    test_sample = (
+        test_df.sample(n=sample_size, random_state=42)
+        if len(test_df) > sample_size
+        else test_df
+    )
+    train_hashes = set(pd.util.hash_pandas_object(train_sample).values)
+    test_hashes = set(pd.util.hash_pandas_object(test_sample).values)
+    return train_hashes & test_hashes
+
+
+def _find_constant_columns(df: pd.DataFrame) -> list[str]:
+    """Return columns with zero variance.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    """
+    return [col for col in df.columns if df[col].nunique() <= 1]
+
+
+async def _read_volume_file_safe(path: str):
     """Read a file from volume, returning None on failure."""
     try:
-        return read_volume_file(path)
+        return await read_volume_file_async(path)
     except Exception:
         return None
 
@@ -59,9 +113,8 @@ async def _discover_session_files(
     missing = filenames - set(found.keys())
     if missing:
         try:
-            reload_volume()
-            vol = get_volume()
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            await reload_volume_async()
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 base = entry.path.rsplit("/", 1)[-1]
@@ -75,7 +128,7 @@ async def _discover_session_files(
 
 async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     """Validate prep stage outputs. Returns dict with errors, warnings, passed checks."""
-    reload_volume()
+    await reload_volume_async()
 
     results = {"errors": [], "warnings": [], "passed": [], "stage": "prep"}
 
@@ -87,7 +140,7 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     for split_name in ("train", "val", "test"):
         key = f"{split_name}.parquet"
         path = discovered.get(key)
-        raw = _read_volume_file_safe(path) if path else None
+        raw = await _read_volume_file_safe(path) if path else None
         if raw is None:
             results["errors"].append(f"{key} missing or unreadable")
         else:
@@ -128,12 +181,22 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
                     msg += f" (extra: {[c[0] for c in extra]})"
                 results["errors"].append(msg)
 
+    # Parse train.parquet once (off the event loop) and reuse it across
+    # checks 4, 6, and 7 below.
+    train_df: pd.DataFrame | None = None
+    train_read_error: Exception | None = None
+    if "train" in splits:
+        try:
+            train_df = await asyncio.to_thread(_read_parquet_df, splits["train"])
+        except Exception as e:
+            train_read_error = e
+
     # 4. Check for nulls (sample-based for efficiency)
     if "train" in splits:
         try:
-            train_df = pd.read_parquet(io.BytesIO(splits["train"]))
-            null_counts = train_df.isnull().sum()
-            null_cols = null_counts[null_counts > 0]
+            if train_df is None:
+                raise train_read_error or RuntimeError("train parquet failed to parse")
+            null_cols = await asyncio.to_thread(_count_nulls, train_df)
             if len(null_cols) == 0:
                 results["passed"].append("No null values in train split")
             else:
@@ -166,23 +229,11 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
     # 6. Check for data leakage (hash-based row overlap)
     if "train" in splits and "test" in splits:
         try:
-            train_df = pd.read_parquet(io.BytesIO(splits["train"]))
-            test_df = pd.read_parquet(io.BytesIO(splits["test"]))
-            # Hash rows for comparison (sample for large datasets)
-            sample_size = min(1000, len(train_df), len(test_df))
-            train_sample = (
-                train_df.sample(n=sample_size, random_state=42)
-                if len(train_df) > sample_size
-                else train_df
+            if train_df is None:
+                raise train_read_error or RuntimeError("train parquet failed to parse")
+            overlap = await asyncio.to_thread(
+                _check_row_overlap, train_df, splits["test"]
             )
-            test_sample = (
-                test_df.sample(n=sample_size, random_state=42)
-                if len(test_df) > sample_size
-                else test_df
-            )
-            train_hashes = set(pd.util.hash_pandas_object(train_sample).values)
-            test_hashes = set(pd.util.hash_pandas_object(test_sample).values)
-            overlap = train_hashes & test_hashes
             if len(overlap) == 0:
                 results["passed"].append(
                     "No row overlap detected between train and test"
@@ -195,12 +246,9 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
             results["warnings"].append(f"Could not check leakage: {e}")
 
     # 7. Check for constant columns
-    if "train" in splits:
+    if "train" in splits and train_df is not None:
         try:
-            train_df = pd.read_parquet(io.BytesIO(splits["train"]))
-            constant_cols = [
-                col for col in train_df.columns if train_df[col].nunique() <= 1
-            ]
+            constant_cols = await asyncio.to_thread(_find_constant_columns, train_df)
             if constant_cols:
                 results["warnings"].append(
                     f"Constant columns (zero variance): {constant_cols}"
@@ -212,7 +260,9 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
 
     # 8. Check metadata.json exists
     metadata_path = discovered.get("metadata.json")
-    metadata_raw = _read_volume_file_safe(metadata_path) if metadata_path else None
+    metadata_raw = (
+        await _read_volume_file_safe(metadata_path) if metadata_path else None
+    )
     if metadata_raw:
         try:
             meta = json.loads(metadata_raw)
@@ -246,11 +296,95 @@ async def validate_prep_output(session_id: str, experiment_id: str) -> dict:
 
 
 async def validate_train_output(session_id: str, experiment_id: str) -> dict:
-    """Validate train stage outputs."""
-    reload_volume()
+    """Validate train stage outputs.
+
+    With the agent-declared-experiments redesign, we check the lifecycle
+    state machine first — an experiment that called `start-training` but
+    never called `register-model` is the canonical "training abandoned"
+    signal. We still keep the legacy file-existence checks below as
+    soft warnings to surface lingering issues, but they no longer drive
+    the pass/fail decision.
+    """
+    from models import Experiment, ExperimentState, RegisteredModel
+
+    await reload_volume_async()
 
     results = {"errors": [], "warnings": [], "passed": [], "stage": "train"}
 
+    # ------------------------------------------------------------------
+    # 0. Lifecycle gate — checks every agent-declared experiment in the
+    # session. With multi-experiment sessions, we evaluate each in turn.
+    # ------------------------------------------------------------------
+    try:
+        async with async_session() as db:
+            exps = (
+                (
+                    await db.execute(
+                        select(Experiment).where(Experiment.session_id == session_id)
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            # Cross-check that each `trained` experiment actually has a
+            # RegisteredModel row.
+            for exp in exps:
+                state = exp.state or ExperimentState.CREATED.value
+                if state == ExperimentState.TRAINING.value:
+                    results["errors"].append(
+                        f"CRITICAL: Experiment '{exp.name}' ({exp.id}) called "
+                        "start-training but never called register-model. "
+                        "Either call register-model with the trained "
+                        "artifact path, or this run will be auto-flagged "
+                        "as abandoned after the post-stage cleanup."
+                    )
+                elif state == ExperimentState.CREATED.value:
+                    # Created-but-never-trained is fine if the agent only
+                    # ran prep; only flag when there's a clear training
+                    # intent (the chat is the trainer agent, so we treat
+                    # any created experiment without a model as a miss).
+                    results["warnings"].append(
+                        f"Experiment '{exp.name}' ({exp.id}) was created "
+                        "but no training run was started. Call "
+                        "start-training + register-model, or close the "
+                        "experiment intentionally."
+                    )
+                elif state == ExperimentState.TRAINED.value:
+                    model = (
+                        await db.execute(
+                            select(RegisteredModel).where(
+                                RegisteredModel.experiment_id == exp.id
+                            )
+                        )
+                    ).scalar_one_or_none()
+                    if model:
+                        results["passed"].append(
+                            f"Model registered for experiment "
+                            f"'{exp.name}': {model.name} v{model.version}"
+                        )
+                    else:
+                        results["errors"].append(
+                            f"Experiment '{exp.name}' marked TRAINED but "
+                            "no RegisteredModel row exists. The "
+                            "register-model handler may have failed mid-flight."
+                        )
+                elif state == ExperimentState.ABANDONED.value:
+                    results["warnings"].append(
+                        f"Experiment '{exp.name}' was abandoned mid-training."
+                    )
+                elif state == ExperimentState.FAILED.value:
+                    results["warnings"].append(
+                        f"Experiment '{exp.name}' is marked FAILED."
+                    )
+            # No declared experiments at all → defer to the legacy
+            # file-walk below, which produces its own pass/fail
+            # signals based on artifact presence.
+    except Exception as e:
+        logger.warning("Lifecycle validation skipped: %s", e)
+
+    # ------------------------------------------------------------------
+    # 1. Legacy file-existence checks — soft warnings now, not errors.
+    # ------------------------------------------------------------------
     # 1. Check model file exists — look up the most recent "model" artifact.
     #    Falls back to a workspace scan for any model extension.
     model_path: str | None = None
@@ -272,8 +406,7 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
 
     if not model_path:
         try:
-            vol = get_volume()
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 lower = entry.path.lower()
@@ -283,7 +416,7 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
         except Exception:
             pass
 
-    model_raw = _read_volume_file_safe(model_path) if model_path else None
+    model_raw = await _read_volume_file_safe(model_path) if model_path else None
     if model_raw:
         results["passed"].append(
             f"Model file found: {model_path} ({len(model_raw)} bytes)"
@@ -305,17 +438,16 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
             )
             art = (await db.execute(q)).scalars().first()
             if art:
-                report_raw = _read_volume_file_safe(art.path)
+                report_raw = await _read_volume_file_safe(art.path)
     except Exception:
         pass
     if report_raw is None:
         try:
-            vol = get_volume()
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 if entry.path.endswith(".md"):
-                    report_raw = _read_volume_file_safe(entry.path)
+                    report_raw = await _read_volume_file_safe(entry.path)
                     if report_raw:
                         break
         except Exception:
@@ -328,7 +460,9 @@ async def validate_train_output(session_id: str, experiment_id: str) -> dict:
     # 3. Check metadata.json — discovery helper covers DB then scan.
     discovered = await _discover_session_files(session_id, {"metadata.json"})
     metadata_path = discovered.get("metadata.json")
-    metadata_raw = _read_volume_file_safe(metadata_path) if metadata_path else None
+    metadata_raw = (
+        await _read_volume_file_safe(metadata_path) if metadata_path else None
+    )
     if metadata_raw:
         try:
             meta = json.loads(metadata_raw)

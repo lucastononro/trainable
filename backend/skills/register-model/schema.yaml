@@ -1,0 +1,42 @@
+type: object
+properties:
+  experiment_id:
+    type: string
+    description: ID returned by create-experiment.
+  path:
+    type: string
+    description: Volume path to the saved model artifact.
+  framework:
+    type: string
+    description: ML framework (xgboost, lightgbm, sklearn, pytorch, tensorflow, huggingface, onnx, other).
+  metrics:
+    type: object
+    description: 'Headline metrics (test by default) — e.g. {"accuracy": 0.91, "f1": 0.88}.'
+  description:
+    type: string
+    description: 1-2 sentence summary of what makes this model unique.
+  training_dataset_id:
+    type: integer
+    description: REQUIRED. dataset_version_id of the PROCESSED dataset you fit on. Must be the id returned by register-dataset (or list-project-datasets) — raw datasets are rejected. This is what lets the lineage canvas draw Processed → Model.
+  validation_dataset_id:
+    type: integer
+    description: Optional dataset_version_id of the validation split, if you held one out separately.
+  test_dataset_id:
+    type: integer
+    description: Optional dataset_version_id of the test split, if held out separately.
+  split_metrics:
+    type: object
+    description: 'Per-split metrics dict, e.g. {"train": {"accuracy": 0.99}, "val": {"accuracy": 0.94}, "test": {"accuracy": 0.91}}. Keys must match the split roles you supplied above.'
+  hyperparams:
+    type: object
+    description: Final hyperparams used (overrides what was passed to start-training, if any).
+  name:
+    type: string
+    description: Override the model name (defaults to the experiment's name).
+required:
+  - experiment_id
+  - path
+  - framework
+  - metrics
+  - description
+  - training_dataset_id

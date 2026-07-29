@@ -15,7 +15,7 @@ from sqlalchemy import select as sa_select
 
 from db import async_session
 from models import Artifact, ProcessedDatasetMeta
-from services.volume import get_volume, reload_volume
+from services.volume import listdir_async, read_volume_file_async, reload_volume_async
 
 logger = logging.getLogger(__name__)
 
@@ -23,8 +23,7 @@ logger = logging.getLogger(__name__)
 async def extract_and_store_metadata(session_id: str, experiment_id: str):
     """Read parquet files from Modal Volume, compute metadata, persist to DB."""
 
-    reload_volume()
-    vol = get_volume()
+    await reload_volume_async()
 
     # Discover parquet split paths via Artifact DB, falling back to a session scan.
     wanted = {"train.parquet", "val.parquet", "test.parquet", "metadata.json"}
@@ -45,7 +44,7 @@ async def extract_and_store_metadata(session_id: str, experiment_id: str):
     missing = wanted - set(paths.keys())
     if missing:
         try:
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 base = entry.path.rsplit("/", 1)[-1]
@@ -63,7 +62,7 @@ async def extract_and_store_metadata(session_id: str, experiment_id: str):
             logger.info(f"[META] {key} not found in session {session_id}")
             continue
         try:
-            raw = b"".join(vol.read_file(path))
+            raw = await read_volume_file_async(path)
             splits[split_name] = {"path": path, "data": raw}
         except Exception:
             logger.info(f"[META] {key} not readable at {path}")
@@ -118,7 +117,7 @@ async def extract_and_store_metadata(session_id: str, experiment_id: str):
     meta_path = paths.get("metadata.json")
     if meta_path:
         try:
-            meta_raw = b"".join(vol.read_file(meta_path))
+            meta_raw = await read_volume_file_async(meta_path)
             agent_meta = json.loads(meta_raw.decode("utf-8", errors="replace"))
             logger.info(f"[META] Loaded agent metadata.json for session {session_id}")
         except Exception:
@@ -191,7 +190,7 @@ async def extract_and_store_metadata(session_id: str, experiment_id: str):
     source_files = []
     try:
         dataset_dir = f"/datasets/{experiment_id}"
-        for entry in vol.listdir(dataset_dir, recursive=True):
+        for entry in await listdir_async(dataset_dir, recursive=True):
             if entry.type.name == "FILE":
                 source_files.append(entry.path)
     except Exception:

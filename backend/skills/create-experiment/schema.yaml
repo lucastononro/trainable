@@ -1,0 +1,19 @@
+type: object
+properties:
+  name:
+    type: string
+    description: Short label for this experiment (e.g. "xgb_baseline").
+  hypothesis:
+    type: string
+    description: 1-3 sentence statement of what this experiment is testing.
+  description:
+    type: string
+    description: Longer optional notes about the approach.
+  parent_dataset_ids:
+    type: array
+    items:
+      type: integer
+    description: dataset_version_id integers this experiment derives from.
+required:
+  - name
+  - hypothesis

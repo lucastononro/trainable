@@ -69,13 +69,12 @@ async def abort_agent(session_id: str, silent: bool = False) -> bool:
 
 def cleanup_session(session_id: str) -> None:
     """Remove all per-session state when a session ends."""
-    from tools.execute_code import _code_counter, _known_files
     from services.clarifications import cancel_session as cancel_clarifications
+    from services.skills.state import cleanup_session as cleanup_skill_state
 
     _running_tasks.pop(session_id, None)
     _session_task_locks.pop(session_id, None)
-    _known_files.pop(session_id, None)
-    _code_counter.pop(session_id, None)
+    cleanup_skill_state(session_id)
     cancelled = cancel_clarifications(session_id)
     if cancelled:
         import logging

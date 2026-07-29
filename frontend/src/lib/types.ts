@@ -1,7 +1,46 @@
+import type {
+  CellCompletedEvent,
+  CellDisplayEvent,
+  CellErrorEvent,
+  CellStartedEvent,
+  CellStreamEvent,
+  KernelStateEvent,
+  StructureChangedEvent,
+} from './notebook/types';
+
+export interface SandboxProfile {
+  gpu?: string | null;
+  timeout?: number | null;
+}
+
+export interface SandboxConfig {
+  default?: SandboxProfile | null;
+  training?: SandboxProfile | null;
+  // GPUs the agent may explicitly request per execute-code call.
+  // "cpu" and the profiles' GPUs are always implicitly allowed.
+  allowed_gpus?: string[] | null;
+  // Hard cap (seconds) on agent-requested per-call timeouts.
+  max_timeout?: number | null;
+}
+
+/** Pre-flight training controls (issue #104). Every field optional —
+ *  an empty config leaves the trainer agent fully autonomous. */
+export interface TrainingConfig {
+  optimization_metric?: string | null;
+  model_families?: string[] | null;
+  max_trials?: number | null;
+  max_wallclock_minutes?: number | null;
+  max_cost_usd?: number | null;
+}
+
 export interface Project {
   id: string;
   name: string;
   description: string;
+  sandbox_config: SandboxConfig;
+  /** Hard-stop USD spend cap across the whole project. null = uncapped. */
+  budget_usd?: number | null;
+  training_config: TrainingConfig;
   created_at: string;
   updated_at: string;
   experiment_count: number;
@@ -19,13 +58,46 @@ export interface CreateProjectResponse {
   session_id: string;
 }
 
+/** A bundled demo dataset tile (GET /api/samples). */
+export interface SampleDataset {
+  id: string;
+  name: string;
+  /** classification | regression | object-detection */
+  task: string;
+  description: string;
+  suggested_prompt: string;
+  file_count: number;
+  size_bytes: number;
+  /** false when the server deployment doesn't ship sample-data/. */
+  available: boolean;
+}
+
+export interface CreateProjectFromSampleResponse extends CreateProjectResponse {
+  sample_id: string;
+  suggested_prompt: string;
+  uploaded_files: string[];
+}
+
 export interface Experiment {
   id: string;
   project_id: string;
+  /** Agent-declared lifecycle parent (post schema-flip). Nullable for
+   *  legacy 1:1 rows where the session pointed at the experiment. */
+  session_id?: string | null;
   name: string;
   description: string;
+  /** 1-3 sentence statement of what this experiment tests. AI-written. */
+  hypothesis?: string;
+  /** Lifecycle state — created | prepping | training | trained |
+   *  failed | abandoned. Defaults to created on new agent-declared rows. */
+  state?: string;
+  started_at?: string | null;
+  completed_at?: string | null;
   dataset_ref: string;
   instructions: string;
+  tags?: string[];
+  pinned?: boolean;
+  archived?: boolean;
   created_at: string;
   updated_at: string;
   latest_session_id: string | null;
@@ -41,14 +113,33 @@ export interface Session {
   updated_at: string;
 }
 
+export type ThinkingLevel = 'off' | 'low' | 'medium' | 'high';
+
+export interface ThinkingSpec {
+  default: ThinkingLevel;
+  levels: ThinkingLevel[];
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
+  provider: string;
   tier: 'premium' | 'standard' | 'fast';
   context: string;
   input_cost: number;
   output_cost: number;
   description: string;
+  experimental?: boolean;
+  thinking?: ThinkingSpec;
+}
+
+export interface ProviderInfo {
+  id: string;
+  available: boolean;
+  /** Env var names that would enable this provider when set. */
+  missing_env: string[];
+  /** Whether the agent runner can actually dispatch to this provider today. */
+  runner_supported: boolean;
 }
 
 export interface Message {
@@ -78,14 +169,72 @@ export interface MetricPoint {
   created_at: string;
 }
 
+// Scalar charts keep the original shape — `metrics` lists series names.
+// Rich panels (image_grid, table, confusion_matrix, ...) target a single
+// `key` instead, since their payload isn't a series of scalars.
+export type RichPanelType =
+  | 'image'
+  | 'image_grid'
+  | 'table'
+  | 'histogram'
+  | 'confusion_matrix'
+  | 'roc'
+  | 'pr'
+  | 'text'
+  | 'plotly';
+
 export interface ChartConfigEntry {
   title: string;
-  metrics: string[];
-  type: 'line' | 'bar' | 'area';
+  type: 'line' | 'bar' | 'area' | RichPanelType;
+  /** For scalar chart panels — list of metric names this panel groups. */
+  metrics?: string[];
+  /** For rich panels (image_grid / table / etc.) — the log_event key. */
+  key?: string;
 }
 
 export interface ChartConfig {
   charts: ChartConfigEntry[];
+}
+
+// Wire shape of the `chart_config` SSE event. Unlike the app-level
+// `ChartConfig`, `charts` is optional here: the payload is unvalidated
+// backend output, so handlers must guard before promoting it to a
+// `ChartConfig` (see the `chart_config` case in page.tsx).
+export interface ChartConfigSSEData {
+  charts?: ChartConfigEntry[];
+}
+
+// Rich (non-scalar) log payload streamed from the agent. Shape of
+// `payload` is per-`type`; renderers narrow it inside the panel.
+export interface LogEvent {
+  id?: number;
+  step: number;
+  key: string;
+  type: RichPanelType;
+  stage?: string;
+  run_tag?: string | null;
+  payload: Record<string, unknown>;
+  created_at?: string;
+}
+
+// Per-key buffer of log events. Renderers index by step.
+export interface LogEventGroup {
+  key: string;
+  type: RichPanelType;
+  events: LogEvent[];
+}
+
+// Agent-published HTML artifact rendered in a sandboxed iframe on the
+// canvas. The body lives on the volume at `path` and is fetched via
+// /api/files/raw — we never carry it in app state.
+export interface HtmlArtifact {
+  key: string;
+  title: string;
+  path: string;
+  size: number | null;
+  ts: number | null;
+  step: number | null;
+  stage?: string | null;
 }
 
 export type Stage = 'eda' | 'prep' | 'train';
@@ -100,11 +249,6 @@ export interface Mention {
 }
 export type DraftToken = { kind: 'text'; value: string } | { kind: 'mention'; mention: Mention };
 export type Draft = DraftToken[];
-
-export interface SSEEvent {
-  type: string;
-  data: Record<string, unknown>;
-}
 
 export interface ExperimentDetail extends Experiment {
   sessions: Session[];
@@ -125,6 +269,27 @@ export interface FileTreeNode {
   children?: FileTreeNode[];
 }
 
+/** Per-column quick-profile stats for a raw uploaded dataset. */
+export interface RawColumnProfile {
+  name: string;
+  dtype: string;
+  missing_pct: number;
+  /** Approximate distinct-value count (DuckDB approx_unique). */
+  unique_count: number;
+}
+
+/** Head rows + quick profile of a raw uploaded file, pre-prep. */
+export interface RawDatasetPreview {
+  path: string;
+  name: string;
+  format: 'csv' | 'tsv' | 'parquet';
+  row_count: number;
+  column_count: number;
+  columns: RawColumnProfile[];
+  head_columns: string[];
+  head_rows: Array<Array<string | number | boolean | null>>;
+}
+
 // API response shapes
 export interface CreateExperimentResponse extends Experiment {
   session_id: string;
@@ -137,49 +302,727 @@ export interface AbortResponse {
   status: string;
 }
 
-// SSE event data shapes
-export interface ToolEventData {
-  tool: string;
-  input?: { code?: string };
-  output?: string;
+export interface GeneratedFile {
+  path: string;
+  type: string;
+}
+
+// ---------------------------------------------------------------------------
+// SSE event data shapes — one per `event.type` the backend publishes on
+// `/api/sessions/{id}/stream`. Field optionality here matches what the
+// handler in `page.tsx`'s `connectSSE` actually defends against (backend
+// payloads aren't schema-validated on the wire), not just what happens to be
+// read today.
+// ---------------------------------------------------------------------------
+
+export interface StateChangeData {
+  state: string;
+  depth?: number;
 }
 export interface AgentMessageData {
   text: string;
+  agent_type?: string;
+}
+export interface ToolStartData {
+  tool: string;
+  input?: { code?: string };
+}
+export interface ToolEndData {
+  tool: string;
+  output?: string;
+}
+export interface CodeOutputData {
+  text: string;
+  stream?: string;
 }
 export interface AgentErrorData {
   error: string;
 }
-export interface StateChangeData {
-  state: string;
+export interface ReportReadyData {
+  content: string;
+  stage?: string;
 }
-export interface CodeOutputData {
-  text: string;
-  stream: string;
+export interface FilesReadyData {
+  files?: GeneratedFile[];
+  stage?: string;
 }
 export interface FileCreatedData {
   path: string;
   name: string;
-  type: string;
-  stage: string;
-}
-export interface FilesReadyData {
-  files: Array<{ path: string; type: string }>;
-  stage: string;
-  workspace?: string;
-}
-export interface ReportReadyData {
-  content: string;
-  stage: string;
+  stage?: string;
 }
 export interface MetricEventData {
   step: number;
-  metrics: Record<string, number>;
-  run?: string;
+  name: string;
+  value: number;
+  stage?: string;
+  run_tag?: string | null;
 }
-export interface ChartConfigEventData {
-  charts: Array<{ title: string; metrics: string[]; type: string }>;
+export interface MetricsBatchData {
+  items: MetricEventData[];
 }
-export interface GeneratedFile {
+// Rich (non-scalar) log payload as it arrives over SSE — same fields as
+// `LogEvent` but all optional, since the handler defensively checks for
+// them before treating the event as well-formed.
+export interface LogEventSSEData {
+  key?: string;
+  step?: number;
+  type?: RichPanelType;
+  stage?: string;
+  run_tag?: string | null;
+  data?: Record<string, unknown>;
+}
+export interface CanvasHtmlData {
+  key?: string;
+  path?: string;
+  title?: string;
+  size?: number;
+  ts?: number;
+  step?: number;
+  stage?: string | null;
+}
+export interface SubAgentStartData {
+  agent_id?: string;
+  agent_type?: string;
+  task?: string;
+  description?: string;
+  model?: string;
+  depth?: number;
+}
+export interface SubAgentEndData {
+  agent_id?: string;
+  agent_type?: string;
+  summary?: string;
+  result?: string;
+}
+export interface ClarificationRequestData {
+  question?: string;
+  question_id?: string;
+  asker_agent_id?: string;
+  asker_agent_type?: string;
+  answerer_agent_id?: string;
+  why_needed?: string;
+  urgency?: string;
+  depth?: number;
+  original_question?: string;
+}
+export interface ClarificationResolvedData {
+  question_id?: string;
+  answer?: string;
+  answered_by?: string;
+}
+export interface AgentToolCallData {
+  call_id?: string;
+  tool_name?: string;
+  asker_agent_type?: string;
+  target_agent_type?: string;
+  answerer_agent_type?: string;
+  depth?: number;
+  duration_s?: number;
+  is_error?: boolean;
+}
+export interface ClarificationExchangeData {
+  call_id?: string;
+  asker_agent_type?: string;
+  answerer_agent_type?: string;
+  depth?: number;
+  duration_s?: number;
+}
+export interface NotebookCreatedData {
+  notebook_name: string;
+  notebook_path: string;
+}
+// Wire shape of the `budget_exceeded` SSE event (#107): the runner halted
+// the agent because project spend crossed its cap.
+export interface BudgetExceededSSEData {
+  error: string;
+  project_id: string;
+  budget_usd?: number | null;
+  spent_usd: number;
+}
+export interface TaskDeletedData {
+  id: number;
+}
+export interface SessionResumedData {
+  mode?: 'resume' | 'retry';
+  prior_state?: string;
+}
+export type EdaFindingType =
+  | 'leakage'
+  | 'class_imbalance'
+  | 'high_cardinality'
+  | 'multicollinearity'
+  | 'missing_values'
+  | 'outliers'
+  | 'duplicates'
+  | 'skewed_target'
+  | 'id_column'
+  | 'constant_column'
+  | 'datetime_leakage'
+  | 'other';
+export interface EdaFinding {
+  finding_type: EdaFindingType;
+  columns: string[];
+  severity: 'info' | 'warning' | 'critical';
+  summary: string;
+  /** Concrete prep instruction — the "Apply in prep" payload. */
+  recommendation: string;
+}
+export interface EdaFindingsData {
+  findings?: EdaFinding[];
+  count?: number;
+  stage?: string;
+  content?: string;
+}
+export type ApprovalKind = 'target_column' | 'prep_plan' | 'model_shortlist' | 'other';
+export interface ApprovalRequestData {
+  approval_id?: string;
+  title?: string;
+  /** The proposed decision (markdown). */
+  content?: string;
+  kind?: ApprovalKind;
+  context?: string;
+  asker_agent_id?: string;
+  asker_agent_type?: string;
+  depth?: number;
+}
+export interface ApprovalResolvedData {
+  approval_id?: string;
+  decision?: 'approve' | 'edit' | 'timeout' | 'cancelled';
+  answer?: string;
+  answered_by?: string;
+}
+
+// Discriminated union of every SSE event the frontend understands. Narrow on
+// `event.type` (a plain switch/if works — each member's `type` is a string
+// literal) to get a correctly-typed `event.data` with no `as any` needed.
+// The fine-grained `notebook.cell.*` stream is consumed only by
+// `useNotebookSSE` via the shared `SSEStreamContext` bus; its members are
+// modeled here (payload types live in `lib/notebook/types.ts`) so the bus
+// stays fully typed end to end.
+export type SSEEvent =
+  | { type: 'state_change'; data: StateChangeData }
+  | { type: 'agent_token' | 'agent_message'; data: AgentMessageData }
+  | { type: 'tool_start'; data: ToolStartData }
+  | { type: 'tool_end'; data: ToolEndData }
+  | { type: 'code_output'; data: CodeOutputData }
+  | { type: 'agent_error'; data: AgentErrorData }
+  | { type: 'usage_event'; data: UsageEvent }
+  | { type: 'report_ready'; data: ReportReadyData }
+  | { type: 'files_ready'; data: FilesReadyData }
+  | { type: 'file_created'; data: FileCreatedData }
+  | { type: 'agent_aborted'; data: Record<string, unknown> }
+  | { type: 'session_resumed'; data: SessionResumedData }
+  | { type: 'metrics_batch'; data: MetricsBatchData }
+  | { type: 'metric'; data: MetricEventData }
+  | { type: 'chart_config'; data: ChartConfigSSEData }
+  | { type: 'log_event'; data: LogEventSSEData }
+  | { type: 'canvas_html'; data: CanvasHtmlData }
+  | { type: 'subagent_start'; data: SubAgentStartData }
+  | { type: 'subagent_end'; data: SubAgentEndData }
+  | { type: 'clarification_request'; data: ClarificationRequestData }
+  | { type: 'clarification_resolved'; data: ClarificationResolvedData }
+  | { type: 'approval_request'; data: ApprovalRequestData }
+  | { type: 'approval_resolved'; data: ApprovalResolvedData }
+  | { type: 'eda_findings'; data: EdaFindingsData }
+  | { type: 'agent_tool_call'; data: AgentToolCallData }
+  | { type: 'clarification_exchange'; data: ClarificationExchangeData }
+  | { type: 'notebook.created'; data: NotebookCreatedData }
+  | { type: 'notebook.kernel.state'; data: KernelStateEvent }
+  | { type: 'notebook.structure.changed'; data: StructureChangedEvent }
+  | { type: 'notebook.cell.started'; data: CellStartedEvent }
+  | { type: 'notebook.cell.stream'; data: CellStreamEvent }
+  | { type: 'notebook.cell.display'; data: CellDisplayEvent }
+  | { type: 'notebook.cell.error'; data: CellErrorEvent }
+  | { type: 'notebook.cell.completed'; data: CellCompletedEvent }
+  | { type: 'budget_exceeded'; data: BudgetExceededSSEData }
+  | {
+      type:
+        | 'experiment_created'
+        | 'dataset_registered'
+        | 'model_registered'
+        | 'experiment_state_changed'
+        | 'experiments_abandoned';
+      data: Record<string, unknown>;
+    }
+  | { type: 'task_created' | 'task_updated'; data: TaskEventData }
+  | { type: 'task_deleted'; data: TaskDeletedData };
+
+export interface UsageEvent {
+  id: number;
+  session_id: string;
+  project_id: string | null;
+  kind: 'llm' | 'sandbox';
+  agent_type: string | null;
+  agent_id: string | null;
+  provider: string | null;
+  model: string | null;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  sandbox_seconds: number;
+  gpu_type: string | null;
+  cost_usd: number;
+  is_error: boolean;
+  extra: Record<string, unknown>;
+  created_at: string;
+  cache_hit_pct?: number;
+}
+
+export interface SessionUsageRow {
+  session_id: string;
+  cost_usd: number;
+  llm_cost_usd: number;
+  compute_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  compute_seconds: number;
+  llm_calls: number;
+  compute_runs: number;
+  agents: string[];
+  models: string[];
+  first_seen: string | null;
+  last_seen: string | null;
+}
+
+export interface UsageSummary {
+  totals: {
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_input_tokens: number;
+    cache_creation_input_tokens: number;
+    cost_usd: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
+    sandbox_seconds: number; // legacy alias of compute_seconds
+    compute_seconds: number;
+    llm_calls: number;
+    sandbox_runs: number; // legacy alias of compute_runs
+    compute_runs: number;
+  };
+  by_day: Array<{
+    date: string;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
+    sandbox_seconds: number;
+  }>;
+  by_agent: Array<{
+    agent: string;
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+    llm_cost_usd: number;
+    compute_cost_usd: number;
+    sandbox_seconds: number;
+  }>;
+  by_model: Array<{
+    model: string;
+    calls: number;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+  }>;
+  by_session: SessionUsageRow[];
+  events: UsageEvent[];
+  /** Project-level budget vs. accumulated spend. null when the session has
+   *  no resolvable project. spent_usd is the WHOLE project's spend. */
+  budget?: BudgetInfo | null;
+}
+
+export interface BudgetInfo {
+  project_id: string;
+  budget_usd: number | null;
+  spent_usd: number;
+  remaining_usd: number | null;
+  exceeded: boolean;
+}
+
+export interface SkillCatalogEntry {
+  name: string;
+  slug: string;
+  description: string;
+  when_to_use: string;
+  version: string;
+  files: number;
+}
+
+export interface RegisteredModel {
+  id: string;
+  project_id: string;
+  experiment_id?: string | null;
+  name: string;
+  version: number;
+  source_session_id: string;
+  artifact_uri: string;
+  artifact_size_bytes: number;
+  metrics_summary: Record<string, number>;
+  description?: string;
+  hyperparams?: Record<string, unknown>;
+  // Per-split dataset references — same shape as on the lineage node.
+  dataset_refs?: Record<string, ModelDatasetRef>;
+  // Frozen Metric rows from the training session, snapshotted at
+  // register-model time so the curves survive session deletion.
+  metrics_history?: MetricPoint[];
+  // Volume path to the Modal serving app (Python file). When null, the
+  // Deploy button on /models is disabled — there's nothing to ship.
+  // Set by `create-serving-app`.
+  serving_app_path?: string | null;
+  // Auto-generated X-API-Key for the deployed endpoint. Persists on
+  // the model so redeploys keep the same key; rotate via
+  // `POST /models/{id}/rotate-key`.
+  api_key?: string | null;
+  framework: string | null;
+  status: string;
+  created_at: string;
+  // Cross-project listing endpoint adds the project's display name on
+  // each row so the catalog page doesn't need a second join client-side.
+  project_name?: string;
+}
+
+export interface AllModelsResponse {
+  projects: { id: string; name: string }[];
+  models: RegisteredModel[];
+}
+
+export interface ComputeOption {
+  value: string;
+  label: string;
+  blurb: string;
+}
+
+// Input schema for the in-app prediction playground (Test panel on
+// /models). `feature_columns: null` means the training dataset's
+// metadata is gone — the panel falls back to CSV-upload-only mode.
+export interface PredictSchema {
+  model_id: string;
+  feature_columns: string[] | null;
+  target_column: string | null;
+  endpoint_url: string | null;
+  has_live_deployment: boolean;
+}
+
+// Relayed verbatim from the deployed Modal endpoint through the backend
+// proxy. `predictions` is one element per input record — class label
+// for classifiers, numeric value for regressors.
+export interface PredictProxyResponse {
+  predictions: unknown[];
+  model?: string;
+  version?: number;
+}
+
+export interface DeploymentRow {
+  id: string;
+  model_id: string;
+  endpoint_url: string | null;
+  status: string;
+  error: string | null;
+  modal_app: string | null;
+  modal_function: string | null;
+  // Compute target the deployment was shipped on. Defaults to "cpu"
+  // when a deployment row predates the column.
+  compute?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RunSnapshotRow {
+  id: number;
+  session_id: string;
+  dataset_hash: string | null;
+  code_hash: string | null;
+  hyperparams: Record<string, unknown>;
+  env_lockfile_size: number;
+  manifest_uri: string | null;
+  created_at: string;
+}
+
+// Result of the active "Reproduce" action: the snapshot's captured scripts
+// are re-executed in a sandbox and the resulting metrics diffed vs the
+// original run (POST /sessions/{id}/snapshot/reproduce).
+export interface MetricDiffRow {
+  name: string;
+  original: number | null;
+  reproduced: number | null;
+  abs_diff: number | null;
+  rel_diff: number | null;
+  status: 'match' | 'drift' | 'missing' | 'new';
+}
+
+export interface ReproduceReport {
+  session_id: string;
+  snapshot_id: number;
+  reproduced_at: string;
+  tolerance: number;
+  status: 'match' | 'drift' | 'error';
+  inputs: {
+    dataset_verified: boolean;
+    code_verified: boolean;
+    changed_files: { path: string; expected_sha256: string; actual_sha256: string | null }[];
+  };
+  execution: {
+    returncode: number;
+    scripts: string[];
+    stderr_tail: string;
+  };
+  metrics: {
+    original: Record<string, number>;
+    reproduced: Record<string, number>;
+    rows: MetricDiffRow[];
+    summary: { matched: number; drifted: number; missing: number; new: number };
+    drift_detected: boolean;
+  };
+}
+
+export interface DatasetVersionRow {
+  id: number;
+  project_id: string;
+  hash: string;
   path: string;
-  type: string;
+  size_bytes: number;
+  parent_hash: string | null;
+  created_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Lineage graph + agent-declared experiment surfaces
+// ---------------------------------------------------------------------------
+
+export type LineageNodeType = 'dataset' | 'experiment' | 'model';
+
+export interface LineageNodeBase {
+  id: string;
+  type: LineageNodeType;
+  name: string;
+  description?: string;
+  created_at?: string;
+}
+
+export interface LineageDatasetNode extends LineageNodeBase {
+  type: 'dataset';
+  kind: 'raw' | 'processed';
+  path: string;
+  size_bytes: number;
+  hash: string;
+  source_session_id: string | null;
+  source_experiment_id: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface LineageExperimentNode extends LineageNodeBase {
+  type: 'experiment';
+  experiment_id: string;
+  session_id: string | null;
+  hypothesis: string;
+  state: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface ModelDatasetRef {
+  dataset_id: number;
+  metrics: Record<string, number>;
+}
+
+export interface LineageModelNode extends LineageNodeBase {
+  type: 'model';
+  model_id: string;
+  experiment_id: string | null;
+  framework: string;
+  metrics_summary: Record<string, number>;
+  hyperparams: Record<string, unknown>;
+  // Per-split dataset references — key is the split role ("train" |
+  // "val" | "test" | …). Drives the per-split metrics block in
+  // ModelNode and the role-coloured edges in the canvas.
+  dataset_refs: Record<string, ModelDatasetRef>;
+  version: number;
+}
+
+export type LineageNode = LineageDatasetNode | LineageExperimentNode | LineageModelNode;
+
+export interface LineageEdge {
+  id: string;
+  source: string;
+  target: string;
+  kind: 'derives_from' | 'feeds' | 'produces' | 'trained_into';
+  // Single-role legacy field — set to the first role when `roles` has
+  // multiple. Drives the edge colour.
+  role?: 'train' | 'val' | 'test' | 'legacy' | string;
+  // Full list of roles for `trained_into` edges. When the agent points
+  // train/val/test all at the same dataset (the common single-parquet-
+  // with-internal-split case) the backend collapses them to one edge
+  // with `roles=["train","val","test"]` so the canvas doesn't render
+  // three overlapping arrows.
+  roles?: string[];
+}
+
+export interface LineageGraph {
+  nodes: LineageNode[];
+  edges: LineageEdge[];
+}
+
+// Alias for clarity at call-sites — the full {nodes, edges} payload
+// the backend returns from /api/projects/{id}/lineage etc.
+export type LineagePayload = LineageGraph;
+
+// Project-level dataset detail (with kind/description/parent_id from the
+// agent-declared schema flip).
+export interface DatasetVersionDetail {
+  id: number;
+  project_id: string;
+  kind: 'raw' | 'processed';
+  name: string;
+  description: string;
+  hash: string;
+  path: string;
+  size_bytes: number;
+  parent_id: number | null;
+  parent_hash: string | null;
+  source_session_id: string | null;
+  source_experiment_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+// Sidebar tree row for the new Project → Session → Experiment hierarchy.
+export interface SessionRow {
+  id: string;
+  project_id: string | null;
+  experiment_id: string | null;
+  state: string;
+  model: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Standalone experiment detail page payload — the experiment row plus its
+// linked datasets (with role), the registered model, and the snapshot.
+export interface ExperimentFullDetail {
+  id: string;
+  project_id: string;
+  session_id: string | null;
+  name: string;
+  description: string;
+  hypothesis: string;
+  state: string;
+  started_at: string | null;
+  completed_at: string | null;
+  dataset_ref: string;
+  instructions: string;
+  tags: string[];
+  pinned: boolean;
+  archived: boolean;
+  created_at: string;
+  updated_at: string;
+  datasets: Array<DatasetVersionDetail & { role: string }>;
+  model: RegisteredModel | null;
+  snapshot: RunSnapshotRow | null;
+  /** Sessions attached to this experiment — both the canonical
+   *  Experiment.session_id (new schema) and any legacy
+   *  Session.experiment_id children, deduped by id. */
+  sessions: Session[];
+}
+
+// ---------------------------------------------------------------------------
+// Task tracking — live to-do list (agent-driven + user-editable)
+// ---------------------------------------------------------------------------
+
+export type TaskStatus = 'pending' | 'in_progress' | 'completed';
+
+export interface Task {
+  id: number;
+  session_id: string;
+  subject: string;
+  active_form: string | null;
+  short_description: string;
+  description: string;
+  status: TaskStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface TaskCreatePayload {
+  subject: string;
+  short_description?: string;
+  description?: string;
+  active_form?: string | null;
+  status?: TaskStatus;
+}
+
+export type TaskUpdatePayload = Partial<TaskCreatePayload>;
+
+// SSE payloads for task_created and task_updated. Server pushes the full
+// Task dict — UI just upserts by id.
+export type TaskEventData = Task;
+
+// ---------------------------------------------------------------------------
+// /compare — session comparison payload (routers/compare.py)
+// ---------------------------------------------------------------------------
+
+// Session + experiment header row. When a requested id doesn't exist the
+// backend still returns a stub with `missing: true` so the UI can keep the
+// user-supplied ordering.
+export interface CompareSessionInfo {
+  id: string;
+  missing: boolean;
+  experiment_id?: string;
+  experiment_name?: string;
+  state?: string;
+  model?: string | null;
+  created_at?: string;
+}
+
+export interface CompareMetricSample {
+  step: number;
+  value: number;
+  stage?: string | null;
+}
+
+// One series per session for a given metric name.
+export interface CompareMetricSeries {
+  session_id: string;
+  points: CompareMetricSample[];
+}
+
+export interface CompareFeatureOverlap {
+  common: string[];
+  per_session: Record<string, string[]>;
+}
+
+export interface CompareSessionTotals {
+  cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  sandbox_seconds: number;
+}
+
+export interface CompareResponse {
+  sessions: CompareSessionInfo[];
+  // metric name → per-session series (points ordered by step)
+  metrics: Record<string, CompareMetricSeries[]>;
+  // Backend quirk: initialized as an empty list and only replaced with the
+  // overlap object when at least one session has a prep summary.
+  feature_overlap: CompareFeatureOverlap | never[];
+  totals: Record<string, CompareSessionTotals>;
+}
+
+// Structured search result emitted by web-search and papers-search(search)
+// alongside the markdown text output. Used by the chat to render a rich
+// ChatGPT-style source-card panel.
+export interface SearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+  source?: string; // domain like "arxiv.org" or "blog.example.com"
+  arxiv_id?: string;
+  year?: string | number | null;
+  citations?: number;
+  authors?: string;
+  primary_category?: string;
+  backend?: string; // 'tavily' | 'brave' | 'duckduckgo' | 'arxiv' | 'semanticscholar'
 }

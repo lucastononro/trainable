@@ -1,0 +1,18 @@
+type: object
+properties:
+  parent_experiment_id:
+    type: string
+    description: ID of the experiment to fork from.
+  name:
+    type: string
+    description: Short label for the new experiment.
+  hypothesis:
+    type: string
+    description: 1-3 sentence statement of what this fork is testing differently from the parent.
+  description:
+    type: string
+    description: Longer optional notes.
+required:
+  - parent_experiment_id
+  - name
+  - hypothesis

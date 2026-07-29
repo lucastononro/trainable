@@ -2,9 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
+      - "release/**"
   pull_request:
-    branches: [main]
+    branches:
+      - main
+      - "release/**"
 
 jobs:
   backend-lint:
@@ -19,7 +23,8 @@ jobs:
         with:
           python-version: "3.11"
           cache: pip
-      - run: pip install ruff
+      # Keep in sync with the ruff-pre-commit rev in .pre-commit-config.yaml.
+      - run: pip install "ruff==0.15.22"
       - run: ruff check .
       - run: ruff format --check .
 
@@ -29,6 +34,22 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trainable_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/trainable_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,6 +57,34 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
+      # Coverage is scoped to production code: backend/.coveragerc omits
+      # tests/ so the gate reflects untested application code (with tests
+      # included the total was ~66%; production-only it is ~51%).
+      - run: |
+          pytest tests/ -v --tb=short \
+            --cov=. \
+            --cov-report=xml \
+            --cov-report=term-missing \
+            --cov-fail-under=50
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: backend-coverage
+          path: backend/coverage.xml
+
+  cli-test:
+    name: CLI Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install pytest .
       - run: pytest tests/ -v --tb=short
 
   backend-security:
@@ -54,6 +103,86 @@ jobs:
       - run: bandit -r . -x ./tests --severity-level medium -f json -o bandit-report.json || true
       - run: bandit -r . -x ./tests --severity-level high
 
+  backend-vuln-scan:
+    name: Backend Dependency Vulnerability Scan (advisory)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # Match backend/Dockerfile (python:3.13-slim) so the audited
+          # dependency resolution mirrors what actually ships.
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -r requirements.txt pip-audit
+      # Advisory only: known advisories (e.g. transitive starlette/mcp/
+      # python-multipart CVEs) already exist in the dependency tree today,
+      # and shouldn't block CI. Flip this to blocking (drop
+      # continue-on-error) once those are triaged and cleared.
+      - name: pip-audit
+        run: pip-audit
+        continue-on-error: true
+
+  frontend-vuln-scan:
+    name: Frontend Dependency Vulnerability Scan (advisory)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # Advisory only: known advisories (next/glob/prismjs/postcss/js-yaml)
+      # already exist in the dependency tree today, and shouldn't block CI.
+      # Flip this to blocking (drop continue-on-error) once those are
+      # triaged and cleared.
+      - name: npm audit
+        run: npm audit
+        continue-on-error: true
+
+  image-scan:
+    name: Container Image Vulnerability Scan (advisory)
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: trainable-backend
+            context: ./backend
+          - image: trainable-frontend
+            context: ./frontend
+            target: runner
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.image }} image (local only, not pushed)
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          target: ${{ matrix.target || '' }}
+          push: false
+          load: true
+          tags: ${{ matrix.image }}:ci-scan
+      # Advisory only: base-image and OS-package advisories aren't triaged
+      # yet and shouldn't block CI. Flip to blocking (drop
+      # continue-on-error, or set exit-code back to 1 without the wrapper)
+      # once they are.
+      - name: Trivy scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        continue-on-error: true
+        with:
+          image-ref: ${{ matrix.image }}:ci-scan
+          format: table
+          severity: "CRITICAL,HIGH"
+          exit-code: "1"
+
   frontend-lint:
     name: Frontend Lint & Typecheck
     runs-on: ubuntu-latest
@@ -71,6 +200,23 @@ jobs:
       - run: npx next lint
       - run: npx tsc --noEmit
       - run: npx prettier --check 'src/**/*.{ts,tsx,css}'
+      - run: npm test
+
+  frontend-test:
+    name: Frontend Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
 
   frontend-build:
     name: Frontend Build

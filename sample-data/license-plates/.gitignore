@@ -1,0 +1,12 @@
+# Bulk image data — fetched on demand by download.py.
+# The other tabular sample-data folders ship a single CSV file each;
+# CV datasets are too heavy for git, so the script + CONTEXT.md ship
+# and the images stay local.
+test/
+valid/
+train/
+*.zip
+
+# Keep the 3-image smoke set checked in so a fresh clone has SOMETHING
+# to upload without running download.py first.
+!valid-mini/

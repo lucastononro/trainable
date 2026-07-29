@@ -1,7 +1,9 @@
 """Data exploration endpoints using DuckDB for querying processed parquet files."""
 
+import asyncio
 import io
 import logging
+import posixpath
 import re
 
 import duckdb
@@ -12,8 +14,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db import async_session, get_db
-from models import Artifact, ProcessedDatasetMeta
-from services.volume import get_volume, read_volume_file, reload_volume
+from models import Artifact, ProcessedDatasetMeta, Project
+from schemas import RawDatasetPreview
+from services.dataset_preview import profile_raw_file
+from services.volume import (
+    listdir_async,
+    read_volume_file_async,
+    reload_volume_async,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -53,9 +61,25 @@ class QueryRequest(BaseModel):
 def _load_parquet_to_duckdb(
     con: duckdb.DuckDBPyConnection, raw: bytes, table_name: str
 ):
-    """Load parquet bytes into a DuckDB table via pyarrow."""
+    """Load parquet bytes into a DuckDB table via pyarrow.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    """
     arrow_table = pq.read_table(io.BytesIO(raw))  # noqa: F841 — referenced by DuckDB SQL below
     con.execute(f"CREATE TABLE {table_name} AS SELECT * FROM arrow_table")
+
+
+def _execute_fetch(
+    con: duckdb.DuckDBPyConnection, sql: str, params: list | None = None
+) -> tuple[list[str], list[tuple]]:
+    """Execute a query and fetch all rows.
+
+    Blocking (CPU-bound) — call via asyncio.to_thread from async code.
+    Returns (column_names, rows).
+    """
+    result = con.execute(sql, params) if params is not None else con.execute(sql)
+    columns = [desc[0] for desc in result.description]
+    return columns, result.fetchall()
 
 
 async def _resolve_split_paths(session_id: str) -> dict[str, str]:
@@ -100,9 +124,8 @@ async def _resolve_split_paths(session_id: str) -> dict[str, str]:
     missing = {"train.parquet", "val.parquet", "test.parquet"} - set(paths.keys())
     if missing:
         try:
-            reload_volume()
-            vol = get_volume()
-            for entry in vol.listdir(f"/sessions/{session_id}", recursive=True):
+            await reload_volume_async()
+            for entry in await listdir_async(f"/sessions/{session_id}", recursive=True):
                 if entry.type.name != "FILE":
                     continue
                 base = entry.path.rsplit("/", 1)[-1]
@@ -122,7 +145,7 @@ async def query_prep_data(session_id: str, body: QueryRequest):
     Also creates an all_data view combining all splits with a 'split' column.
     """
 
-    reload_volume()
+    await reload_volume_async()
 
     split_paths = await _resolve_split_paths(session_id)
     con = duckdb.connect(":memory:")
@@ -134,8 +157,8 @@ async def query_prep_data(session_id: str, body: QueryRequest):
             if not path:
                 continue
             try:
-                raw = read_volume_file(path)
-                _load_parquet_to_duckdb(con, raw, split)
+                raw = await read_volume_file_async(path)
+                await asyncio.to_thread(_load_parquet_to_duckdb, con, raw, split)
             except Exception:
                 pass
 
@@ -160,9 +183,7 @@ async def query_prep_data(session_id: str, body: QueryRequest):
         if "LIMIT" not in sql.upper():
             sql += f" LIMIT {max_limit}"
 
-        result = con.execute(sql)
-        columns = [desc[0] for desc in result.description]
-        rows = result.fetchall()
+        columns, rows = await asyncio.to_thread(_execute_fetch, con, sql)
 
         return {
             "columns": columns,
@@ -186,23 +207,23 @@ async def preview_prep_data(
 ):
     """Quick preview of a processed data split (first N rows)."""
 
-    reload_volume()
+    await reload_volume_async()
 
     split_paths = await _resolve_split_paths(session_id)
     path = split_paths.get(f"{split}.parquet")
     if not path:
         raise HTTPException(status_code=404, detail=f"{split}.parquet not found")
     try:
-        raw = read_volume_file(path)
+        raw = await read_volume_file_async(path)
     except Exception:
         raise HTTPException(status_code=404, detail=f"{split}.parquet not readable")
 
     con = duckdb.connect(":memory:")
     try:
-        _load_parquet_to_duckdb(con, raw, split)
-        result = con.execute(f"SELECT * FROM {split} LIMIT ?", [limit])
-        columns = [desc[0] for desc in result.description]
-        rows = result.fetchall()
+        await asyncio.to_thread(_load_parquet_to_duckdb, con, raw, split)
+        columns, rows = await asyncio.to_thread(
+            _execute_fetch, con, f"SELECT * FROM {split} LIMIT ?", [limit]
+        )
         return {
             "split": split,
             "columns": columns,
@@ -211,6 +232,86 @@ async def preview_prep_data(
         }
     finally:
         con.close()
+
+
+# ---------------------------------------------------------------------------
+# Raw dataset preview (pre-prep) — quick profile of an uploaded file
+# ---------------------------------------------------------------------------
+
+# Extension → DuckDB reader family for raw uploaded files.
+_RAW_PREVIEW_FORMATS: dict[str, str] = {
+    ".csv": "csv",
+    ".tsv": "tsv",
+    ".parquet": "parquet",
+}
+
+
+def _validate_raw_dataset_path(project_id: str, path: str) -> str:
+    """Normalize `path` and require it to stay inside the project's datasets root.
+
+    Accepts either an absolute volume path (`/projects/{pid}/datasets/x.csv`)
+    or a path relative to the datasets root (`x.csv`, `folder/x.csv`).
+    """
+    datasets_root = f"/projects/{project_id}/datasets"
+    raw = (path or "").strip().replace("\\", "/")
+    if not raw.startswith("/"):
+        raw = f"{datasets_root}/{raw}"
+    normalized = posixpath.normpath(raw)
+    if ".." in normalized.split("/") or not normalized.startswith(datasets_root + "/"):
+        raise HTTPException(
+            status_code=403,
+            detail="Access denied: path outside the project's datasets directory",
+        )
+    return normalized
+
+
+@router.get("/projects/{project_id}/datasets/preview", response_model=RawDatasetPreview)
+async def preview_raw_dataset(
+    project_id: str,
+    path: str = Query(..., description="File path under the project's datasets root"),
+    limit: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+):
+    """Preview + quick-profile a RAW uploaded file (CSV/TSV/Parquet).
+
+    Unlike `/sessions/{id}/prep/preview`, this works right after upload —
+    before any prep has produced processed splits — so the user can eyeball
+    head rows, dtypes, row/col counts, and per-column missing %/cardinality
+    before talking to the agent.
+    """
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    normalized = _validate_raw_dataset_path(project_id, path)
+    ext = posixpath.splitext(normalized)[1].lower()
+    fmt = _RAW_PREVIEW_FORMATS.get(ext)
+    if fmt is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{ext or normalized.rsplit('/', 1)[-1]}' — preview supports CSV, TSV, and Parquet",
+        )
+
+    await reload_volume_async()
+    try:
+        raw = await read_volume_file_async(normalized)
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"File not found: {normalized}")
+
+    try:
+        profile = await asyncio.to_thread(profile_raw_file, raw, ext, limit)
+    except duckdb.Error as e:
+        # Unparseable/unsupported input file — a client-visible 400.
+        raise HTTPException(status_code=400, detail=f"Preview error: {e}")
+    # Anything else (OSError, MemoryError, ...) is a server-side failure and
+    # propagates as a 500 instead of a misleading 400.
+
+    return RawDatasetPreview(
+        path=normalized,
+        name=normalized.rsplit("/", 1)[-1],
+        format=fmt,
+        **profile,
+    )
 
 
 @router.get("/sessions/{session_id}/prep/metadata")

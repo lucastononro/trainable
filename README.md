@@ -6,6 +6,12 @@
 
 AI-powered ML experimentation platform. Upload a dataset, and AI agents autonomously perform EDA, data preparation, and model training — with real-time streaming visualization.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=hwmT-4pKJQ8">
+    <img src="https://img.youtube.com/vi/hwmT-4pKJQ8/maxresdefault.jpg" alt="Watch the Trainable intro video" width="640">
+  </a>
+</p>
+
 ## Install
 
 You need **Docker** and one of:

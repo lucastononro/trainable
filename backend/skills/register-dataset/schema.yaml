@@ -1,0 +1,36 @@
+type: object
+properties:
+  experiment_id:
+    type: string
+    description: ID returned by create-experiment.
+  path:
+    type: string
+    description: Volume path of the dataset file or directory.
+  name:
+    type: string
+    description: Human-readable label (e.g. "train splits, scaled").
+  description:
+    type: string
+    description: 1-2 sentence summary of what was done to produce this version.
+  content_hash:
+    type: string
+    description: SHA-256 hex digest of the file contents.
+  size_bytes:
+    type: integer
+    description: File size in bytes.
+  role:
+    type: string
+    enum: ["input", "output"]
+    description: Whether this dataset feeds the experiment (input) or was produced by it (output).
+  parent_dataset_id:
+    type: integer
+    description: The dataset_version_id of the source this was derived from. Strongly preferred for lineage.
+  metadata:
+    type: object
+    description: "Structured dict: columns, target_column, feature_columns, train_rows, etc."
+required:
+  - experiment_id
+  - path
+  - name
+  - description
+  - content_hash

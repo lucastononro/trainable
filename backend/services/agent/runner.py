@@ -1,30 +1,42 @@
-"""Core agent loop — orchestrates Claude Agent SDK calls."""
+"""Core agent loop — orchestrates LLM provider calls via the factory.
+
+For Claude (`supports_mcp=True`), the provider exposes the Claude Agent SDK's
+MCP-aware loop and dispatches tool calls internally. For other providers, the
+runner owns the tool-execution loop: it dispatches each tool_call event to a
+skill handler and feeds the result back as the next round's input messages.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
+import uuid
 from datetime import datetime, timezone
 
-from claude_agent_sdk import (
-    AssistantMessage,
-    ClaudeAgentOptions,
-    ResultMessage,
-    UserMessage,
-    query,
-)
 from sqlalchemy import select
 
 from config import settings
 from db import async_session
 from models import Artifact, Experiment, Message, ProcessedDatasetMeta, Project
-from services.volume import get_volume, read_volume_file, reload_volume
+from services.llm import factory as llm_factory
+from services.skills import build_skill_entries, get_active_tools, get_skill
+from services.volume import (
+    listdir_async,
+    read_volume_file_async,
+    reload_volume_async,
+)
+
+from observability import agent_span, bind_log_context, clear_log_context
+from services.budget import BudgetExceededError, check_budget
+from services.usage import record_llm_usage
 
 from .agents import (
     get_agent_default_model,
     get_agent_opener,
-    get_agent_tools,
+    get_agent_provider,
+    get_agent_skills,
+    get_skill_for_agent,
     render_agent_system_prompt,
 )
 from .events import post_stage_hook, publish_artifacts, save_and_publish
@@ -41,6 +53,22 @@ _THOUGHT_BLOCK_MAX_CHARS = 1500
 
 _MENTION_SENTINEL_START = "\ue000"
 _MENTION_SENTINEL_END = "\ue001"
+
+
+async def _check_budget_failopen(session_id: str) -> None:
+    """Budget check that lets ONLY BudgetExceededError escape.
+
+    Any other exception (e.g. a transient DB hiccup during the budget
+    query) must not unwind run_agent into its generic handler and mark
+    the session `failed` \u2014 the guardrail fails open with a warning and
+    the next usage event retries the check.
+    """
+    try:
+        await check_budget(session_id)
+    except BudgetExceededError:
+        raise
+    except Exception as e:
+        logger.warning("check_budget failed (fail-open, will retry): %s", e)
 
 
 def _apply_mentions(user_prompt: str, mentions: list[dict] | None) -> str:
@@ -153,15 +181,27 @@ async def _load_conversation_history(session_id: str) -> list[dict]:
     return messages
 
 
-async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
-    """Return (project_id, project_name, project_files_listing) for an experiment.
+async def _load_project_context(
+    experiment_id: str,
+) -> tuple[str, str, str, dict, dict]:
+    """Return (project_id, project_name, project_files_listing, sandbox_config,
+    training_config).
 
     project_files_listing is a multi-line string describing all files currently
     present under /projects/{project_id}/datasets/. If the project has no data,
     returns the placeholder "(no data uploaded yet)".
+
+    sandbox_config is the project's per-profile compute settings (default and
+    training profiles, each with optional gpu + timeout). Empty dict if unset.
+
+    training_config is the project's pre-flight training controls (optimization
+    metric, model families, trial budget, wall-clock/cost cap — see
+    schemas.TrainingConfig). Empty dict if unset.
     """
     project_id = ""
     project_name = ""
+    sandbox_config: dict = {}
+    training_config: dict = {}
     try:
         async with async_session() as db:
             result = await db.execute(
@@ -176,30 +216,28 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
                 project = proj_result.scalar_one_or_none()
                 if project:
                     project_name = project.name
+                    sandbox_config = project.sandbox_config or {}
+                    training_config = project.training_config or {}
     except Exception as e:
         logger.warning("Failed to load project for experiment %s: %s", experiment_id, e)
 
     files_listing = "(no data uploaded yet)"
     if project_id:
-        # Use the safe wrapper — `vol.reload()` raises "reload() can only be
-        # called from within a running function" when invoked from the
-        # FastAPI process on some Modal SDK versions, and silently swallowing
-        # that here would (and did) make every agent think the project is
-        # empty even when files are present.
-        reload_volume()
+        await reload_volume_async()
         try:
-            vol = get_volume()
             entries = []
             datasets_root = f"/projects/{project_id}/datasets"
-            for entry in vol.listdir(datasets_root, recursive=True):
+            for entry in await listdir_async(datasets_root, recursive=True):
                 if entry.type.name != "FILE":
                     continue
-                # Display path relative to /data/ mount used inside sandboxes.
                 display = entry.path
                 if display.startswith("/"):
                     display = display[1:]
                 entries.append(f"- /data/{display}")
             if entries:
+                # Sort for cache prefix stability — listdir order is not
+                # guaranteed and would invalidate the prompt-cache hit.
+                entries.sort()
                 files_listing = "\n".join(entries[:50])
                 if len(entries) > 50:
                     files_listing += f"\n  …({len(entries) - 50} more)"
@@ -213,16 +251,10 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
                     "Project context: project %s datasets dir is empty", project_id
                 )
         except FileNotFoundError:
-            # Datasets folder genuinely hasn't been created yet — leave the
-            # placeholder. Distinguish from real errors below.
             logger.info(
                 "Project context: no datasets folder yet for project %s", project_id
             )
         except Exception as e:
-            # Don't swallow silently. If listdir really fails (transient
-            # Modal hiccup, malformed path, etc.) the agent should at least
-            # know the listing was unavailable rather than be confidently
-            # told the project is empty.
             logger.warning(
                 "Project context: failed to list datasets for %s: %s",
                 project_id,
@@ -235,7 +267,181 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str]:
                 + "/datasets/` directly)"
             )
 
-    return project_id, project_name, files_listing
+    return project_id, project_name, files_listing, sandbox_config, training_config
+
+
+def _apply_training_wallclock_cap(sandbox_config: dict, training_config: dict) -> dict:
+    """Clamp the training sandbox profile's per-call timeout to the user's
+    wall-clock budget (training_config.max_wallclock_minutes).
+
+    This is the hard-enforcement half of the pre-flight controls: even if the
+    agent ignores the prompt-level constraint, a heavy execute-code call cannot
+    run past the cap. Returns a new dict; the input is not mutated.
+    """
+    cap_minutes = (training_config or {}).get("max_wallclock_minutes")
+    if not cap_minutes:
+        return sandbox_config
+    cap_seconds = int(cap_minutes) * 60
+    config = dict(sandbox_config or {})
+    training_profile = dict(config.get("training") or {})
+    current = training_profile.get("timeout") or settings.sandbox_timeout
+    training_profile["timeout"] = min(int(current), cap_seconds)
+    config["training"] = training_profile
+    return config
+
+
+def _format_training_constraints(training_config: dict) -> str:
+    """Render the user's pre-flight training controls as a prompt block.
+
+    Injected into the system prompt of any agent that can call start-training
+    (orchestrator, trainer, chat). Empty string when no constraint is set so
+    unconfigured projects behave exactly as before.
+    """
+    cfg = training_config or {}
+    metric = cfg.get("optimization_metric")
+    families = cfg.get("model_families") or []
+    max_trials = cfg.get("max_trials")
+    max_wallclock = cfg.get("max_wallclock_minutes")
+    max_cost = cfg.get("max_cost_usd")
+
+    constraints: list[str] = []
+    if metric:
+        constraints.append(
+            f"- **Optimization metric**: `{metric}`. Every model-selection and "
+            f"hyperparameter-tuning decision (including the Optuna objective) "
+            f"MUST optimize this metric. Report other metrics too, but select on this one."
+        )
+    if families:
+        fam_list = ", ".join(f"`{f}`" for f in families)
+        constraints.append(
+            f"- **Allowed model families**: {fam_list}. Do NOT train or tune "
+            f"models outside these families — not even for the quick scan. "
+            f"start-training rejects other frameworks."
+        )
+    if max_trials:
+        constraints.append(
+            f"- **Trial budget**: at most {max_trials} hyperparameter-search "
+            f"trials TOTAL across the whole run. This overrides any default "
+            f"trial count in your instructions (e.g. '30-50 optuna trials')."
+        )
+    if max_wallclock:
+        constraints.append(
+            f"- **Wall-clock cap**: {max_wallclock} minutes of training compute. "
+            f"The training sandbox profile's per-call timeout is clamped to this "
+            f"cap; plan fits/sweeps to finish within it."
+        )
+    if max_cost:
+        constraints.append(
+            f"- **Cost cap**: ${max_cost:g} for this training effort. Prefer "
+            f"cheaper models/fewer trials as you approach it."
+        )
+
+    if not constraints:
+        return ""
+
+    lines = [
+        "## User training constraints (MANDATORY)",
+        "",
+        "The user configured pre-flight training controls in Project Settings.",
+        "These are hard requirements, not suggestions — they OVERRIDE any",
+        "conflicting default strategy in your instructions:",
+        "",
+        *constraints,
+        "",
+        "When delegating training work to another agent, restate these",
+        "constraints verbatim in the delegation instructions so they are not",
+        "lost. The start-training skill validates its arguments against them,",
+        "and REQUIRES you to declare `optimization_metric` and `max_trials`",
+        "explicitly whenever the corresponding constraint is set above.",
+    ]
+    return "\n".join(lines)
+
+
+# One-line hardware guidance per canonical label, shown next to each
+# allowed option in the compute-environment prompt block.
+_GPU_BLURBS: dict[str, str] = {
+    "cpu": "CPU only — EDA, plotting, sklearn/xgboost/lightgbm",
+    "T4": "16GB entry GPU — small fine-tunes, light inference",
+    "L4": "24GB — best price/perf for medium GPU work",
+    "A10G": "24GB mid-tier — solid training workhorse",
+    "A100-40GB": "40GB — large models, big batches",
+    "A100-80GB": "80GB — very large models / long contexts",
+    "H100": "80GB top-tier — only when speed or memory demands it",
+}
+
+
+def _gpu_hourly_usd(gpu: str) -> float | None:
+    """Approx $/hr for a canonical label on the active provider; None when
+    pricing is unavailable (the prompt then omits prices)."""
+    try:
+        # Private import on purpose: sandbox.yml rate resolution has no
+        # public API yet. A signature/name change there degrades to
+        # price-less prompts — logged below so it isn't invisible.
+        from services.usage import _resolve_compute_rate
+
+        rate = _resolve_compute_rate(settings.compute_provider, gpu)
+        return rate * 3600 if rate > 0 else None
+    except Exception as e:
+        logger.debug("GPU pricing unavailable for %s: %s", gpu, e)
+        return None
+
+
+def _format_compute_env(sandbox_config: dict) -> str:
+    """Render the agent's compute allowance as a prompt block: which
+    hardware it may request per execute-code call (`gpu` arg), the max
+    per-call timeout, and how the heavy/default profile fallback works.
+
+    Uses the same resolver as the execute-code handler
+    (services/compute_allowance.py) so the prompt never advertises
+    hardware the handler would reject.
+    """
+    from services.compute_allowance import resolve_compute_allowance
+
+    allowance = resolve_compute_allowance(sandbox_config)
+    fallback_timeout = settings.sandbox_timeout
+
+    default_profile = sandbox_config.get("default") or {}
+    training_profile = sandbox_config.get("training") or {}
+    default_gpu = default_profile.get("gpu") or "cpu"
+    training_gpu = training_profile.get("gpu") or "cpu"
+    default_timeout = default_profile.get("timeout") or fallback_timeout
+    training_timeout = training_profile.get("timeout") or fallback_timeout
+
+    hw_lines = []
+    for gpu in allowance.allowed_gpus:
+        blurb = _GPU_BLURBS.get(gpu, "")
+        price = _gpu_hourly_usd(gpu)
+        price_part = f" (~${price:.2f}/hr)" if price is not None else ""
+        hw_lines.append(f"  - `{gpu}` — {blurb}{price_part}")
+
+    lines = [
+        "## Compute environment for `execute-code`",
+        "",
+        "Each call provisions a fresh sandbox. You choose the compute per",
+        "call with the optional `gpu` argument:",
+        "",
+        "**Allowed hardware** (values accepted for `gpu`):",
+        *hw_lines,
+        "",
+        f"**Timeout**: pass `timeout` (seconds, per call; max {allowance.max_timeout}s"
+        f" — higher values are clamped). Defaults: {default_timeout}s"
+        f" (default profile) / {training_timeout}s (`heavy=True`).",
+        "",
+        "**How to choose**:",
+        f"- Omit `gpu` → profile fallback: `heavy=False` = default profile"
+        f" ({default_gpu}), `heavy=True` = training profile ({training_gpu}).",
+        "- Prefer the cheapest hardware that fits. CPU for EDA / plots /",
+        "  inspection; small GPUs for modest fine-tunes; big GPUs only when",
+        "  memory or speed demands it. On CPU, don't rely on `device='cuda'`.",
+        "- **Timeout is per call**, not per session — split long fits across",
+        "  calls (one fold / trial / epoch chunk each) and persist state to",
+        "  the session workspace between calls.",
+        "- Requesting hardware outside the list returns an error naming the",
+        "  allowed set.",
+        "- The user can change this allowance in Project Settings — your",
+        "  next call picks up the new values automatically.",
+    ]
+    return "\n".join(lines)
 
 
 async def _load_prev_context(session_id: str, stage: str) -> str:
@@ -281,7 +487,8 @@ async def _load_prev_context(session_id: str, stage: str) -> str:
                     continue
                 seen_producers.add(producer)
                 try:
-                    text = read_volume_file(art.path).decode("utf-8", errors="replace")
+                    raw = await read_volume_file_async(art.path)
+                    text = raw.decode("utf-8", errors="replace")
                 except Exception:
                     continue
                 if text.strip():
@@ -317,6 +524,454 @@ async def _load_prev_context(session_id: str, stage: str) -> str:
     return prev_context
 
 
+def _normalize_handler_text(result) -> tuple[str, bool]:
+    """Coerce a skill-handler return into (text, is_error).
+
+    Handlers return {"content": [{"type":"text","text":"..."}], "is_error": bool?}.
+    """
+    if isinstance(result, dict):
+        is_error = bool(result.get("is_error"))
+        parts = []
+        for item in result.get("content", []) or []:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif hasattr(item, "text"):
+                parts.append(item.text or "")
+            else:
+                parts.append(str(item))
+        text = "\n".join(p for p in parts if p) or "(no output)"
+        return text, is_error
+    return _block_to_text(result), False
+
+
+def _record_skill_specs(agent_type: str, agent_skills: list[str]) -> list[dict]:
+    """Build the normalized [{name, description, input_schema}] list the
+    non-Claude providers consume."""
+    specs = []
+    for slug in agent_skills:
+        merged = get_skill_for_agent(agent_type, slug)
+        specs.append(
+            {
+                "name": merged["name"],
+                "description": merged["description"],
+                "input_schema": merged["input_schema"]
+                or {"type": "object", "properties": {}},
+            }
+        )
+    return specs
+
+
+def _resolve_effective_skills(
+    *, base_skills: list[str], session_id: str, agent_id: str
+) -> list[str]:
+    """Union the agent's base skills with capability skills activated via use-skill.
+
+    Capability skills are activated by knowledge skills declaring
+    `enables: [<slug>...]` in their frontmatter and being loaded through the
+    `use-skill` tool. Activations are scoped to (session_id, agent_id) and
+    cleared on session cleanup.
+
+    Returns base skill order first, then activations appended in registry
+    order (deterministic for prompt-cache stability).
+    """
+    base_set = set(base_skills)
+    extras: list[str] = []
+    for slug in sorted(get_active_tools(session_id, agent_id)):
+        if slug in base_set:
+            continue
+        try:
+            skill = get_skill(slug)
+        except KeyError:
+            continue
+        if skill.has_handler:
+            extras.append(slug)
+    return list(base_skills) + extras
+
+
+async def _drive_provider(
+    *,
+    provider_id: str,
+    prompt: str,
+    system_prompt: str,
+    model: str,
+    agent_type: str,
+    session_id: str,
+    experiment_id: str,
+    stage: str,
+    depth: int,
+    agent_id: str,
+    parent_agent_id: str | None,
+    agent_skills: list[str],
+    sandbox_config: dict,
+    instructions: str,
+    agent_models: dict,
+    publish,
+    agent_span,
+    thinking_level: str | None = None,
+) -> str:
+    """Drive one agent run via the LLM factory.
+
+    For Claude (`supports_mcp=True`), the provider runs the MCP-aware loop
+    internally and emits text/tool_call/tool_result/usage events. For other
+    providers, this function maintains the messages list and dispatches each
+    `tool_call` to the matching skill handler.
+    """
+    provider = llm_factory.get_provider(provider_id)
+    caps = provider.capabilities
+    collected_text = ""
+
+    base_agent_skills = list(agent_skills)
+
+    def _build_skill_entries_for(skills: list[str]) -> dict:
+        """Closure to rebuild handlers for a given skill list — used per-turn
+        in the non-Claude path so newly-activated tools become callable."""
+        return build_skill_entries(
+            agent_type=agent_type,
+            session_id=session_id,
+            experiment_id=experiment_id,
+            stage=stage,
+            depth=depth,
+            publish_fn=save_and_publish,
+            sandbox_config=sandbox_config,
+            model=model,
+            instructions=instructions,
+            agent_models=agent_models,
+            agent_id=agent_id,
+            parent_agent_id=parent_agent_id,
+            agent_skills_override=skills,
+        )
+
+    async def _persist_text(text: str) -> None:
+        nonlocal collected_text
+        collected_text += text
+        await publish("agent_message", {"text": text}, role="assistant")
+        truncated_text, was_trunc, orig_bytes = _truncate(text)
+        await publish(
+            "agent_thought",
+            {
+                "text": truncated_text,
+                "block_type": "text",
+                "truncated": was_trunc,
+                "original_bytes": orig_bytes,
+            },
+            role="assistant",
+            publish=False,
+        )
+
+    async def _persist_tool_call(tool_name: str, tool_use_id: str, args: dict) -> None:
+        payload_text = _block_to_text(args)
+        truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
+        await publish(
+            "agent_thought",
+            {
+                "text": truncated_text,
+                "block_type": "tool_use",
+                "tool_name": tool_name,
+                "tool_use_id": tool_use_id,
+                "truncated": was_trunc,
+                "original_bytes": orig_bytes,
+            },
+            role="assistant",
+            publish=False,
+        )
+
+    async def _persist_tool_result(tool_use_id: str, content, is_error: bool) -> None:
+        if isinstance(content, list):
+            parts = []
+            for item in content:
+                if hasattr(item, "text"):
+                    parts.append(item.text or "")
+                elif isinstance(item, dict):
+                    parts.append(item.get("text", ""))
+                else:
+                    parts.append(str(item))
+            payload_text = "\n".join(p for p in parts if p)
+        else:
+            payload_text = _block_to_text(content)
+        truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
+        await publish(
+            "agent_thought",
+            {
+                "text": truncated_text,
+                "block_type": "tool_result",
+                "tool_use_id": tool_use_id,
+                "is_error": is_error,
+                "truncated": was_trunc,
+                "original_bytes": orig_bytes,
+            },
+            role="user",
+            publish=False,
+        )
+
+    async def _record_usage(
+        model_name: str, usage: dict, is_error: bool, total_cost: float | None
+    ):
+        try:
+            try:
+                agent_span.set_attribute(
+                    "llm.input_tokens", int(usage.get("input_tokens", 0) or 0)
+                )
+                agent_span.set_attribute(
+                    "llm.output_tokens", int(usage.get("output_tokens", 0) or 0)
+                )
+                agent_span.set_attribute(
+                    "llm.cache_read_input_tokens",
+                    int(usage.get("cache_read_input_tokens", 0) or 0),
+                )
+                if total_cost is not None:
+                    agent_span.set_attribute("llm.cost_usd", float(total_cost))
+            except Exception:
+                pass
+            await record_llm_usage(
+                session_id=session_id,
+                agent_type=agent_type,
+                agent_id=agent_id,
+                provider=provider_id,
+                model=model_name,
+                usage=usage,
+                is_error=is_error,
+            )
+        except Exception as e:
+            logger.warning("record_llm_usage failed: %s", e)
+        # Budget hard-stop: once the project's accumulated spend crosses its
+        # cap, halt this agent at the very next usage event. Raising here
+        # unwinds the provider loop; run_agent catches BudgetExceededError
+        # and lands the session in a clean `budget_exceeded` terminal state.
+        # Fail-open on any other error so a transient DB hiccup during the
+        # budget query can't land the session in `failed`.
+        await _check_budget_failopen(session_id)
+
+    # Wall-clock cap for provider LLM calls. The runner no longer wraps its
+    # own loop with `asyncio.timeout(timeout_s)` — that competed with the
+    # per-sandbox timeout configured per project and could kill a session
+    # mid-tool-call without surfacing the failure to the model. Tool
+    # execution stays governed by the sandbox's own timeout
+    # (`sandbox_timeout`, override per project via the agent's
+    # `default`/`training` profile): when it fires, Modal kills the
+    # container and the execute-code handler returns an `is_error`
+    # tool_result so the model can adapt or stop. The value below is
+    # enforced *inside each provider* around the HTTP call only (SDK
+    # timeout / `enforce_wall_clock`; Claude via API_TIMEOUT_MS), so a
+    # stalled provider request raises TimeoutError — handled by
+    # `run_agent`'s TimeoutError path, which ends the run and frees the
+    # session task — without ever counting tool time (issue #95).
+    timeout_s = settings.agent_timeout_seconds
+
+    # Translate the resolved thinking level into provider-shaped kwargs once
+    # so both run-paths spread the same config. OpenAI consumes
+    # `reasoning_effort`; Claude/Gemini accept the kwargs and currently
+    # ignore them (extending those providers is tracked separately).
+    thinking_kwargs: dict = {}
+    if thinking_level:
+        try:
+            from services.llm.thinking import to_provider_config
+
+            thinking_kwargs = to_provider_config(
+                provider_id, thinking_level, model_id=model
+            )
+        except Exception as e:
+            logger.debug("thinking config build failed: %s", e)
+
+    # ---- Claude / MCP path -------------------------------------------------
+    if caps.supports_mcp:
+        # claude-agent-sdk's query() bakes the toolset/MCP server in upfront
+        # and runs the multi-turn loop internally — we can't add tools mid-
+        # conversation. Snapshot the active set at run start so sub-agents
+        # (each their own provider.run() call) inherit any tools their parent
+        # activated; within a single Claude run the toolset stays fixed.
+        claude_skills = _resolve_effective_skills(
+            base_skills=base_agent_skills,
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+        mcp_server = create_mcp_server(
+            session_id,
+            experiment_id,
+            stage,
+            sandbox_config=sandbox_config,
+            agent_type=agent_type,
+            depth=depth,
+            instructions=instructions,
+            model=model,
+            agent_models=agent_models,
+            agent_id=agent_id,
+            parent_agent_id=parent_agent_id,
+            agent_skills_override=claude_skills,
+        )
+        prefixed_tool_names = [f"mcp__trainable__{s}" for s in claude_skills]
+
+        async for event in provider.run(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=model,
+            tools=prefixed_tool_names,
+            mcp_servers={"trainable": mcp_server},
+            max_turns=settings.agent_max_turns,
+            timeout_seconds=timeout_s,
+            env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
+            **thinking_kwargs,
+        ):
+            if event.kind == "text":
+                await _persist_text(event.data.get("text", ""))
+            elif event.kind == "tool_call":
+                await _persist_tool_call(
+                    event.data.get("tool_name", ""),
+                    event.data.get("tool_call_id", ""),
+                    event.data.get("arguments", {}) or {},
+                )
+            elif event.kind == "tool_result":
+                await _persist_tool_result(
+                    event.data.get("tool_call_id", ""),
+                    event.data.get("content"),
+                    bool(event.data.get("is_error")),
+                )
+            elif event.kind == "usage":
+                # Partial events are per-AssistantMessage deltas the
+                # provider emits for live cost feedback; don't write
+                # a DB row for those (would double-count against the
+                # final ResultMessage aggregate). Final events have
+                # `partial=False` (default) and are recorded.
+                if event.data.get("partial"):
+                    continue
+                await _record_usage(
+                    event.data.get("model") or model,
+                    event.data.get("usage") or {},
+                    is_error=False,
+                    total_cost=event.data.get("total_cost_usd"),
+                )
+            elif event.kind == "error":
+                logger.warning("Provider error: %s", event.data.get("message"))
+        return collected_text
+
+    # ---- Non-Claude / runner-managed tool loop -----------------------------
+    # OpenAI/LiteLLM/Gemini path. Each provider translates this Chat-
+    # Completions-shaped `messages` list into its native conversation
+    # shape, so the runner can re-inject tool results without caring
+    # which SDK is downstream.
+    messages: list[dict] = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": prompt},
+    ]
+
+    # Cache last-resolved skill set so we only rebuild specs/handlers when
+    # use-skill expanded the active set. Stable across turns when nothing
+    # changed — keeps tool_use_id continuity in the provider.
+    _cached_skills: list[str] | None = None
+    skill_specs: list[dict] = []
+    skill_handlers: dict = {}
+
+    for turn in range(settings.agent_max_turns):
+        effective_skills = _resolve_effective_skills(
+            base_skills=base_agent_skills,
+            session_id=session_id,
+            agent_id=agent_id,
+        )
+        if effective_skills != _cached_skills:
+            skill_specs = _record_skill_specs(agent_type, effective_skills)
+            entries = _build_skill_entries_for(effective_skills)
+            skill_handlers = {slug: e["handler"] for slug, e in entries.items()}
+            _cached_skills = effective_skills
+
+        pending_calls: list[dict] = []
+        assistant_text: list[str] = []
+
+        async for event in provider.run(
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=model,
+            tools=skill_specs,
+            max_turns=1,
+            timeout_seconds=timeout_s,
+            messages=messages,
+            **thinking_kwargs,
+        ):
+            if event.kind == "text":
+                text = event.data.get("text", "")
+                if text:
+                    assistant_text.append(text)
+                    await _persist_text(text)
+            elif event.kind == "tool_call":
+                name = event.data.get("tool_name", "")
+                call_id = (
+                    event.data.get("tool_call_id") or f"call_{uuid.uuid4().hex[:8]}"
+                )
+                args = event.data.get("arguments", {}) or {}
+                # Opaque per-provider continuation metadata (e.g. Gemini
+                # 3's thought_signature). The runner doesn't read it —
+                # we just preserve it on the assistant message so the
+                # provider can restore it on the next turn.
+                pmeta = event.data.get("provider_metadata")
+                pending_calls.append(
+                    {"id": call_id, "name": name, "args": args, "pmeta": pmeta}
+                )
+                await _persist_tool_call(name, call_id, args)
+            elif event.kind == "usage":
+                # Partial events are per-AssistantMessage deltas the
+                # provider emits for live cost feedback; don't write
+                # a DB row for those (would double-count against the
+                # final ResultMessage aggregate). Final events have
+                # `partial=False` (default) and are recorded.
+                if event.data.get("partial"):
+                    continue
+                await _record_usage(
+                    event.data.get("model") or model,
+                    event.data.get("usage") or {},
+                    is_error=False,
+                    total_cost=event.data.get("total_cost_usd"),
+                )
+            elif event.kind == "error":
+                logger.warning("Provider error: %s", event.data.get("message"))
+
+        # Append assistant turn to message history.
+        assistant_msg: dict = {
+            "role": "assistant",
+            "content": "\n".join(assistant_text) or None,
+        }
+        if pending_calls:
+            assistant_msg["tool_calls"] = [
+                {
+                    "id": c["id"],
+                    "type": "function",
+                    "function": {
+                        "name": c["name"],
+                        "arguments": json.dumps(c["args"]),
+                    },
+                    # `_provider_metadata` is namespaced with an
+                    # underscore so providers that don't use it (OpenAI,
+                    # LiteLLM) can ignore the unknown key safely.
+                    **({"_provider_metadata": c["pmeta"]} if c.get("pmeta") else {}),
+                }
+                for c in pending_calls
+            ]
+        messages.append(assistant_msg)
+
+        if not pending_calls:
+            break  # provider produced text only; conversation done.
+
+        # Dispatch each tool call against the skill handler.
+        for call in pending_calls:
+            handler = skill_handlers.get(call["name"])
+            if handler is None:
+                text = f"Unknown skill: {call['name']}"
+                is_error = True
+            else:
+                try:
+                    result = await handler(call["args"])
+                    text, is_error = _normalize_handler_text(result)
+                except Exception as e:
+                    logger.exception("Skill handler %s failed", call["name"])
+                    text = f"Skill {call['name']} raised: {e}"
+                    is_error = True
+            if is_error:
+                text = f"[ERROR] {text}"
+            await _persist_tool_result(call["id"], text, is_error)
+            messages.append(
+                {"role": "tool", "tool_call_id": call["id"], "content": text}
+            )
+
+    return collected_text
+
+
 async def run_agent(
     session_id: str,
     experiment_id: str,
@@ -324,18 +979,28 @@ async def run_agent(
     instructions: str,
     dataset_ref: str = "",
     user_prompt: str | None = None,
-    gpu: str | None = None,
+    sandbox_config: dict | None = None,
     model: str | None = None,
     agent_type: str | None = None,
     depth: int = 0,
     agent_models: dict | None = None,
+    agent_thinking: dict | None = None,
     agent_id: str = "root",
     parent_agent_id: str | None = None,
     mentions: list[dict] | None = None,
+    resume_context: str | None = None,
 ):
     """Run an agent. agent_type maps to a YAML in agents/. Falls back to stage name.
 
+    resume_context, when set, marks this run as a resume/retry of an
+    interrupted session: the block (built by services.agent.resume) is
+    appended to the system prompt so the agent can skip steps whose
+    artifacts already exist, and the full prior conversation is injected
+    (a resume has no freshly-persisted user message to exclude).
+
     agent_models is a per-agent model override map: {"eda": "claude-haiku-4-5", ...}
+    agent_thinking is the parallel reasoning-level map: {"eda": "high", ...}.
+    Levels are abstract — services/llm/thinking.py translates them per provider.
 
     agent_id uniquely identifies this run inside the session. The top-level
     caller passes "root"; nested calls from delegate_task pass a fresh uuid
@@ -375,11 +1040,32 @@ async def run_agent(
 
     collected_text = ""
 
+    bind_log_context(
+        session_id=session_id,
+        agent_type=agent_type,
+        agent_id=agent_id,
+        depth=depth,
+    )
+
     try:
         prev_context = await _load_prev_context(session_id, stage)
-        project_id, project_name, project_files = await _load_project_context(
-            experiment_id
-        )
+        (
+            project_id,
+            project_name,
+            project_files,
+            sandbox_config,
+            training_config,
+        ) = await _load_project_context(experiment_id)
+
+        # Budget pre-check: never start a run for a project that has already
+        # spent past its cap. Raises BudgetExceededError (handled below);
+        # any other error fails open rather than failing the run.
+        await _check_budget_failopen(session_id)
+
+        # Hard enforcement of the user's wall-clock budget: clamp the training
+        # sandbox profile's per-call timeout before the config flows into
+        # execute-code / delegate-task handlers.
+        sandbox_config = _apply_training_wallclock_cap(sandbox_config, training_config)
 
         system_prompt = render_agent_system_prompt(
             agent_type,
@@ -407,6 +1093,26 @@ async def run_agent(
             "is recent vs. stale relative to the time above."
         )
 
+        # Per-project compute env (GPU + timeout per profile) so the agent can
+        # dimension execute-code calls — split long fits, skip CUDA on CPU
+        # profiles, use heavy=True for the training profile, etc. Only useful
+        # for agents that can actually call execute-code; others ignore it.
+        if "execute-code" in get_agent_skills(agent_type):
+            system_prompt += "\n\n" + _format_compute_env(sandbox_config)
+
+        # Resume/retry runs carry the recovered-progress block so the agent
+        # skips steps whose artifacts already exist on the volume.
+        if resume_context:
+            system_prompt += "\n\n" + resume_context
+
+        # Pre-flight training controls (issue #104) — only meaningful for
+        # agents that can open a training window. Empty config renders to ""
+        # so unconfigured projects get a byte-identical prompt.
+        if "start-training" in get_agent_skills(agent_type):
+            constraints_block = _format_training_constraints(training_config)
+            if constraints_block:
+                system_prompt += "\n\n" + constraints_block
+
         if user_prompt:
             prompt = _apply_mentions(user_prompt, mentions)
         else:
@@ -428,12 +1134,38 @@ async def run_agent(
             or settings.claude_model
         )
 
-        # Load conversation history for follow-up messages
+        # Resolve reasoning level. The model's catalog entry decides whether
+        # the model supports thinking at all and what its default level is;
+        # the per-agent override (UI picker) trumps when present and valid.
+        from services.llm.thinking import normalize_level
+        from services.usage import get_llm_catalog
+
+        _llm_entry = get_llm_catalog().get(model) or {}
+        _thinking_spec = (
+            _llm_entry.get("thinking") if isinstance(_llm_entry, dict) else None
+        )
+        thinking_level: str | None = None
+        if isinstance(_thinking_spec, dict):
+            allowed_levels = _thinking_spec.get("levels") or []
+            ui_level = (agent_thinking or {}).get(agent_type)
+            default_level = _thinking_spec.get("default")
+            chosen = (
+                ui_level
+                if (ui_level in allowed_levels)
+                else (default_level if default_level in allowed_levels else None)
+            )
+            thinking_level = normalize_level(chosen) if chosen else None
+
+        # Load conversation history for follow-up messages. A normal
+        # follow-up excludes the last message (it's the just-persisted user
+        # prompt this run is answering); a resume run has no fresh user
+        # message in the DB, so the full history is injected.
         if user_prompt:
             history = await _load_conversation_history(session_id)
+            history_for_context = history if resume_context else history[:-1]
             if history:
                 context_parts = []
-                for msg in history[:-1]:
+                for msg in history_for_context:
                     prefix = "User" if msg["role"] == "user" else "Assistant"
                     context_parts.append(f"{prefix}: {msg['content']}")
                 if context_parts:
@@ -442,149 +1174,85 @@ async def run_agent(
                         f"\n\n## Prior conversation\n{conversation_context}"
                     )
 
-        # Create MCP server with tools determined by the agent's YAML
-        mcp_server = create_mcp_server(
-            session_id,
-            experiment_id,
-            stage,
-            gpu=gpu,
-            agent_type=agent_type,
-            depth=depth,
-            instructions=instructions,
-            model=model,
-            agent_models=agent_models or {},
-            agent_id=agent_id,
-            parent_agent_id=parent_agent_id,
-        )
+        # Resolve provider id. The chosen model wins: if the catalog says
+        # `gpt-5.4-nano-...` is provider=openai, route through OpenAI even
+        # if the agent YAML still says provider=claude. Falls back to the
+        # YAML when the model isn't catalog-listed (custom/override).
+        from services.usage import get_llm_catalog
 
-        # Build tool list from agent config
-        agent_tools = get_agent_tools(agent_type)
-        tool_names = [f"mcp__trainable__{t}" for t in agent_tools]
-        # Only include delegate_task if depth allows it
+        _model_entry = get_llm_catalog().get(model) or {}
+        _model_provider = (
+            _model_entry.get("provider") if isinstance(_model_entry, dict) else None
+        )
+        provider_id = _model_provider or get_agent_provider(agent_type)
+        agent_skills = get_agent_skills(agent_type)
         from .agents import can_delegate
 
-        if "delegate_task" in agent_tools and not can_delegate(agent_type, depth):
-            tool_names = [t for t in tool_names if "delegate_task" not in t]
+        if "delegate-task" in agent_skills and not can_delegate(agent_type, depth):
+            agent_skills = [s for s in agent_skills if s != "delegate-task"]
 
-        options = ClaudeAgentOptions(
-            system_prompt=system_prompt,
-            model=model,
-            permission_mode="bypassPermissions",
-            max_turns=settings.agent_max_turns,
-            stderr=lambda line: (
-                logger.debug("CLI: %s", line.strip()) if line.strip() else None
-            ),
-            tools=tool_names,
-            allowed_tools=tool_names,
-            mcp_servers={"trainable": mcp_server},
-            env={"CLAUDE_CODE_OAUTH_TOKEN": settings.claude_code_oauth_token},
+        # HITL approval gates (issue #108): opt-in per session. When the flag
+        # is off this is an identity call — skills and prompt come back
+        # unchanged, so the default path is untouched. Applied per agent run,
+        # so delegated sub-agents inherit the gate through the shared
+        # session_id without any parameter threading.
+        from services.approvals import apply_approval_gate
+
+        agent_skills, system_prompt = apply_approval_gate(
+            session_id, agent_skills, system_prompt
         )
 
         logger.info(
-            "Starting agent=%s id=%s parent=%s stage=%s session=%s model=%s depth=%d tools=%s",
+            "Starting agent=%s id=%s parent=%s stage=%s session=%s provider=%s model=%s depth=%d skills=%s",
             agent_type,
             agent_id,
             parent_agent_id,
             stage,
             session_id,
+            provider_id,
             model,
             depth,
-            agent_tools,
+            agent_skills,
         )
 
-        async with asyncio.timeout(settings.agent_timeout_seconds):
-            async for message in query(prompt=prompt, options=options):
-                if isinstance(message, AssistantMessage):
-                    for block in message.content:
-                        # 1) Plain text — keep the existing agent_message stream
-                        #    that the frontend already renders, AND mirror it
-                        #    into the agent_thought stream so inspectors see it.
-                        if hasattr(block, "text") and getattr(block, "text", None):
-                            text = block.text
-                            collected_text += text
-                            await _publish(
-                                "agent_message",
-                                {"text": text},
-                                role="assistant",
-                            )
-                            truncated_text, was_trunc, orig_bytes = _truncate(text)
-                            await _publish(
-                                "agent_thought",
-                                {
-                                    "text": truncated_text,
-                                    "block_type": "text",
-                                    "truncated": was_trunc,
-                                    "original_bytes": orig_bytes,
-                                },
-                                role="assistant",
-                                publish=False,
-                            )
-                            logger.info("Agent text: %s", text[:120])
-                            continue
+        # Open the OTel span manually so we can attach attributes around the
+        # provider call without re-indenting the loop body.
+        _agent_span_cm = agent_span(
+            agent_type=agent_type,
+            session_id=session_id,
+            model=model,
+            depth=depth,
+            agent_id=agent_id,
+        )
+        _agent_span = _agent_span_cm.__enter__()
+        try:
+            _agent_span.set_attribute("agent.parent_id", parent_agent_id or "")
+            _agent_span.set_attribute("agent.skills.count", len(agent_skills))
+            _agent_span.set_attribute("llm.provider", provider_id)
+        except Exception:
+            pass
 
-                        # 2) Tool use — record the tool name and (truncated) input.
-                        tool_name = getattr(block, "name", None)
-                        tool_input = getattr(block, "input", None)
-                        tool_use_id = getattr(block, "id", None)
-                        if tool_name is not None and tool_input is not None:
-                            payload_text = _block_to_text(tool_input)
-                            truncated_text, was_trunc, orig_bytes = _truncate(
-                                payload_text
-                            )
-                            await _publish(
-                                "agent_thought",
-                                {
-                                    "text": truncated_text,
-                                    "block_type": "tool_use",
-                                    "tool_name": tool_name,
-                                    "tool_use_id": tool_use_id,
-                                    "truncated": was_trunc,
-                                    "original_bytes": orig_bytes,
-                                },
-                                role="assistant",
-                                publish=False,
-                            )
-                            logger.info("Agent tool_use: %s", tool_name)
-
-                elif isinstance(message, UserMessage):
-                    # Tool results come back framed as a UserMessage with
-                    # ToolResultBlock content. Persist a truncated copy.
-                    for block in getattr(message, "content", []) or []:
-                        tool_use_id = getattr(block, "tool_use_id", None)
-                        if tool_use_id is None:
-                            continue
-                        raw = getattr(block, "content", None)
-                        if isinstance(raw, list):
-                            parts = []
-                            for item in raw:
-                                # mcp TextContent objects expose .text; dicts use ['text']
-                                if hasattr(item, "text"):
-                                    parts.append(item.text or "")
-                                elif isinstance(item, dict):
-                                    parts.append(item.get("text", ""))
-                                else:
-                                    parts.append(str(item))
-                            payload_text = "\n".join(p for p in parts if p)
-                        else:
-                            payload_text = _block_to_text(raw)
-                        truncated_text, was_trunc, orig_bytes = _truncate(payload_text)
-                        is_error = bool(getattr(block, "is_error", False))
-                        await _publish(
-                            "agent_thought",
-                            {
-                                "text": truncated_text,
-                                "block_type": "tool_result",
-                                "tool_use_id": tool_use_id,
-                                "is_error": is_error,
-                                "truncated": was_trunc,
-                                "original_bytes": orig_bytes,
-                            },
-                            role="user",
-                            publish=False,
-                        )
-
-                elif isinstance(message, ResultMessage):
-                    logger.info("Agent %s done", agent_type)
+        drive_text = await _drive_provider(
+            provider_id=provider_id,
+            prompt=prompt,
+            system_prompt=system_prompt,
+            model=model,
+            agent_type=agent_type,
+            session_id=session_id,
+            experiment_id=experiment_id,
+            stage=stage,
+            depth=depth,
+            agent_id=agent_id,
+            parent_agent_id=parent_agent_id,
+            agent_skills=agent_skills,
+            sandbox_config=sandbox_config or {},
+            instructions=instructions,
+            agent_models=agent_models or {},
+            publish=_publish,
+            agent_span=_agent_span,
+            thinking_level=thinking_level,
+        )
+        collected_text += drive_text
 
         # After agent finishes, read back the report and file list from volume
         await publish_artifacts(session_id, experiment_id, stage)
@@ -599,18 +1267,61 @@ async def run_agent(
         )
 
     except TimeoutError:
-        logger.error(
-            "Agent %s timed out after %ds for session %s",
+        # Defense in depth. The runner no longer wraps its own loop with an
+        # outer timeout — the sandbox's own (per-project-profile) timeout is
+        # the single governing cap, and execute-code surfaces it as a
+        # tool_output. Reaching here means a provider SDK itself raised
+        # TimeoutError (e.g. network stall). Persist a clear note so the
+        # user can resume rather than losing the session.
+        logger.warning(
+            "Provider raised TimeoutError for agent %s session %s",
             agent_type,
-            settings.agent_timeout_seconds,
             session_id,
         )
         await _publish(
-            "agent_error",
-            {"error": f"Agent timed out after {settings.agent_timeout_seconds}s"},
+            "agent_timeout",
+            {
+                "error": (
+                    "Provider call timed out at the SDK level. The "
+                    "conversation history is preserved — send a new message "
+                    "to continue."
+                )
+            },
             role="system",
         )
-        await _publish("state_change", {"state": "failed"}, role="system")
+        await _publish("state_change", {"state": "timed_out"}, role="system")
+
+    except BudgetExceededError as e:
+        # Clean terminal state — this is the guardrail working, not a
+        # failure. The message tells the user exactly why the agent stopped
+        # and how to resume (raise or clear the cap in Project Settings).
+        st = e.status
+        cap = f"${st.budget_usd:.2f}" if st.budget_usd is not None else "(none)"
+        logger.warning(
+            "Budget exceeded for session %s (project %s): spent=%.4f cap=%s "
+            "— halting agent %s",
+            session_id,
+            st.project_id,
+            st.spent_usd,
+            st.budget_usd,
+            agent_type,
+        )
+        await _publish(
+            "budget_exceeded",
+            {
+                "error": (
+                    f"Budget limit reached: this project has spent "
+                    f"${st.spent_usd:.2f} of its {cap} cap, so the agent was "
+                    "stopped to prevent further spend. Raise or clear the "
+                    "budget in Project Settings to continue."
+                ),
+                "project_id": st.project_id,
+                "budget_usd": st.budget_usd,
+                "spent_usd": st.spent_usd,
+            },
+            role="system",
+        )
+        await _publish("state_change", {"state": "budget_exceeded"}, role="system")
 
     except asyncio.CancelledError:
         silent = session_id in _silent_aborts
@@ -636,6 +1347,18 @@ async def run_agent(
         raise
 
     finally:
+        # Close the agent span (manually opened above so we didn't have to
+        # re-indent the SDK message loop). Pass exc info if we exited via
+        # an unhandled exception path.
+        try:
+            cm = locals().get("_agent_span_cm")
+            if cm is not None:
+                import sys
+
+                cm.__exit__(*sys.exc_info())
+        except Exception:
+            pass
+        clear_log_context()
         # Only clean up session-wide state when the root run finishes — sub-agents
         # share the same session and would otherwise wipe each other out.
         if depth == 0:

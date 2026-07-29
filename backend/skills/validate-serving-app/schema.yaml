@@ -1,0 +1,7 @@
+type: object
+properties:
+  model_id:
+    type: string
+    description: id of the RegisteredModel whose serving app you want to validate.
+required:
+  - model_id

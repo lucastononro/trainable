@@ -6,8 +6,23 @@ import json
 import logging
 
 from db import async_session
-from models import Metric
+from models import LogEvent, Metric
 from services.broadcaster import broadcaster
+
+# Whitelist of rich-log payload types accepted from the sandbox. New types
+# need a matching frontend renderer before being added here, otherwise a
+# typo in agent code would silently fill the DB with un-renderable rows.
+LOG_EVENT_TYPES = {
+    "image",
+    "image_grid",
+    "table",
+    "histogram",
+    "confusion_matrix",
+    "roc",
+    "pr",
+    "text",
+    "plotly",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +45,30 @@ def parse_stdout_line(text: str) -> dict | None:
     # {"chart_config": {"charts": [{"title":"Loss","metrics":["train_loss","val_loss"],"type":"line"}, ...]}}
     if "chart_config" in obj and isinstance(obj["chart_config"], dict):
         return {"type": "chart_config", "config": obj["chart_config"]}
+
+    # ── rich log event ──────────────────────────────────────────────
+    # {"log": {"type":"image","step":12,"key":"val/predictions","run":...,"data":{...}}}
+    if "log" in obj and isinstance(obj["log"], dict):
+        ev = obj["log"]
+        ev_type = ev.get("type")
+        if ev_type not in LOG_EVENT_TYPES:
+            return None
+        if "step" not in ev or "key" not in ev or not isinstance(ev.get("data"), dict):
+            return None
+        try:
+            step = int(ev["step"])
+        except (TypeError, ValueError):
+            return None
+        return {
+            "type": "log_event",
+            "event": {
+                "type": ev_type,
+                "step": step,
+                "key": str(ev["key"]),
+                "run_tag": (str(ev["run"]) if ev.get("run") else None),
+                "data": ev["data"],
+            },
+        }
 
     # ── metric events ───────────────────────────────────────────────
     if "step" not in obj:
@@ -92,6 +131,42 @@ async def publish_chart_config(session_id: str, config: dict):
             "data": config,
         },
     )
+
+
+async def persist_and_publish_log_event(session_id: str, stage: str, event: dict):
+    """Publish a log_event SSE then persist it. Mirrors persist_and_publish
+    for scalars but writes to log_events with a typed payload."""
+    await broadcaster.publish(
+        session_id,
+        {
+            "type": "log_event",
+            "data": {
+                "step": event["step"],
+                "key": event["key"],
+                "type": event["type"],
+                "run_tag": event.get("run_tag"),
+                "stage": stage,
+                "data": event["data"],
+            },
+        },
+    )
+
+    try:
+        async with async_session() as db:
+            db.add(
+                LogEvent(
+                    session_id=session_id,
+                    stage=stage,
+                    step=event["step"],
+                    key=event["key"],
+                    type=event["type"],
+                    run_tag=event.get("run_tag"),
+                    payload=event["data"],
+                )
+            )
+            await db.commit()
+    except Exception as e:
+        logger.warning(f"Failed to persist log_event: {e}")
 
 
 async def persist_and_publish(session_id: str, stage: str, parsed: list[dict]):

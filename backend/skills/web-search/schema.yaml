@@ -1,0 +1,10 @@
+type: object
+properties:
+  query:
+    type: string
+    description: Free-text search query.
+  limit:
+    type: integer
+    description: Max results to return (default 8, max 25).
+required:
+  - query

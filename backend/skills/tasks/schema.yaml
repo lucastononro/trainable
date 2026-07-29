@@ -1,0 +1,40 @@
+type: object
+properties:
+  operation:
+    type: string
+    enum: [add, update, list, delete]
+    description: Operation to execute.
+  subject:
+    type: string
+    description: >
+      Brief, imperative-form title (e.g. "Profile the dataset", "Train
+      XGBoost baseline"). Required for `add`. Optional for `update`
+      (only needed if you want to rename a task).
+  active_form:
+    type: string
+    description: >
+      Present-continuous form shown while the task is in_progress
+      (e.g. "Profiling the dataset", "Training XGBoost baseline").
+      Optional for `add` and `update`. If omitted, `subject` is shown.
+  short_description:
+    type: string
+    description: >
+      One-line summary shown next to the task title in the Tasks tab.
+      Optional. Examples: "Quick scan w/ default params on a 10k
+      sample", "Stratified 80/10/10 split on `target`".
+  description:
+    type: string
+    description: >
+      Long-form description / notes / acceptance criteria. Optional.
+      Surfaced in the expanded view of a task in the Tasks tab.
+      Use this for context that helps a future agent (or yourself)
+      understand what this task actually entails.
+  task_id:
+    type: integer
+    description: Required for `update` and `delete`. Returned by `add`.
+  status:
+    type: string
+    enum: [pending, in_progress, completed]
+    description: New status. Optional for `update`.
+required:
+  - operation

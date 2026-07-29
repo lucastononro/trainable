@@ -1,4 +1,6 @@
-"""Thin shim — delegates to the tools/ package for all MCP server building."""
+"""Thin shim — delegates to the skills package for MCP server building."""
+
+from services.skills import build_mcp_server
 
 from .events import save_and_publish
 
@@ -7,19 +9,28 @@ def create_mcp_server(
     session_id: str,
     experiment_id: str,
     stage: str,
-    gpu: str | None = None,
+    sandbox_config: dict | None = None,
     agent_type: str = "eda",
     depth: int = 0,
     instructions: str = "",
     model: str | None = None,
     agent_models: dict | None = None,
+    agent_thinking: dict | None = None,
     agent_id: str = "root",
     parent_agent_id: str | None = None,
+    agent_skills_override: list[str] | None = None,
 ):
-    """Create a per-call MCP server with tools determined by the agent's YAML config."""
-    # Lazy import to avoid circular dependency
-    from tools import build_mcp_server
+    """Create a per-call MCP server with capability skills determined by the agent's YAML.
 
+    `agent_thinking` is accepted for caller-API symmetry but isn't forwarded to
+    the MCP layer — reasoning level is resolved in `runner._drive_provider`
+    against the model catalog before the provider call, not at skill-handler
+    construction time.
+
+    `agent_skills_override` lets the runner pass the agent's effective skill
+    list (base + use-skill activations) instead of the YAML default.
+    """
+    del agent_thinking  # not used by the MCP server; symmetry only
     return build_mcp_server(
         agent_type=agent_type,
         session_id=session_id,
@@ -27,10 +38,11 @@ def create_mcp_server(
         stage=stage,
         depth=depth,
         publish_fn=save_and_publish,
-        gpu=gpu,
+        sandbox_config=sandbox_config or {},
         model=model,
         instructions=instructions,
         agent_models=agent_models or {},
         agent_id=agent_id,
         parent_agent_id=parent_agent_id,
+        agent_skills_override=agent_skills_override,
     )

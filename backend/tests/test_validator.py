@@ -1,20 +1,19 @@
 """Tests for services/validator.py — automated post-agent validation."""
 
 import json
-from unittest.mock import patch
+from contextlib import ExitStack
 
 import pytest
 
-from tests.conftest import MockVolume, _make_parquet_bytes
+from tests.conftest import MockVolume, _make_parquet_bytes, mock_volume_patches
 
 
 @pytest.mark.asyncio
 async def test_validate_prep_output_all_good(mock_volume_with_prep):
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=mock_volume_with_prep),
-        patch("services.volume.get_volume", return_value=mock_volume_with_prep),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("test-session", "test-experiment")
@@ -44,11 +43,10 @@ async def test_validate_prep_output_missing_file():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -70,11 +68,10 @@ async def test_validate_prep_output_schema_mismatch():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -112,11 +109,10 @@ async def test_validate_prep_output_with_nulls():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -146,11 +142,10 @@ async def test_validate_prep_output_metadata_target_missing():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -173,11 +168,10 @@ async def test_validate_prep_output_no_metadata_json():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_prep_output
 
         result = await validate_prep_output("s1", "exp1")
@@ -188,12 +182,74 @@ async def test_validate_prep_output_no_metadata_json():
 
 
 @pytest.mark.asyncio
+async def test_validate_prep_output_corrupt_train_parquet():
+    """A train.parquet that fails to parse must degrade to warnings on the
+    null and leakage checks (raising the captured read error), never crash
+    the whole validation. Exercises the shared parse-once + re-raise path."""
+    good = _make_parquet_bytes({"x": [1, 2], "y": [0, 1]})
+    files = {
+        "/sessions/s1/data/train.parquet": b"not a parquet file",
+        "/sessions/s1/data/val.parquet": good,
+        "/sessions/s1/data/test.parquet": good,
+    }
+    vol = MockVolume(files)
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
+        from services.validator import validate_prep_output
+
+        result = await validate_prep_output("s1", "exp1")
+
+    warning_texts = " ".join(result["warnings"])
+    assert "Could not check nulls" in warning_texts
+    assert "Could not check leakage" in warning_texts
+    # Validation still completed the rest of the checklist.
+    assert result["stage"] == "prep"
+    assert any("metadata.json" in w for w in result["warnings"])
+
+
+@pytest.mark.asyncio
+async def test_validate_prep_output_parses_train_parquet_once(mock_volume_with_prep):
+    """Regression for the PR's core optimization: train.parquet must be
+    parsed into a DataFrame exactly once and reused by the null, leakage,
+    and constant-column checks."""
+    from unittest.mock import patch
+
+    import services.validator as validator_mod
+
+    real = validator_mod._read_parquet_df
+    calls = []
+
+    def counting(raw):
+        calls.append(1)
+        return real(raw)
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_prep, "services.validator"):
+            stack.enter_context(p)
+        stack.enter_context(
+            patch("services.validator._read_parquet_df", side_effect=counting)
+        )
+
+        result = await validator_mod.validate_prep_output(
+            "test-session", "test-experiment"
+        )
+
+    assert len(calls) == 1
+    passed_texts = " ".join(result["passed"])
+    assert "No null values" in passed_texts
+    assert "No row overlap" in passed_texts
+    assert "No constant columns" in passed_texts
+
+
+@pytest.mark.asyncio
 async def test_validate_train_output_all_good(mock_volume_with_train):
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=mock_volume_with_train),
-        patch("services.volume.get_volume", return_value=mock_volume_with_train),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(mock_volume_with_train, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_train_output
 
         result = await validate_train_output("test-session", "test-experiment")
@@ -214,17 +270,76 @@ async def test_validate_train_output_no_model():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_train_output
 
         result = await validate_train_output("s1", "exp1")
 
     error_texts = " ".join(result["errors"])
     assert "No model file found" in error_texts
+
+
+@pytest.mark.asyncio
+async def test_validate_train_output_resolves_report_via_artifact_row():
+    """Regression for B2: pre-fix, line 396 called `_read_volume_file_safe`
+    without `await`. With an Artifact row pointing to the report, the bare
+    coroutine was truthy → fallback scan skipped → `len(coroutine)` raised
+    TypeError → validation aborted halfway through, so leakage/metadata
+    checks below silently never ran. With the await in place, the function
+    walks the entire checklist and produces `report.md exists` from the DB
+    path."""
+    from db import async_session
+    from models import Artifact, Project, Session
+
+    train_meta = json.dumps(
+        {
+            "best_model": "XGBClassifier",
+            "test_metrics": {"accuracy": 0.85, "f1_weighted": 0.84},
+        }
+    ).encode("utf-8")
+    files = {
+        "/sessions/sid-art/models/model.pkl": b"fake-model",
+        # Report at a non-default path — only reachable via the Artifact row.
+        "/sessions/sid-art/reports/train_report.md": b"# Train Report\nXGB.",
+        "/sessions/sid-art/data/metadata.json": train_meta,
+    }
+    vol = MockVolume(files)
+
+    # Seed Project + Session so the Artifact FK doesn't trip.
+    async with async_session() as db:
+        db.add(Project(id="proj-art", name="P"))
+        db.add(Session(id="sid-art", project_id="proj-art"))
+        await db.commit()
+        db.add(
+            Artifact(
+                session_id="sid-art",
+                stage="train",
+                artifact_type="report",
+                name="train_report.md",
+                path="/sessions/sid-art/reports/train_report.md",
+                created_at="2026-05-12T00:00:00",
+            )
+        )
+        await db.commit()
+
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
+        from services.validator import validate_train_output
+
+        # Pre-fix this raised TypeError("object of type 'coroutine' has no len()").
+        result = await validate_train_output("sid-art", "exp-art")
+
+    assert result["stage"] == "train"
+    passed = " ".join(result["passed"])
+    assert "report.md exists" in passed
+    # Confirm the rest of the checklist (metadata) was reachable too —
+    # the pre-fix TypeError aborted before this line.
+    assert "metadata.json has model and test metrics" in passed
 
 
 @pytest.mark.asyncio
@@ -243,11 +358,10 @@ async def test_validate_train_output_perfect_metrics_warning():
     }
     vol = MockVolume(files)
 
-    with (
-        patch("services.validator.reload_volume"),
-        patch("services.validator.get_volume", return_value=vol),
-        patch("services.volume.get_volume", return_value=vol),
-    ):
+    with ExitStack() as stack:
+        for p in mock_volume_patches(vol, "services.validator"):
+            stack.enter_context(p)
+
         from services.validator import validate_train_output
 
         result = await validate_train_output("s1", "exp1")

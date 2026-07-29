@@ -1,4 +1,9 @@
-"""Agent catalog — loads agent definitions from YAML files in agents/ directory."""
+"""Agent catalog — loads agent definitions from YAML files in agents/ directory.
+
+Skills (capability + knowledge) live under backend/skills/<slug>/. An agent's
+YAML lists which capability skills it can call. The skill description and
+input_schema are sourced from the skill's SKILL.md frontmatter and schema.yaml.
+"""
 
 from __future__ import annotations
 
@@ -7,6 +12,8 @@ from functools import lru_cache
 from pathlib import Path
 
 import yaml
+
+from services.skills import get_skill
 
 logger = logging.getLogger(__name__)
 
@@ -50,27 +57,37 @@ def get_agent_opener(agent_type: str) -> str:
     return get_agent(agent_type).get("opener", "")
 
 
-def get_agent_tools(agent_type: str) -> list[str]:
-    """Get the list of tool names available to this agent."""
-    raw = get_agent(agent_type).get("tools", [{"name": "execute_code"}])
-    names = []
-    for t in raw:
-        if isinstance(t, str):
-            names.append(t)
-        elif isinstance(t, dict):
-            names.append(t["name"])
+def _agent_skills_raw(agent_type: str) -> list:
+    """Return the raw `skills:` list from an agent's YAML.
+
+    Defaults to a single execute-code skill so legacy YAMLs without a
+    skills field still produce a runnable agent.
+    """
+    cfg = get_agent(agent_type)
+    return cfg.get("skills") or [{"name": "execute-code"}]
+
+
+def get_agent_skills(agent_type: str) -> list[str]:
+    """Get the list of skill slugs available to this agent."""
+    raw = _agent_skills_raw(agent_type)
+    names: list[str] = []
+    for s in raw:
+        if isinstance(s, str):
+            names.append(s)
+        elif isinstance(s, dict):
+            names.append(s["name"])
     return names
 
 
-def get_agent_tool_configs(agent_type: str) -> list[dict]:
-    """Get the full tool config list (with optional per-agent description/schema overrides)."""
-    raw = get_agent(agent_type).get("tools", [{"name": "execute_code"}])
+def get_agent_skill_configs(agent_type: str) -> list[dict]:
+    """Get the full skill config list (with optional per-agent description / schema overrides)."""
+    raw = _agent_skills_raw(agent_type)
     configs = []
-    for t in raw:
-        if isinstance(t, str):
-            configs.append({"name": t})
-        elif isinstance(t, dict):
-            configs.append(t)
+    for s in raw:
+        if isinstance(s, str):
+            configs.append({"name": s})
+        elif isinstance(s, dict):
+            configs.append(s)
     return configs
 
 
@@ -87,6 +104,12 @@ def get_agent_max_depth(agent_type: str) -> int:
 def get_agent_default_model(agent_type: str) -> str:
     """Get the default model for this agent."""
     return get_agent(agent_type).get("default_model", "claude-sonnet-4-6")
+
+
+def get_agent_provider(agent_type: str) -> str:
+    """Return the LLM provider id for this agent. Defaults to 'claude' so
+    legacy YAMLs without a provider field continue to work unchanged."""
+    return get_agent(agent_type).get("provider", "claude")
 
 
 def render_agent_system_prompt(
@@ -141,61 +164,58 @@ def can_delegate(agent_type: str, current_depth: int) -> bool:
     return has_subagents and current_depth < max_depth
 
 
-_TOOLS_DIR = Path(__file__).parent.parent.parent / "tools"
+def get_skill_default(skill_slug: str) -> dict:
+    """Get a skill's default description and input_schema from the registry.
+
+    Returns {description, input_schema} pulled from the skill's SKILL.md
+    frontmatter and schema.yaml.
+    """
+    try:
+        skill = get_skill(skill_slug)
+    except KeyError:
+        return {"description": "", "input_schema": {}}
+    return {
+        "description": skill.description,
+        "input_schema": skill.schema,
+    }
 
 
-@lru_cache(maxsize=None)
-def _load_tool_yaml(tool_name: str) -> dict:
-    """Load a tool's default YAML definition."""
-    path = _TOOLS_DIR / f"{tool_name}.yaml"
-    if not path.exists():
-        return {"name": tool_name, "description": tool_name, "input_schema": {}}
-    with open(path) as f:
-        return yaml.safe_load(f)
+def get_skill_for_agent(agent_type: str, skill_slug: str) -> dict:
+    """Merge a skill's defaults with any per-agent override.
 
-
-def get_tool_default(tool_name: str) -> dict:
-    """Get a tool's default description and input_schema from tools/*.yaml."""
-    return _load_tool_yaml(tool_name)
-
-
-def get_tool_for_agent(agent_type: str, tool_name: str) -> dict:
-    """Get a tool config for a specific agent, merging per-agent overrides with defaults.
-
-    Agent YAML can override description and/or input_schema per tool:
-      tools:
-        - name: execute_code
+    Agent YAML can override description and/or input_schema per skill:
+      skills:
+        - name: execute-code
           description: "Custom description for this agent..."
           input_schema: { ... }  # optional override
     """
-    defaults = get_tool_default(tool_name)
-    agent_configs = get_agent_tool_configs(agent_type)
+    defaults = get_skill_default(skill_slug)
+    agent_configs = get_agent_skill_configs(agent_type)
 
-    # Find per-agent override for this tool
-    override = {}
-    for tc in agent_configs:
-        if tc.get("name") == tool_name:
-            override = tc
+    override: dict = {}
+    for sc in agent_configs:
+        if sc.get("name") == skill_slug:
+            override = sc
             break
 
     return {
-        "name": tool_name,
+        "name": skill_slug,
         "description": override.get("description", defaults.get("description", "")),
         "input_schema": override.get("input_schema", defaults.get("input_schema", {})),
     }
 
 
-def render_tool_description(
+def render_skill_description(
     *,
-    tool_name: str = "execute_code",
+    skill_slug: str = "execute-code",
     agent_type: str = "eda",
     experiment_id: str,
     session_id: str,
     stage: str,
 ) -> str:
-    """Render a tool's description with placeholders filled, respecting per-agent overrides."""
-    tool_config = get_tool_for_agent(agent_type, tool_name)
-    template = tool_config.get("description", "")
+    """Render a skill's description with placeholders filled, respecting per-agent overrides."""
+    skill_config = get_skill_for_agent(agent_type, skill_slug)
+    template = skill_config.get("description", "")
     return (
         template.replace("{experiment_id}", experiment_id)
         .replace("{session_id}", session_id)
@@ -203,13 +223,13 @@ def render_tool_description(
     )
 
 
-def get_tool_input_schema(
-    tool_name: str = "execute_code",
+def get_skill_input_schema(
+    skill_slug: str = "execute-code",
     agent_type: str = "eda",
 ) -> dict:
-    """Get a tool's input_schema, respecting per-agent overrides."""
-    tool_config = get_tool_for_agent(agent_type, tool_name)
-    return tool_config.get("input_schema", {})
+    """Get a skill's input_schema, respecting per-agent overrides."""
+    skill_config = get_skill_for_agent(agent_type, skill_slug)
+    return skill_config.get("input_schema", {})
 
 
 def list_all_agents() -> list[dict]:
@@ -225,8 +245,9 @@ def list_all_agents() -> list[dict]:
                     "description": config.get("description", ""),
                     "default_model": config.get("default_model", ""),
                     "max_depth": config.get("max_depth", 0),
-                    "tools": config.get("tools", []),
+                    "skills": config.get("skills", []),
                     "subagents": config.get("subagents", []),
+                    "provider": config.get("provider", "claude"),
                 }
             )
         except Exception as e:

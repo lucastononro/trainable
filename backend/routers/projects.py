@@ -16,11 +16,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from db import get_db
-from models import Experiment, Project
+from models import Experiment, Project, RegisteredModel
 from models import Session as SessionModel
 from schemas import ProjectCreate, ProjectUpdate
 from services.s3_client import get_s3_client
-from services.volume import get_volume, reload_volume
+from services.volume import (
+    get_volume,
+    listdir_async,
+    reload_volume_async,
+    remove_volume_file_async,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -53,6 +58,13 @@ async def create_project(body: ProjectCreate, db: AsyncSession = Depends(get_db)
         id=project_id,
         name=body.name or "New project",
         description=body.description or "",
+        sandbox_config=body.sandbox_config.model_dump() if body.sandbox_config else {},
+        budget_usd=body.budget_usd,
+        training_config=(
+            body.training_config.model_dump(exclude_none=True)
+            if body.training_config
+            else {}
+        ),
         created_at=now,
         updated_at=now,
     )
@@ -138,6 +150,15 @@ async def update_project(
         project.name = body.name
     if body.description is not None:
         project.description = body.description
+    if body.sandbox_config is not None:
+        project.sandbox_config = body.sandbox_config.model_dump()
+    # budget_usd supports explicit null-to-clear, so distinguish "field
+    # omitted" from "field set to None" via model_fields_set.
+    if "budget_usd" in body.model_fields_set:
+        project.budget_usd = body.budget_usd
+    if body.training_config is not None:
+        # exclude_none so cleared fields drop out — {} means "no constraints".
+        project.training_config = body.training_config.model_dump(exclude_none=True)
     project.updated_at = _now()
 
     await db.commit()
@@ -208,10 +229,21 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
     orphan the files. If storage cleanup succeeds but the DB commit fails,
     the caller gets the error; the files are gone but that's idempotent.
     """
+    # Eager-load both the experiment chain AND registered_models →
+    # deployments so SQLAlchemy can flush the cascading deletes in
+    # dependency order. Without selectinload on `deployments`, Postgres
+    # raises ForeignKeyViolationError on registered_models when a
+    # deployment still references the model — the ORM cascade only
+    # rewrites delete order if the child rows are loaded.
     result = await db.execute(
         select(Project)
         .where(Project.id == project_id)
-        .options(selectinload(Project.experiments))
+        .options(
+            selectinload(Project.experiments),
+            selectinload(Project.registered_models).selectinload(
+                RegisteredModel.deployments
+            ),
+        )
     )
     project = result.scalar_one_or_none()
     if not project:
@@ -231,10 +263,9 @@ async def delete_project(project_id: str, db: AsyncSession = Depends(get_db)):
 
     # Best-effort cleanup of per-session workspaces on the volume.
     try:
-        vol = get_volume()
         for sid in session_ids:
             try:
-                vol.remove_file(f"/sessions/{sid}", recursive=True)
+                await remove_volume_file_async(f"/sessions/{sid}")
                 storage["modal_sessions_removed"] += 1
             except FileNotFoundError:
                 pass
@@ -285,9 +316,8 @@ async def list_project_files(
     sandbox_error: str | None = None
     sandbox_checked = False
     try:
-        reload_volume()  # best-effort; swallows its own errors
-        vol = get_volume()
-        for entry in vol.listdir(datasets_root, recursive=True):
+        await reload_volume_async()
+        for entry in await listdir_async(datasets_root, recursive=True):
             if entry.type.name != "FILE":
                 continue
             rel_path = _strip_prefix(entry.path, prefix_in_entry)
