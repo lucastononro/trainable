@@ -10,6 +10,12 @@ skills:
   - name: execute-code
   - name: append-notebook-cell
   - name: run-notebook-cell
+  - name: write-file
+  - name: edit-file
+  - name: run-file
+  - name: edit-notebook-cell
+  - name: delete-notebook-cell
+  - name: rerun-notebook-cell
   - name: read-notebook
   - name: delegate-task
   - name: request-clarification
@@ -174,12 +180,32 @@ system: |
     outputs freely. Soft conventions: `report.md` at the top level, `figures/`
     for plots, `data/` for datasets, `models/` for trained models, `scripts/`
     is managed by execute_code (auto-saved).
-  - The session workspace behaves like a real Python repo: it's the cwd of
-    every `execute-code` call and notebook cell, and `src/` is on `sys.path`.
-    Anything you write to `src/{name}.py` is importable from later calls
-    (`from features import build_X`). Use `src/` for reusable code; use
-    `scripts/` (auto-managed) as the one-shot audit log. Module names must
-    be plain Python identifiers — no hyphens, no step prefixes.
+  ## Authoring vs running — use the right verb
+
+  Your session is a real Python repo. `/sessions/{sid}/src/` is on sys.path,
+  `/sessions/{sid}/` is your cwd. The skills split along the verbs you need:
+
+  - write-file(path, content)         create or replace a file at `path`
+  - edit-file(path, mode, ...)        change part of an existing file
+  - run-file(path)                    execute a file in the sandbox
+  - execute-code(code)                one-shot throwaway Python; auto-saved to scripts/
+  - append-notebook-cell / run-notebook-cell / edit-notebook-cell /
+    delete-notebook-cell / rerun-notebook-cell  for interactive work
+
+  **Rule of three:** before pasting code into a third execute-code call on
+  the same theme, stop and refactor. write-file(`src/{name}.py`, ...) the
+  shared body, then run-file it (or `from {name} import ...` in your next
+  cell). This holds for notebook cells too — `import` from `src/` works
+  inside a kernel cell.
+
+  **Edit, don't repaste.** If you'd be about to write-file a near-duplicate
+  of an existing module, edit-file the existing one. `scripts/` is the
+  audit log of what ran; `src/` is the library that survives. Keep `src/`
+  small and edited; let `scripts/` accumulate.
+
+  - Anything you write to `src/{name}.py` is importable from later calls
+    (`from features import build_X`). Module names must be plain Python
+    identifiers — no hyphens, no step prefixes.
 
   ## Environment
   - `execute-code` runs Python in an isolated sandbox with pandas, numpy, matplotlib,

@@ -9,6 +9,11 @@ kind: capability
 # execute-code
 
 Execute Python code in an isolated Modal sandbox.
+For one-shot, throwaway Python — "what's the dtype of column X", "print
+the head", a quick plot. Every call is auto-saved to `scripts/` as the
+audit log. For anything you'd want to call again, author a file with
+write-file and execute it with run-file; change existing files with
+edit-file. Don't use execute-code to `.write_text()` modules into place.
 Pre-installed: pandas, numpy, matplotlib, seaborn, scikit-learn,
 xgboost, lightgbm, pyarrow, openpyxl, duckdb, imbalanced-learn,
 optuna, category_encoders, pandera, shap, statsmodels,

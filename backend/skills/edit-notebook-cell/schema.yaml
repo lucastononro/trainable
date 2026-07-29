@@ -1,0 +1,20 @@
+type: object
+properties:
+  notebook_name:
+    type: string
+    description: Target notebook (e.g. "data-overview"). Defaults to
+      "scratch" if omitted.
+  cell_id:
+    type: string
+    description: Id of the cell to edit (see read-notebook).
+  source:
+    type: string
+    description: Full new cell source. Python for code cells, markdown for
+      markdown cells.
+  cell_type:
+    type: string
+    enum: [code, markdown]
+    description: Optional — convert the cell to this type.
+required:
+- cell_id
+- source

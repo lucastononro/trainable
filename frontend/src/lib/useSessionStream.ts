@@ -519,6 +519,28 @@ export function useSessionStream(
               openCanvas();
               break;
             }
+            case 'file_updated': {
+              // write-file/edit-file overwrite of an existing file. The
+              // node is already in the tree (insertNodeIntoTree is a no-op
+              // for known paths — this only back-fills if the create event
+              // was missed), and unlike file_created an update does NOT
+              // auto-open the canvas.
+              const data = event.data;
+              const stage = data.stage || '';
+              setFileTree((prev) =>
+                insertNodeIntoTree(
+                  prev,
+                  {
+                    name: data.name,
+                    path: data.path,
+                    type: 'file',
+                  },
+                  `/sessions/${sid}`,
+                  stage,
+                ),
+              );
+              break;
+            }
             case 'agent_aborted':
               streamingItemIdRef.current = null;
               addItem({ type: 'status', content: 'Agent stopped' });
@@ -1066,6 +1088,7 @@ export function useSessionStream(
           const NON_VISIBLE_EVENTS = new Set([
             'agent_thought',
             'file_created',
+            'file_updated',
             'files_ready',
             'metric',
             'metrics_batch',

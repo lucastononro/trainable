@@ -351,6 +351,9 @@ export interface FileCreatedData {
   name: string;
   stage?: string;
 }
+// Same wire shape as FileCreatedData — the difference is semantic (the
+// file already existed). Emitted by write-file / edit-file overwrites.
+export type FileUpdatedData = FileCreatedData;
 export interface MetricEventData {
   step: number;
   name: string;
@@ -511,6 +514,7 @@ export type SSEEvent =
   | { type: 'report_ready'; data: ReportReadyData }
   | { type: 'files_ready'; data: FilesReadyData }
   | { type: 'file_created'; data: FileCreatedData }
+  | { type: 'file_updated'; data: FileUpdatedData }
   | { type: 'agent_aborted'; data: Record<string, unknown> }
   | { type: 'session_resumed'; data: SessionResumedData }
   | { type: 'metrics_batch'; data: MetricsBatchData }
