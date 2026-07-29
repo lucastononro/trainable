@@ -1,0 +1,25 @@
+type: object
+properties:
+  path:
+    type: string
+    description: File to edit. Absolute under /sessions/{sid}/ (or
+      /data/sessions/{sid}/), or relative to the session workspace.
+  mode:
+    type: string
+    enum: [replace, overwrite]
+    description: '"replace" = exact-anchor substitution (old must match
+      exactly once); "overwrite" = content replaces the whole file.
+      '
+    default: replace
+  old:
+    type: string
+    description: Required for mode=replace. Exact string to find; must
+      occur exactly once in the file.
+  new:
+    type: string
+    description: Required for mode=replace. Replacement string.
+  content:
+    type: string
+    description: Required for mode=overwrite. Full new file content.
+required:
+- path

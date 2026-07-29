@@ -1,0 +1,15 @@
+type: object
+properties:
+  notebook_name:
+    type: string
+    description: Target notebook (e.g. "data-overview"). Defaults to
+      "scratch" if omitted.
+  cell_id:
+    type: string
+    description: Id of the existing code cell to re-execute (see
+      read-notebook).
+  timeout_seconds:
+    type: integer
+    description: Max wall-clock time (default 300, max 1800).
+required:
+- cell_id

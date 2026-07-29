@@ -1,0 +1,17 @@
+type: object
+properties:
+  path:
+    type: string
+    description: File to execute. Absolute under /sessions/{sid}/ (or
+      /data/sessions/{sid}/), or relative to the session workspace (e.g.
+      "src/training.py").
+  heavy:
+    type: boolean
+    description: 'Set to true for heavy ML workloads (training, tuning, large
+      transforms). Uses the project''s training sandbox profile with GPU and
+      extended timeout. Leave false for lightweight runs.
+
+      '
+    default: false
+required:
+- path

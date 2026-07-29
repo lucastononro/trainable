@@ -90,6 +90,43 @@ def _max_existing_step(session_id: str) -> int:
     return highest
 
 
+def resolve_session_path(session_id: str, raw: str) -> tuple[str, str]:
+    """Resolve a skill-supplied file path against the session workspace.
+
+    Accepts volume-absolute paths (`/sessions/{sid}/...`), sandbox-absolute
+    paths (`/data/sessions/{sid}/...`), or paths relative to the session
+    workspace (`src/foo.py`). Returns `(volume_path, relative_path)` where
+    `volume_path` is what the volume API expects and `relative_path` is the
+    path as seen from the sandbox cwd (the session workspace).
+
+    Raises ValueError for anything outside the session workspace.
+    """
+    if not isinstance(raw, str) or not raw.strip():
+        raise ValueError("`path` must be a non-empty string.")
+    p = raw.strip()
+    prefix = f"/sessions/{session_id}/"
+    sandbox_prefix = f"/data/sessions/{session_id}/"
+    if p.startswith(sandbox_prefix):
+        rel = p[len(sandbox_prefix) :]
+    elif p.startswith(prefix):
+        rel = p[len(prefix) :]
+    elif p.startswith("/"):
+        raise ValueError(
+            f"Path must live under the session workspace ({prefix}...), got {raw!r}."
+        )
+    else:
+        rel = p[2:] if p.startswith("./") else p
+    if (
+        not rel
+        or rel == ".."
+        or rel.startswith("../")
+        or "/../" in rel
+        or rel.endswith("/..")
+    ):
+        raise ValueError(f"Path escapes the session workspace: {raw!r}")
+    return prefix + rel, rel
+
+
 def activate_tools(session_id: str, agent_id: str, slugs: list[str]) -> list[str]:
     """Mark capability skills as active for this (session, agent).
 

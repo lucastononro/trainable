@@ -1,0 +1,11 @@
+type: object
+properties:
+  notebook_name:
+    type: string
+    description: Target notebook (e.g. "data-overview"). Defaults to
+      "scratch" if omitted.
+  cell_id:
+    type: string
+    description: Id of the cell to delete (see read-notebook).
+required:
+- cell_id

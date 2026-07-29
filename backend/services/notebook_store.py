@@ -239,6 +239,82 @@ async def append_cell(
     }
 
 
+async def edit_cell(
+    session_id: str,
+    name: str,
+    cell_id: str,
+    source: str,
+    cell_type: Optional[str] = None,
+) -> dict:
+    """Replace a cell's source in place. Outputs are preserved by default —
+    same behavior as `apply_source_update`'s output carry-over for the
+    frontend HTTP PUT path. This is the per-cell agent surface.
+    """
+    if cell_type is not None and cell_type not in ("code", "markdown"):
+        raise ValueError(f"cell_type must be 'code' or 'markdown', got {cell_type!r}")
+
+    name = sanitize_name(name)
+    key = (session_id, name)
+    nb = await load(session_id, name)
+    if nb is None:
+        raise ValueError(f"Notebook '{name}' not found")
+
+    async with _lock(key):
+        cell = next((c for c in nb.cells if c.get("id") == cell_id), None)
+        if cell is None:
+            raise ValueError(f"Cell '{cell_id}' not found in notebook '{name}'")
+        cell["source"] = source
+        if cell_type is not None and cell_type != cell.get("cell_type"):
+            cell["cell_type"] = cell_type
+            if cell_type == "code":
+                cell.setdefault("outputs", [])
+                cell["execution_count"] = None
+            else:
+                cell.pop("outputs", None)
+                cell.pop("execution_count", None)
+        _cache[key] = nb
+
+    await save(session_id, name)
+    return {
+        "notebook_name": name,
+        "notebook_path": notebook_path(session_id, name),
+        "cell_id": cell_id,
+        "source_len": len(source),
+        "total_cells": len(nb.cells),
+    }
+
+
+async def delete_cell(
+    session_id: str,
+    name: str,
+    cell_id: str,
+) -> dict:
+    """Remove a cell from the notebook and persist."""
+    name = sanitize_name(name)
+    key = (session_id, name)
+    nb = await load(session_id, name)
+    if nb is None:
+        raise ValueError(f"Notebook '{name}' not found")
+
+    async with _lock(key):
+        idx = next(
+            (i for i, c in enumerate(nb.cells) if c.get("id") == cell_id),
+            None,
+        )
+        if idx is None:
+            raise ValueError(f"Cell '{cell_id}' not found in notebook '{name}'")
+        nb.cells.pop(idx)
+        _cache[key] = nb
+
+    await save(session_id, name)
+    return {
+        "notebook_name": name,
+        "notebook_path": notebook_path(session_id, name),
+        "cell_id": cell_id,
+        "remaining_cells": len(nb.cells),
+    }
+
+
 async def on_cell_event(
     session_id: str,
     name: str,
