@@ -19,7 +19,7 @@ from typing import AsyncIterator
 
 from .auth import resolve_credentials
 from .auth._base import ProviderUnavailable
-from .base import LLMEvent, LLMProvider, ProviderCapabilities
+from .base import LLMEvent, LLMProvider, ProviderCapabilities, enforce_wall_clock
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,20 @@ def _import_litellm():
             "litellm not installed — `pip install litellm`"
         ) from e
     return litellm
+
+
+def _timeout_types(litellm) -> tuple[type[BaseException], ...]:
+    """LiteLLM's own transport-timeout exception type, if resolvable.
+
+    `litellm.Timeout` wraps `openai.APITimeoutError`; neither is a builtin
+    TimeoutError subclass, so it must be mapped explicitly onto the
+    runner's timeout path. Resolved dynamically (and defensively) because
+    the module itself is injected lazily and replaced by mocks in tests.
+    """
+    t = getattr(litellm, "Timeout", None)
+    if isinstance(t, type) and issubclass(t, BaseException):
+        return (t,)
+    return ()
 
 
 class LiteLLMProvider(LLMProvider):
@@ -93,12 +107,19 @@ class LiteLLMProvider(LLMProvider):
         ]
 
         try:
-            resp = await litellm.acompletion(
-                model=model,
-                messages=messages,
-                tools=oai_tools or None,
-                stream=False,
-                timeout=timeout_seconds,
+            # `timeout=` is LiteLLM's per-attempt transport timeout;
+            # `enforce_wall_clock` is the hard cap so retries/fallbacks in
+            # the backend can't stretch a stalled call past the budget.
+            resp = await enforce_wall_clock(
+                litellm.acompletion(
+                    model=model,
+                    messages=messages,
+                    tools=oai_tools or None,
+                    stream=False,
+                    timeout=timeout_seconds,
+                ),
+                timeout_seconds,
+                provider="litellm",
             )
 
             choice = resp.choices[0]
@@ -153,7 +174,27 @@ class LiteLLMProvider(LLMProvider):
                     },
                     total_cost_usd=getattr(resp, "_response_cost", None),
                 )
+        except TimeoutError:
+            # Propagate so the runner's TimeoutError handler publishes
+            # `agent_timeout` and frees the session task (issue #95).
+            logger.warning("LiteLLMProvider call exceeded the wall-clock timeout")
+            raise
         except Exception as e:
+            if isinstance(e, _timeout_types(litellm)):
+                # LiteLLM's per-attempt `timeout=` shares the wall-clock
+                # deadline, so its own Timeout can fire before asyncio's
+                # timer. Map it onto builtin TimeoutError so the runner
+                # publishes `agent_timeout` / `timed_out` instead of ending
+                # the run as `{stage}_done` (issue #95).
+                logger.warning("LiteLLMProvider call hit the backend timeout")
+                raise TimeoutError(
+                    "litellm LLM call timed out at the transport layer"
+                    + (
+                        f" ({timeout_seconds:g}s wall-clock budget)"
+                        if timeout_seconds and timeout_seconds > 0
+                        else ""
+                    )
+                ) from e
             logger.exception("LiteLLMProvider.run failed")
             yield LLMEvent.error(str(e))
 

@@ -21,6 +21,7 @@ import {
   TaskEventData,
 } from '@/lib/types';
 import { draftToWire, wireToDraft, isDraftEmpty, draftToPlainText } from '@/lib/mentions';
+import { takeSuggestedPrompt } from '@/lib/suggestedPrompt';
 import {
   ImperativePanelHandle,
   Panel,
@@ -67,13 +68,14 @@ import {
   GitBranch,
   Globe,
   ExternalLink,
+  Download,
 } from 'lucide-react';
 import Sidebar from '@/components/Sidebar';
 import Notebook from '@/components/notebook/Notebook';
 import AgentStatusIndicator, { ActiveAgent } from '@/components/AgentStatusIndicator';
 import CostBadge, { UsageTotals } from '@/components/CostBadge';
 import InlineTasks from '@/components/InlineTasks';
-import type { UsageEvent } from '@/lib/types';
+import type { BudgetInfo, UsageEvent } from '@/lib/types';
 
 const ZERO_USAGE: UsageTotals = {
   cost_usd: 0,
@@ -262,6 +264,9 @@ function HomePageContent() {
   // Live usage totals for the active session (cost badge in header)
   const [usageTotals, setUsageTotals] = useState<UsageTotals>(ZERO_USAGE);
   const [recentUsage, setRecentUsage] = useState<UsageEvent[]>([]);
+  // Project budget vs. spend (issue #107) — hydrated with session usage,
+  // flipped to exceeded by the budget_exceeded SSE event.
+  const [budgetInfo, setBudgetInfo] = useState<BudgetInfo | null>(null);
 
   // Active agents tracking (for header indicator)
   const [activeAgents, setActiveAgents] = useState<ActiveAgent[]>([]);
@@ -295,6 +300,17 @@ function HomePageContent() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [chatItems]);
 
+  // Seed the chat input with the suggested prompt handed off by the
+  // sample-dataset gallery (first-run flow). Consumed exactly once, and
+  // never clobbers something the user already typed.
+  useEffect(() => {
+    if (!activeSessionId) return;
+    const prompt = takeSuggestedPrompt(activeSessionId);
+    if (!prompt) return;
+    setDraft((prev) => (isDraftEmpty(prev) ? [{ kind: 'text', value: prompt }] : prev));
+    inputRef.current?.focus();
+  }, [activeSessionId]);
+
   // ---------------------------------------------------------------------------
   // addItem helper
   // ---------------------------------------------------------------------------
@@ -323,8 +339,10 @@ function HomePageContent() {
           const data = event.data as any;
           // Fan out the parsed event to any other subscriber (e.g. the
           // notebook) before/independent of the switch below — this is the
-          // single EventSource for the session, so everyone shares it.
-          publish(event);
+          // single EventSource for the session, so everyone shares it. `sid`
+          // tags the event with its owning session so subscribers can ignore
+          // stale cross-session deliveries during a session switch.
+          publish(sid, event);
 
           switch (event.type) {
             case 'state_change':
@@ -346,7 +364,8 @@ function HomePageContent() {
               if (
                 data.state.includes('done') ||
                 data.state === 'failed' ||
-                data.state === 'cancelled'
+                data.state === 'cancelled' ||
+                data.state === 'budget_exceeded'
               ) {
                 streamingItemIdRef.current = null;
                 setIsRunning(false);
@@ -597,6 +616,20 @@ function HomePageContent() {
             case 'agent_aborted':
               streamingItemIdRef.current = null;
               addItem({ type: 'status', content: 'Agent stopped' });
+              setIsRunning(false);
+              break;
+            case 'budget_exceeded':
+              // Hard-stop guardrail (#107): the runner halted the agent
+              // because project spend crossed its cap.
+              streamingItemIdRef.current = null;
+              addItem({ type: 'error', content: data.error });
+              setBudgetInfo({
+                project_id: data.project_id,
+                budget_usd: data.budget_usd ?? null,
+                spent_usd: data.spent_usd ?? 0,
+                remaining_usd: 0,
+                exceeded: true,
+              });
               setIsRunning(false);
               break;
             case 'metrics_batch': {
@@ -957,6 +990,7 @@ function HomePageContent() {
     activeAgentsRef.current = [];
     setUsageTotals(ZERO_USAGE);
     setRecentUsage([]);
+    setBudgetInfo(null);
     setTasks([]);
   }, [setIsRunning]);
 
@@ -1010,6 +1044,7 @@ function HomePageContent() {
             compute_runs: t.compute_runs || 0,
           });
           setRecentUsage(s.events ?? []);
+          setBudgetInfo(s.budget ?? null);
         })
         .catch(() => {
           /* historical usage is best-effort; live SSE will fill in */
@@ -1819,7 +1854,9 @@ function HomePageContent() {
 
           {hasActiveSession && <AgentStatusIndicator agents={activeAgents} isRunning={isRunning} />}
 
-          {hasActiveSession && <CostBadge totals={usageTotals} recent={recentUsage} />}
+          {hasActiveSession && (
+            <CostBadge totals={usageTotals} recent={recentUsage} budget={budgetInfo} />
+          )}
 
           {hasActiveSession && (
             <>
@@ -2405,7 +2442,7 @@ const HtmlPanel = memo(function HtmlPanel({ artifact }: { artifact: HtmlArtifact
     );
   }
 
-  const rawUrl = `/api/files/raw?path=${encodeURIComponent(artifact.path)}`;
+  const rawUrl = api.filesRawUrl(artifact.path);
   const sizeLabel = humanArtifactBytes(artifact.size);
 
   return (
@@ -2551,14 +2588,14 @@ const FileViewer = memo(function FileViewer({
           <div className="p-6 flex items-center justify-center bg-black">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
-              src={`/api/files/raw?path=${encodeURIComponent(filePath)}`}
+              src={api.filesRawUrl(filePath)}
               alt={fileName}
               className="max-w-full max-h-[60vh] rounded-lg"
             />
           </div>
         ) : isPdf ? (
           <iframe
-            src={`/api/files/raw?path=${encodeURIComponent(filePath)}#view=FitH`}
+            src={`${api.filesRawUrl(filePath)}#view=FitH`}
             title={fileName}
             className="w-full h-full min-h-[80vh] bg-white border-0"
           />
@@ -2597,10 +2634,10 @@ const FileViewer = memo(function FileViewer({
                 img: ({ src, alt }) => {
                   let imgSrc = src || '';
                   if (imgSrc.startsWith('/data/')) {
-                    imgSrc = `/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+                    imgSrc = api.filesRawUrl(imgSrc);
                   } else if (imgSrc && !imgSrc.startsWith('http')) {
                     const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-                    imgSrc = `/api/files/raw?path=${encodeURIComponent(dir + '/' + imgSrc)}`;
+                    imgSrc = api.filesRawUrl(dir + '/' + imgSrc);
                   }
                   return (
                     // eslint-disable-next-line @next/next/no-img-element
@@ -2646,10 +2683,10 @@ const ReportMarkdown = memo(function ReportMarkdown({
       img: ({ src, alt }: { src?: string; alt?: string }) => {
         let imgSrc = src || '';
         if (imgSrc.startsWith('/data/')) {
-          imgSrc = `/api/files/raw?path=${encodeURIComponent(imgSrc)}`;
+          imgSrc = api.filesRawUrl(imgSrc);
         } else if (imgSrc && !imgSrc.startsWith('http')) {
           const workspace = `/sessions/${sessionId}/eda`;
-          imgSrc = `/api/files/raw?path=${encodeURIComponent(workspace + '/' + imgSrc)}`;
+          imgSrc = api.filesRawUrl(workspace + '/' + imgSrc);
         }
         return (
           // eslint-disable-next-line @next/next/no-img-element
@@ -3142,6 +3179,21 @@ function WorkspaceSidebar({
             >
               <BarChart3 className="w-3 h-3 text-gray-600" />
             </button>
+            <a
+              // Browser-native streamed zip download — Content-Disposition on
+              // the backend picks the filename. Routed through Next's /api
+              // rewrite so dev and prod both work with no host hard-coding.
+              href={sessionId ? `/api/sessions/${sessionId}/download` : undefined}
+              aria-disabled={!sessionId}
+              className={`p-1 rounded transition-colors ${
+                sessionId
+                  ? 'hover:bg-white/[0.06] cursor-pointer'
+                  : 'opacity-40 pointer-events-none'
+              }`}
+              title="Download workspace as zip"
+            >
+              <Download className="w-3 h-3 text-gray-600" />
+            </a>
             <button
               onClick={onClose}
               className="p-1 hover:bg-white/[0.06] rounded transition-colors"
