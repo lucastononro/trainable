@@ -14,6 +14,7 @@ import ToolGroupCard from '@/components/chat/ToolGroupCard';
 import CollapsibleToolCard from '@/components/chat/CollapsibleToolCard';
 import SubAgentCard from '@/components/chat/SubAgentCard';
 import ClarificationCard from '@/components/chat/ClarificationCard';
+import ApprovalCard from '@/components/chat/ApprovalCard';
 import AgentToolCard from '@/components/chat/AgentToolCard';
 import UserMessageFilePills from '@/components/chat/UserMessageFilePills';
 
@@ -113,6 +114,8 @@ const ChatItemView = memo(function ChatItemView({
       return <SubAgentCard item={item} />;
     case 'clarification':
       return <ClarificationCard item={item} sessionId={sessionId ?? null} />;
+    case 'approval':
+      return <ApprovalCard item={item} sessionId={sessionId ?? null} />;
     case 'agent_tool':
       return <AgentToolCard item={item} />;
     case 'error':

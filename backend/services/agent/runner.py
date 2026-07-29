@@ -1156,6 +1156,17 @@ async def run_agent(
         if "delegate-task" in agent_skills and not can_delegate(agent_type, depth):
             agent_skills = [s for s in agent_skills if s != "delegate-task"]
 
+        # HITL approval gates (issue #108): opt-in per session. When the flag
+        # is off this is an identity call — skills and prompt come back
+        # unchanged, so the default path is untouched. Applied per agent run,
+        # so delegated sub-agents inherit the gate through the shared
+        # session_id without any parameter threading.
+        from services.approvals import apply_approval_gate
+
+        agent_skills, system_prompt = apply_approval_gate(
+            session_id, agent_skills, system_prompt
+        )
+
         logger.info(
             "Starting agent=%s id=%s parent=%s stage=%s session=%s provider=%s model=%s depth=%d skills=%s",
             agent_type,

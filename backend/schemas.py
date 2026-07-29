@@ -128,10 +128,22 @@ class MessageCreate(BaseModel):
     # services/llm/thinking.py. Ignored for models that don't support it.
     agent_thinking: Optional[dict[str, str]] = Field(default=None)
     mentions: Optional[list[Mention]] = Field(default=None, max_length=64)
+    # HITL approval gates (issue #108). Opt-in: when true, agents launched by
+    # this message gain the `request-approval` skill and block consequential
+    # decisions on user Approve/Edit. Omitted/None/False → default behavior.
+    approvals: Optional[bool] = Field(default=None)
 
 
 class ClarificationReply(BaseModel):
     answer: str = Field(..., max_length=_CLARIFICATION_MAX)
+
+
+class ApprovalReply(BaseModel):
+    """User verdict on a pending approval gate (issue #108)."""
+
+    decision: Literal["approve", "edit"]
+    # Required (non-empty) when decision == "edit" — enforced in the route.
+    edits: str = Field(default="", max_length=_CLARIFICATION_MAX)
 
 
 class SessionResume(BaseModel):

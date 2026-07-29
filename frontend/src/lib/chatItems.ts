@@ -49,6 +49,13 @@ export interface ChatItemMeta {
   duration_s?: number;
   is_error?: boolean;
   variant?: 'tool' | 'clarification_exchange';
+  // approval (HITL gates, issue #108) — also reuses status/answer/answered_by
+  // /asker_agent_type/depth from the clarification block above
+  approval_id?: string;
+  title?: string;
+  kind?: string;
+  context?: string;
+  decision?: 'approve' | 'edit' | 'timeout' | 'cancelled';
   // assistant
   agent_type?: string;
   // user
@@ -73,6 +80,7 @@ export interface ChatItem {
     | 'subagent_start'
     | 'subagent_end'
     | 'clarification'
+    | 'approval'
     | 'agent_tool';
   content: string;
   meta?: ChatItemMeta;

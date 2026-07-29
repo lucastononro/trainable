@@ -744,6 +744,47 @@ export function useSessionStream(
               );
               break;
             }
+            // HITL approval gate (issue #108): agent posted a consequential
+            // decision and is blocked until the user approves or edits it.
+            case 'approval_request': {
+              const data = event.data;
+              addItem({
+                type: 'approval',
+                content: data.content || '',
+                meta: {
+                  approval_id: data.approval_id,
+                  title: data.title,
+                  kind: data.kind,
+                  context: data.context,
+                  asker_agent_id: data.asker_agent_id,
+                  asker_agent_type: data.asker_agent_type,
+                  depth: data.depth,
+                  status: 'pending',
+                },
+              });
+              break;
+            }
+            case 'approval_resolved': {
+              const data = event.data;
+              const aid = data.approval_id;
+              setChatItems((prev) =>
+                prev.map((it) =>
+                  it.type === 'approval' && it.meta?.approval_id === aid
+                    ? {
+                        ...it,
+                        meta: {
+                          ...it.meta,
+                          status: 'resolved',
+                          decision: data.decision,
+                          answer: data.answer,
+                          answered_by: data.answered_by,
+                        },
+                      }
+                    : it,
+                ),
+              );
+              break;
+            }
             // Generic auxiliary-tool event (inspect_agent_context, list_session_agents,
             // read_project_session). Single event per call. NO content preview is
             // surfaced — the user only sees that the agent did something.
@@ -1169,6 +1210,50 @@ export function useSessionStream(
                   },
                 }),
               );
+            } else if (eventType === 'approval_request') {
+              // Restore the approval card (pending until a matching
+              // approval_resolved row flips it). Critical for reload-mid-gate:
+              // the backend agent stays blocked on the approval future, so
+              // the card must come back actionable or the session stalls
+              // until the approval window times out.
+              restored.push(
+                mkItem({
+                  type: 'approval',
+                  content: msg.content || '',
+                  meta: {
+                    approval_id: metaStr(msg.metadata?.approval_id),
+                    title: metaStr(msg.metadata?.title),
+                    kind: metaStr(msg.metadata?.kind),
+                    context: metaStr(msg.metadata?.context),
+                    asker_agent_id: metaStr(msg.metadata?.asker_agent_id),
+                    asker_agent_type: metaStr(msg.metadata?.asker_agent_type),
+                    depth: metaNum(msg.metadata?.depth),
+                    status: 'pending',
+                  },
+                }),
+              );
+            } else if (eventType === 'approval_resolved') {
+              const aid = metaStr(msg.metadata?.approval_id);
+              const idx = restored.findLastIndex(
+                (i) => i.type === 'approval' && i.meta?.approval_id === aid,
+              );
+              if (idx >= 0) {
+                restored[idx] = {
+                  ...restored[idx],
+                  meta: {
+                    ...restored[idx].meta,
+                    status: 'resolved',
+                    decision: msg.metadata?.decision as
+                      | 'approve'
+                      | 'edit'
+                      | 'timeout'
+                      | 'cancelled'
+                      | undefined,
+                    answer: metaStr(msg.metadata?.answer),
+                    answered_by: metaStr(msg.metadata?.answered_by),
+                  },
+                };
+              }
             } else if (eventType === 'clarification_q' || eventType === 'clarification_a') {
               // Persisted under their respective agent_ids and recoverable via
               // inspect_agent_context. Don't render as chat bubbles — the

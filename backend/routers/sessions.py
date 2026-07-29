@@ -18,12 +18,14 @@ from errors import capture_exception
 from models import Artifact, Experiment, LogEvent, Message, Metric, Task
 from models import Session as SessionModel
 from schemas import (
+    ApprovalReply,
     ClarificationReply,
     MessageCreate,
     SessionResume,
     TaskCreate,
     TaskUpdate,
 )
+from services import approvals as approvals_svc
 from services.agent import abort_agent, run_agent
 from services.agent.resume import (
     build_resume_context,
@@ -147,6 +149,11 @@ async def send_message(
         sandbox_config = {}
         if session.experiment and session.experiment.project:
             sandbox_config = session.experiment.project.sandbox_config or {}
+
+        # HITL approval gates (issue #108): assert the per-session flag from
+        # the message's toggle state on every launch. Omitted/False keeps the
+        # default (gates off) — the runner's injection is a no-op then.
+        approvals_svc.set_enabled(session_id, bool(body.approvals))
 
         # Mark the session "running" eagerly so the sidebar spinner + the
         # restore-on-tab-switch path both see the live state. Completion /
@@ -372,6 +379,41 @@ async def reply_to_clarification(
         },
     )
     return {"status": "ok"}
+
+
+@router.post("/sessions/{session_id}/approvals/{approval_id}")
+async def reply_to_approval(
+    session_id: str,
+    approval_id: str,
+    body: ApprovalReply,
+):
+    """User verdict on a pending approval gate — unblocks the waiting agent.
+
+    The `approval_resolved` SSE/persistence event is published by the skill
+    handler once its future resolves, so this route only resolves the future.
+    """
+    edits = body.edits.strip()
+    if body.decision == "edit" and not edits:
+        raise HTTPException(
+            status_code=400,
+            detail="decision='edit' requires non-empty edits.",
+        )
+    answered = resolve_clarification(
+        session_id,
+        approval_id,
+        {
+            "decision": body.decision,
+            "answer": edits,
+            "answered_by": "user",
+            "timeout": False,
+        },
+    )
+    if not answered:
+        raise HTTPException(
+            status_code=404,
+            detail="No pending approval with that approval_id (already answered or expired).",
+        )
+    return {"status": "ok", "decision": body.decision}
 
 
 @router.get("/sessions/{session_id}/artifacts")

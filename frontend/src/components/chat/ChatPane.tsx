@@ -17,6 +17,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  ShieldCheck,
   Square,
   Upload,
 } from 'lucide-react';
@@ -56,6 +57,8 @@ export default function ChatPane({
   onStop,
   sessionState,
   onResume,
+  approvalsEnabled,
+  onToggleApprovals,
   attachedFiles,
   onRemoveAttachedFile,
   onClearAttachedFiles,
@@ -91,6 +94,9 @@ export default function ChatPane({
   sessionState: string;
   /** Relaunch an interrupted session with recovered progress (issue #106). */
   onResume: (mode: 'resume' | 'retry') => void;
+  /** HITL approval gates (issue #108) — opt-in toggle state + flipper. */
+  approvalsEnabled: boolean;
+  onToggleApprovals: () => void;
   attachedFiles: File[];
   onRemoveAttachedFile: (index: number) => void;
   onClearAttachedFiles: () => void;
@@ -290,6 +296,27 @@ export default function ChatPane({
                 </div>
               )}
             </div>
+
+            {/* HITL approval-gate toggle (issue #108). OFF by default —
+                when ON, agents post consequential decisions (target column,
+                prep plan, model shortlist) as approval cards and block on
+                the user's Approve/Edit. */}
+            <button
+              type="button"
+              onClick={onToggleApprovals}
+              className={`p-2 rounded-xl transition-colors shrink-0 ${
+                approvalsEnabled
+                  ? 'bg-emerald-500/20 text-emerald-400'
+                  : 'hover:bg-neutral-700 text-gray-400 hover:text-gray-300'
+              }`}
+              title={
+                approvalsEnabled
+                  ? 'Approval gates ON — the agent will ask before consequential decisions'
+                  : 'Approval gates OFF — click to require your approval for consequential decisions'
+              }
+            >
+              <ShieldCheck className="w-4 h-4" />
+            </button>
 
             <MentionInput
               draft={draft}
