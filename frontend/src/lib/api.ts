@@ -136,6 +136,10 @@ export const api = {
   // this as a URL-builder rather than a fetch so the user clicks a real
   // link and the browser handles the streaming.
   modelDownloadUrl: (modelId: string) => `${API_BASE}/models/${modelId}/download`,
+  // URL-builder (not a fetch) for raw workspace files — used as `src` for
+  // <img>/<iframe> and sandboxed HTML previews, so the browser loads it
+  // directly and the backend's CSP on /files/raw applies.
+  filesRawUrl: (path: string) => `${API_BASE}/files/raw?path=${encodeURIComponent(path)}`,
   // Read the Modal serving app source the next deploy will ship.
   getServingApp: (modelId: string) =>
     fetchJSON<{ path: string; code: string }>(`/models/${modelId}/serving-app`),
