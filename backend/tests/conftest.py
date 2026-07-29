@@ -22,8 +22,21 @@ def pytest_configure(config):
     )
 
 
-# Use in-memory SQLite for tests (no Postgres needed)
-os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
+# Use in-memory SQLite for tests by default (no Postgres needed). CI's
+# backend-test job runs a Postgres service container and sets
+# TEST_DATABASE_URL so the suite exercises real Postgres semantics —
+# Column(JSON) storage, FK ON DELETE CASCADE, and the hand-rolled
+# db._run_migrations — instead of only ever validating against an engine
+# we don't ship. See .github/workflows/ci.yml.
+#
+# Only the explicit TEST_DATABASE_URL opt-in is honored: an ambient
+# DATABASE_URL (e.g. pointing at a dev database in a developer's shell) is
+# deliberately overwritten, because the setup_db fixture drops all tables
+# after every test.
+if os.environ.get("TEST_DATABASE_URL"):
+    os.environ["DATABASE_URL"] = os.environ["TEST_DATABASE_URL"]
+else:
+    os.environ["DATABASE_URL"] = "sqlite+aiosqlite://"
 
 # Mock claude_agent_sdk if it's not installed (it's a private package)
 if "claude_agent_sdk" not in sys.modules:
