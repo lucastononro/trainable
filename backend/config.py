@@ -36,7 +36,11 @@ class Settings(BaseSettings):
     agent_max_turns: int = 30
     agent_timeout_seconds: int = Field(
         default=1800,
-        description="Overall wall-clock timeout for an agent run (seconds)",
+        description=(
+            "Wall-clock timeout for a single provider LLM call (seconds). "
+            "Enforced inside each provider around the HTTP request only, "
+            "so tool-execution time is never counted."
+        ),
     )
     agent_abort_timeout: float = 5.0
 
