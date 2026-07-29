@@ -46,7 +46,7 @@ def _init_s3_buckets():
 
     try:
         s3 = get_s3_client()
-        for bucket in ["datasets", "experiments"]:
+        for bucket in settings.s3_allowed_buckets:
             try:
                 s3.head_bucket(Bucket=bucket)
                 logger.info("S3 bucket '%s' exists", bucket)
