@@ -124,6 +124,26 @@ def check_docker():
     success("Docker and Docker Compose found")
 
 
+def check_docker_daemon():
+    """Preflight: fail fast with friendly guidance when the Docker daemon
+    is installed but not running — otherwise `docker compose` surfaces a
+    raw connection error (#126)."""
+    if not shutil.which("docker"):
+        fail("Docker not found. Install it from https://docs.docker.com/get-docker/")
+        sys.exit(1)
+    result = subprocess.run(
+        ["docker", "info"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        fail(
+            "Docker is installed but the daemon is not running. "
+            "Start Docker Desktop (or the docker service) and try again."
+        )
+        sys.exit(1)
+
+
 # Names the wizard knows about explicitly; everything else is treated as a
 # LiteLLM backend key in the free-form section.
 _KNOWN_PROVIDER_KEYS = {
@@ -566,6 +586,9 @@ def _require_config():
             f"Config not found at {CONFIG_DIR}. Run {BOLD}trainable init{RESET} first."
         )
         sys.exit(1)
+    # Daemon-liveness preflight so a stopped Docker produces actionable
+    # guidance instead of a raw `docker compose` connection error (#126).
+    check_docker_daemon()
 
 
 FRONTEND_URL = "http://localhost:3000"
@@ -636,6 +659,18 @@ def cmd_down():
     os.execvp("docker", _compose_args(["down"]))
 
 
+def cmd_status():
+    """Show the stack's containers (`docker compose ps`)."""
+    _require_config()
+    os.execvp("docker", _compose_args(["ps"]))
+
+
+def cmd_logs():
+    """Dump the stack's logs (`docker compose logs`)."""
+    _require_config()
+    os.execvp("docker", _compose_args(["logs"]))
+
+
 USAGE = f"""\
 {BOLD}trainable{RESET} — AI-powered ML experimentation platform
 
@@ -646,6 +681,9 @@ USAGE = f"""\
                            Opens {FRONTEND_URL} in your browser once ready.
                            Pass --no-browser (or set TRAINABLE_NO_BROWSER=1) to skip.
   trainable down           Stop all services
+  trainable status         Show running containers (docker compose ps)
+  trainable logs           Show service logs (docker compose logs)
+  trainable --version      Print the installed CLI version
 
 {BOLD}Quick start:{RESET}
   pip install trainable-ai
@@ -665,6 +703,12 @@ def main():
         cmd_up()
     elif cmd == "down":
         cmd_down()
+    elif cmd == "status":
+        cmd_status()
+    elif cmd == "logs":
+        cmd_logs()
+    elif cmd in ("--version", "version"):
+        print(f"trainable {_cli_version()}")
     else:
         print(USAGE)
         sys.exit(0 if cmd in ("-h", "--help") else 1)
