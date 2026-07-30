@@ -1,8 +1,13 @@
-# Staging branch `staging-v0.0.5` — merge ledger
+# Integration ledger — now on `release/v0.0.5` (was `staging-v0.0.5`)
 
 Purpose: consolidate all triaged open PRs (as of 2026-07-29) into one integration
 branch, off `main` at the v0.0.4 release line, so they can be tested together and
 backtracked. Nothing here is merged to `main`.
+
+NOTE: this consolidation lived on `staging-v0.0.5` and was moved verbatim to
+`release/v0.0.5` (2026-07-29); the staging branch was deleted. Older PR/issue
+comments referencing `staging-v0.0.5` mean this branch. This file kept its name
+so those references still resolve.
 
 Base: `origin/main` @ v0.0.4 line.
 Method per PR: check outstanding Greptile findings → fix valid ones (pushed to the
