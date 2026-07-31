@@ -53,7 +53,9 @@ The wizard, in order:
 - `trainable init` — the wizard above.
 - `trainable up` — `docker compose up -d` against `~/.trainable/docker-compose.yml`.
 - `trainable down` — stop and remove containers (data persists in volumes).
+- `trainable status` — `docker compose ps` against the stack.
 - `trainable logs [service]` — tail logs.
+- `trainable --version` — print the installed wheel's version.
 - `trainable doctor` — re-runs the prereq checks.
 - `trainable uninstall` — removes containers, volumes, and `~/.trainable/`. Requires confirmation.
 

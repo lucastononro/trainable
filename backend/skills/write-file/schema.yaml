@@ -1,0 +1,17 @@
+type: object
+properties:
+  path:
+    type: string
+    description: Target file path. Absolute under /sessions/{sid}/ (or
+      /data/sessions/{sid}/), or relative to the session workspace (e.g.
+      "src/loaders.py"). Must stay inside the session workspace.
+  content:
+    type: string
+    description: Full file content to write.
+  overwrite:
+    type: boolean
+    description: When false, fail instead of replacing an existing file.
+    default: true
+required:
+- path
+- content

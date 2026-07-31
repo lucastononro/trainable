@@ -145,13 +145,13 @@ body {
 }
 
 /* Smooth collapse/expand for react-resizable-panels.
-   Animates `flex` on programmatic open/close, but disables the transition
-   while the user is actively dragging the resize handle. */
+   Animates `flex-grow` on programmatic open/close, but disables the transition
+   while the user is actively dragging the resize handle. (v4 sizing is
+   flex-grow based; a dragging Separator carries data-separator='active'.) */
 [data-panel] {
-  transition: flex 260ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: flex;
+  transition: flex-grow 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: flex-grow;
 }
-[data-panel-group]:has([data-resize-handle-state='drag']) [data-panel],
-[data-panel-group]:has([data-resize-handle-active]) [data-panel] {
+[data-group]:has([data-separator='active']) [data-panel] {
   transition: none;
 }

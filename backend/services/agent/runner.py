@@ -28,6 +28,7 @@ from services.volume import (
 )
 
 from observability import agent_span, bind_log_context, clear_log_context
+from services.budget import BudgetExceededError, check_budget
 from services.usage import record_llm_usage
 
 from .agents import (
@@ -52,6 +53,22 @@ _THOUGHT_BLOCK_MAX_CHARS = 1500
 
 _MENTION_SENTINEL_START = "\ue000"
 _MENTION_SENTINEL_END = "\ue001"
+
+
+async def _check_budget_failopen(session_id: str) -> None:
+    """Budget check that lets ONLY BudgetExceededError escape.
+
+    Any other exception (e.g. a transient DB hiccup during the budget
+    query) must not unwind run_agent into its generic handler and mark
+    the session `failed` \u2014 the guardrail fails open with a warning and
+    the next usage event retries the check.
+    """
+    try:
+        await check_budget(session_id)
+    except BudgetExceededError:
+        raise
+    except Exception as e:
+        logger.warning("check_budget failed (fail-open, will retry): %s", e)
 
 
 def _apply_mentions(user_prompt: str, mentions: list[dict] | None) -> str:
@@ -164,8 +181,11 @@ async def _load_conversation_history(session_id: str) -> list[dict]:
     return messages
 
 
-async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict]:
-    """Return (project_id, project_name, project_files_listing, sandbox_config).
+async def _load_project_context(
+    experiment_id: str,
+) -> tuple[str, str, str, dict, dict]:
+    """Return (project_id, project_name, project_files_listing, sandbox_config,
+    training_config).
 
     project_files_listing is a multi-line string describing all files currently
     present under /projects/{project_id}/datasets/. If the project has no data,
@@ -173,10 +193,15 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict
 
     sandbox_config is the project's per-profile compute settings (default and
     training profiles, each with optional gpu + timeout). Empty dict if unset.
+
+    training_config is the project's pre-flight training controls (optimization
+    metric, model families, trial budget, wall-clock/cost cap — see
+    schemas.TrainingConfig). Empty dict if unset.
     """
     project_id = ""
     project_name = ""
     sandbox_config: dict = {}
+    training_config: dict = {}
     try:
         async with async_session() as db:
             result = await db.execute(
@@ -192,6 +217,7 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict
                 if project:
                     project_name = project.name
                     sandbox_config = project.sandbox_config or {}
+                    training_config = project.training_config or {}
     except Exception as e:
         logger.warning("Failed to load project for experiment %s: %s", experiment_id, e)
 
@@ -241,57 +267,179 @@ async def _load_project_context(experiment_id: str) -> tuple[str, str, str, dict
                 + "/datasets/` directly)"
             )
 
-    return project_id, project_name, files_listing, sandbox_config
+    return project_id, project_name, files_listing, sandbox_config, training_config
+
+
+def _apply_training_wallclock_cap(sandbox_config: dict, training_config: dict) -> dict:
+    """Clamp the training sandbox profile's per-call timeout to the user's
+    wall-clock budget (training_config.max_wallclock_minutes).
+
+    This is the hard-enforcement half of the pre-flight controls: even if the
+    agent ignores the prompt-level constraint, a heavy execute-code call cannot
+    run past the cap. Returns a new dict; the input is not mutated.
+    """
+    cap_minutes = (training_config or {}).get("max_wallclock_minutes")
+    if not cap_minutes:
+        return sandbox_config
+    cap_seconds = int(cap_minutes) * 60
+    config = dict(sandbox_config or {})
+    training_profile = dict(config.get("training") or {})
+    current = training_profile.get("timeout") or settings.sandbox_timeout
+    training_profile["timeout"] = min(int(current), cap_seconds)
+    config["training"] = training_profile
+    return config
+
+
+def _format_training_constraints(training_config: dict) -> str:
+    """Render the user's pre-flight training controls as a prompt block.
+
+    Injected into the system prompt of any agent that can call start-training
+    (orchestrator, trainer, chat). Empty string when no constraint is set so
+    unconfigured projects behave exactly as before.
+    """
+    cfg = training_config or {}
+    metric = cfg.get("optimization_metric")
+    families = cfg.get("model_families") or []
+    max_trials = cfg.get("max_trials")
+    max_wallclock = cfg.get("max_wallclock_minutes")
+    max_cost = cfg.get("max_cost_usd")
+
+    constraints: list[str] = []
+    if metric:
+        constraints.append(
+            f"- **Optimization metric**: `{metric}`. Every model-selection and "
+            f"hyperparameter-tuning decision (including the Optuna objective) "
+            f"MUST optimize this metric. Report other metrics too, but select on this one."
+        )
+    if families:
+        fam_list = ", ".join(f"`{f}`" for f in families)
+        constraints.append(
+            f"- **Allowed model families**: {fam_list}. Do NOT train or tune "
+            f"models outside these families — not even for the quick scan. "
+            f"start-training rejects other frameworks."
+        )
+    if max_trials:
+        constraints.append(
+            f"- **Trial budget**: at most {max_trials} hyperparameter-search "
+            f"trials TOTAL across the whole run. This overrides any default "
+            f"trial count in your instructions (e.g. '30-50 optuna trials')."
+        )
+    if max_wallclock:
+        constraints.append(
+            f"- **Wall-clock cap**: {max_wallclock} minutes of training compute. "
+            f"The training sandbox profile's per-call timeout is clamped to this "
+            f"cap; plan fits/sweeps to finish within it."
+        )
+    if max_cost:
+        constraints.append(
+            f"- **Cost cap**: ${max_cost:g} for this training effort. Prefer "
+            f"cheaper models/fewer trials as you approach it."
+        )
+
+    if not constraints:
+        return ""
+
+    lines = [
+        "## User training constraints (MANDATORY)",
+        "",
+        "The user configured pre-flight training controls in Project Settings.",
+        "These are hard requirements, not suggestions — they OVERRIDE any",
+        "conflicting default strategy in your instructions:",
+        "",
+        *constraints,
+        "",
+        "When delegating training work to another agent, restate these",
+        "constraints verbatim in the delegation instructions so they are not",
+        "lost. The start-training skill validates its arguments against them,",
+        "and REQUIRES you to declare `optimization_metric` and `max_trials`",
+        "explicitly whenever the corresponding constraint is set above.",
+    ]
+    return "\n".join(lines)
+
+
+# One-line hardware guidance per canonical label, shown next to each
+# allowed option in the compute-environment prompt block.
+_GPU_BLURBS: dict[str, str] = {
+    "cpu": "CPU only — EDA, plotting, sklearn/xgboost/lightgbm",
+    "T4": "16GB entry GPU — small fine-tunes, light inference",
+    "L4": "24GB — best price/perf for medium GPU work",
+    "A10G": "24GB mid-tier — solid training workhorse",
+    "A100-40GB": "40GB — large models, big batches",
+    "A100-80GB": "80GB — very large models / long contexts",
+    "H100": "80GB top-tier — only when speed or memory demands it",
+}
+
+
+def _gpu_hourly_usd(gpu: str) -> float | None:
+    """Approx $/hr for a canonical label on the active provider; None when
+    pricing is unavailable (the prompt then omits prices)."""
+    try:
+        # Private import on purpose: sandbox.yml rate resolution has no
+        # public API yet. A signature/name change there degrades to
+        # price-less prompts — logged below so it isn't invisible.
+        from services.usage import _resolve_compute_rate
+
+        rate = _resolve_compute_rate(settings.compute_provider, gpu)
+        return rate * 3600 if rate > 0 else None
+    except Exception as e:
+        logger.debug("GPU pricing unavailable for %s: %s", gpu, e)
+        return None
 
 
 def _format_compute_env(sandbox_config: dict) -> str:
-    """Render the project's per-profile sandbox config as a prompt block the
-    agent can read before deciding how to dimension execute-code calls.
+    """Render the agent's compute allowance as a prompt block: which
+    hardware it may request per execute-code call (`gpu` arg), the max
+    per-call timeout, and how the heavy/default profile fallback works.
 
-    Mirrors the runtime fallback in services/sandbox.py:
-      gpu = profile.get("gpu") or None              → CPU only
-      timeout = profile.get("timeout") or settings.sandbox_timeout  (default 600)
+    Uses the same resolver as the execute-code handler
+    (services/compute_allowance.py) so the prompt never advertises
+    hardware the handler would reject.
     """
+    from services.compute_allowance import resolve_compute_allowance
+
+    allowance = resolve_compute_allowance(sandbox_config)
     fallback_timeout = settings.sandbox_timeout
 
-    def _profile_line(label: str, profile: dict | None, default_to_used: int) -> str:
-        p = profile or {}
-        gpu = p.get("gpu")
-        timeout = p.get("timeout") or fallback_timeout
-        gpu_part = f"GPU={gpu}" if gpu else "CPU only (no GPU)"
-        timeout_part = f"timeout={timeout}s ({timeout // 60}m{timeout % 60:02d}s)"
-        return f"  - **{label}**: {gpu_part}, {timeout_part}"
+    default_profile = sandbox_config.get("default") or {}
+    training_profile = sandbox_config.get("training") or {}
+    default_gpu = default_profile.get("gpu") or "cpu"
+    training_gpu = training_profile.get("gpu") or "cpu"
+    default_timeout = default_profile.get("timeout") or fallback_timeout
+    training_timeout = training_profile.get("timeout") or fallback_timeout
 
-    default_profile = sandbox_config.get("default")
-    training_profile = sandbox_config.get("training")
+    hw_lines = []
+    for gpu in allowance.allowed_gpus:
+        blurb = _GPU_BLURBS.get(gpu, "")
+        price = _gpu_hourly_usd(gpu)
+        price_part = f" (~${price:.2f}/hr)" if price is not None else ""
+        hw_lines.append(f"  - `{gpu}` — {blurb}{price_part}")
 
     lines = [
         "## Compute environment for `execute-code`",
         "",
-        "Your sandbox is provisioned per call by Modal. Two profiles are",
-        "configured at the project level — pick the right one when you call",
-        "the skill:",
+        "Each call provisions a fresh sandbox. You choose the compute per",
+        "call with the optional `gpu` argument:",
         "",
-        _profile_line(
-            "default profile (`heavy=False`, the default)", default_profile, 600
-        ),
-        _profile_line("training profile (`heavy=True`)", training_profile, 1800),
+        "**Allowed hardware** (values accepted for `gpu`):",
+        *hw_lines,
         "",
-        "Dimension your code to fit:",
-        "- **Timeout is per call**, not per session. If a single fit / sweep",
-        "  would exceed it, split the work across multiple calls (one fold,",
-        "  one trial, one epoch chunk per call) and persist intermediate",
-        "  state to the session workspace between calls.",
-        "- **No GPU configured for a profile** → don't import torch.cuda or",
-        "  rely on `device='cuda'`. Stay on CPU-friendly libraries (xgboost,",
-        "  lightgbm, sklearn) or use small models.",
-        "- **GPU configured** → free to use torch / GPU-accelerated paths.",
-        "  Match batch size and model size to the GPU's memory class.",
-        "- Use `heavy=True` when calling `execute-code` for any work that",
-        "  needs the training profile (long-running fit, hyperparameter sweep,",
-        "  GPU-bound code). The default profile is for inspection / quick checks.",
-        "- The user can change these settings live in the Project Settings",
-        "  modal — your next call will pick up the new values automatically.",
+        f"**Timeout**: pass `timeout` (seconds, per call; max {allowance.max_timeout}s"
+        f" — higher values are clamped). Defaults: {default_timeout}s"
+        f" (default profile) / {training_timeout}s (`heavy=True`).",
+        "",
+        "**How to choose**:",
+        f"- Omit `gpu` → profile fallback: `heavy=False` = default profile"
+        f" ({default_gpu}), `heavy=True` = training profile ({training_gpu}).",
+        "- Prefer the cheapest hardware that fits. CPU for EDA / plots /",
+        "  inspection; small GPUs for modest fine-tunes; big GPUs only when",
+        "  memory or speed demands it. On CPU, don't rely on `device='cuda'`.",
+        "- **Timeout is per call**, not per session — split long fits across",
+        "  calls (one fold / trial / epoch chunk each) and persist state to",
+        "  the session workspace between calls.",
+        "- Requesting hardware outside the list returns an error naming the",
+        "  allowed set.",
+        "- The user can change this allowance in Project Settings — your",
+        "  next call picks up the new values automatically.",
     ]
     return "\n".join(lines)
 
@@ -585,17 +733,28 @@ async def _drive_provider(
             )
         except Exception as e:
             logger.warning("record_llm_usage failed: %s", e)
+        # Budget hard-stop: once the project's accumulated spend crosses its
+        # cap, halt this agent at the very next usage event. Raising here
+        # unwinds the provider loop; run_agent catches BudgetExceededError
+        # and lands the session in a clean `budget_exceeded` terminal state.
+        # Fail-open on any other error so a transient DB hiccup during the
+        # budget query can't land the session in `failed`.
+        await _check_budget_failopen(session_id)
 
-    # Wall-clock cap hint for providers/SDKs. The runner no longer wraps its
+    # Wall-clock cap for provider LLM calls. The runner no longer wraps its
     # own loop with `asyncio.timeout(timeout_s)` — that competed with the
     # per-sandbox timeout configured per project and could kill a session
-    # mid-tool-call without surfacing the failure to the model. The single
-    # governing timeout is the sandbox's own (`sandbox_timeout`, override
-    # per project via the agent's `default`/`training` profile). When it
-    # fires, Modal kills the container and the execute-code handler returns
-    # an `is_error` tool_result so the model can recognise the timeout and
-    # adapt (smaller chunk, different approach) or stop. The value below is
-    # still passed as a hint to provider SDKs that accept one.
+    # mid-tool-call without surfacing the failure to the model. Tool
+    # execution stays governed by the sandbox's own timeout
+    # (`sandbox_timeout`, override per project via the agent's
+    # `default`/`training` profile): when it fires, Modal kills the
+    # container and the execute-code handler returns an `is_error`
+    # tool_result so the model can adapt or stop. The value below is
+    # enforced *inside each provider* around the HTTP call only (SDK
+    # timeout / `enforce_wall_clock`; Claude via API_TIMEOUT_MS), so a
+    # stalled provider request raises TimeoutError — handled by
+    # `run_agent`'s TimeoutError path, which ends the run and frees the
+    # session task — without ever counting tool time (issue #95).
     timeout_s = settings.agent_timeout_seconds
 
     # Translate the resolved thinking level into provider-shaped kwargs once
@@ -829,8 +988,15 @@ async def run_agent(
     agent_id: str = "root",
     parent_agent_id: str | None = None,
     mentions: list[dict] | None = None,
+    resume_context: str | None = None,
 ):
     """Run an agent. agent_type maps to a YAML in agents/. Falls back to stage name.
+
+    resume_context, when set, marks this run as a resume/retry of an
+    interrupted session: the block (built by services.agent.resume) is
+    appended to the system prompt so the agent can skip steps whose
+    artifacts already exist, and the full prior conversation is injected
+    (a resume has no freshly-persisted user message to exclude).
 
     agent_models is a per-agent model override map: {"eda": "claude-haiku-4-5", ...}
     agent_thinking is the parallel reasoning-level map: {"eda": "high", ...}.
@@ -888,7 +1054,18 @@ async def run_agent(
             project_name,
             project_files,
             sandbox_config,
+            training_config,
         ) = await _load_project_context(experiment_id)
+
+        # Budget pre-check: never start a run for a project that has already
+        # spent past its cap. Raises BudgetExceededError (handled below);
+        # any other error fails open rather than failing the run.
+        await _check_budget_failopen(session_id)
+
+        # Hard enforcement of the user's wall-clock budget: clamp the training
+        # sandbox profile's per-call timeout before the config flows into
+        # execute-code / delegate-task handlers.
+        sandbox_config = _apply_training_wallclock_cap(sandbox_config, training_config)
 
         system_prompt = render_agent_system_prompt(
             agent_type,
@@ -922,6 +1099,19 @@ async def run_agent(
         # for agents that can actually call execute-code; others ignore it.
         if "execute-code" in get_agent_skills(agent_type):
             system_prompt += "\n\n" + _format_compute_env(sandbox_config)
+
+        # Resume/retry runs carry the recovered-progress block so the agent
+        # skips steps whose artifacts already exist on the volume.
+        if resume_context:
+            system_prompt += "\n\n" + resume_context
+
+        # Pre-flight training controls (issue #104) — only meaningful for
+        # agents that can open a training window. Empty config renders to ""
+        # so unconfigured projects get a byte-identical prompt.
+        if "start-training" in get_agent_skills(agent_type):
+            constraints_block = _format_training_constraints(training_config)
+            if constraints_block:
+                system_prompt += "\n\n" + constraints_block
 
         if user_prompt:
             prompt = _apply_mentions(user_prompt, mentions)
@@ -966,12 +1156,16 @@ async def run_agent(
             )
             thinking_level = normalize_level(chosen) if chosen else None
 
-        # Load conversation history for follow-up messages
+        # Load conversation history for follow-up messages. A normal
+        # follow-up excludes the last message (it's the just-persisted user
+        # prompt this run is answering); a resume run has no fresh user
+        # message in the DB, so the full history is injected.
         if user_prompt:
             history = await _load_conversation_history(session_id)
+            history_for_context = history if resume_context else history[:-1]
             if history:
                 context_parts = []
-                for msg in history[:-1]:
+                for msg in history_for_context:
                     prefix = "User" if msg["role"] == "user" else "Assistant"
                     context_parts.append(f"{prefix}: {msg['content']}")
                 if context_parts:
@@ -996,6 +1190,17 @@ async def run_agent(
 
         if "delegate-task" in agent_skills and not can_delegate(agent_type, depth):
             agent_skills = [s for s in agent_skills if s != "delegate-task"]
+
+        # HITL approval gates (issue #108): opt-in per session. When the flag
+        # is off this is an identity call — skills and prompt come back
+        # unchanged, so the default path is untouched. Applied per agent run,
+        # so delegated sub-agents inherit the gate through the shared
+        # session_id without any parameter threading.
+        from services.approvals import apply_approval_gate
+
+        agent_skills, system_prompt = apply_approval_gate(
+            session_id, agent_skills, system_prompt
+        )
 
         logger.info(
             "Starting agent=%s id=%s parent=%s stage=%s session=%s provider=%s model=%s depth=%d skills=%s",
@@ -1085,6 +1290,38 @@ async def run_agent(
             role="system",
         )
         await _publish("state_change", {"state": "timed_out"}, role="system")
+
+    except BudgetExceededError as e:
+        # Clean terminal state — this is the guardrail working, not a
+        # failure. The message tells the user exactly why the agent stopped
+        # and how to resume (raise or clear the cap in Project Settings).
+        st = e.status
+        cap = f"${st.budget_usd:.2f}" if st.budget_usd is not None else "(none)"
+        logger.warning(
+            "Budget exceeded for session %s (project %s): spent=%.4f cap=%s "
+            "— halting agent %s",
+            session_id,
+            st.project_id,
+            st.spent_usd,
+            st.budget_usd,
+            agent_type,
+        )
+        await _publish(
+            "budget_exceeded",
+            {
+                "error": (
+                    f"Budget limit reached: this project has spent "
+                    f"${st.spent_usd:.2f} of its {cap} cap, so the agent was "
+                    "stopped to prevent further spend. Raise or clear the "
+                    "budget in Project Settings to continue."
+                ),
+                "project_id": st.project_id,
+                "budget_usd": st.budget_usd,
+                "spent_usd": st.spent_usd,
+            },
+            role="system",
+        )
+        await _publish("state_change", {"state": "budget_exceeded"}, role="system")
 
     except asyncio.CancelledError:
         silent = session_id in _silent_aborts

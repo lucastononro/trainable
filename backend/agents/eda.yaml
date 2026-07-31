@@ -9,6 +9,12 @@ skills:
   - name: execute-code
   - name: append-notebook-cell
   - name: run-notebook-cell
+  - name: write-file
+  - name: edit-file
+  - name: run-file
+  - name: edit-notebook-cell
+  - name: delete-notebook-cell
+  - name: rerun-notebook-cell
   - name: read-notebook
   - name: delegate-task
   - name: request-clarification
@@ -18,6 +24,7 @@ skills:
   - name: use-skill
   - name: tasks
   - name: show-html
+  - name: report-eda-findings
   # Experiment lifecycle (agent-declared)
   - name: list-project-datasets
   - name: register-raw-dataset
@@ -56,17 +63,37 @@ system: |
 
   ALWAYS create directories before writing: `os.makedirs('/data/sessions/{session_id}/figures/', exist_ok=True)`.
 
-  ## Workspace is a real Python repo
+  ## Authoring vs running — use the right verb
 
-  The session directory is your cwd in every `execute-code` and notebook
-  cell, and `src/` is on `sys.path` with an auto-created `__init__.py`.
-  Any `.py` file you write under `src/` can be imported by later cells.
+  Your session is a real Python repo. `/sessions/{sid}/src/` is on sys.path,
+  `/sessions/{sid}/` is your cwd. The skills split along the verbs you need:
+
+  - write-file(path, content)         create or replace a file at `path`
+  - edit-file(path, mode, ...)        change part of an existing file
+  - run-file(path)                    execute a file in the sandbox
+  - execute-code(code)                one-shot throwaway Python; auto-saved to scripts/
+  - append-notebook-cell / run-notebook-cell / edit-notebook-cell /
+    delete-notebook-cell / rerun-notebook-cell  for interactive work
+
+  **Rule of three:** before pasting code into a third execute-code call on
+  the same theme, stop and refactor. write-file(`src/{name}.py`, ...) the
+  shared body, then run-file it (or `from {name} import ...` in your next
+  cell). This holds for notebook cells too — `import` from `src/` works
+  inside a kernel cell.
+
+  **Edit, don't repaste.** If you'd be about to write-file a near-duplicate
+  of an existing module, edit-file the existing one. `scripts/` is the
+  audit log of what ran; `src/` is the library that survives. Keep `src/`
+  small and edited; let `scripts/` accumulate.
 
   - For EDA you'll mostly stay in notebooks (kernel state already
     persists across cells), but the `src/` convention is useful when
     you want to promote a reusable helper out of a notebook into a
     module — e.g. `src/loaders.py` with `load_raw()` — so data_prep
     can `from loaders import load_raw` instead of rewriting it.
+  - When you find yourself pasting the same helper into a third notebook
+    cell, write-file it to `src/{name}.py` and import it in the next
+    cell — the kernel will find it without restart.
   - Module names must be plain Python identifiers (no hyphens, no
     step prefixes). The auto-saved per-call scripts under `scripts/`
     are step-prefixed by design and are NOT importable.
@@ -181,6 +208,16 @@ system: |
      (`notebooks/data-overview.ipynb`, etc.).
      - Include a clear recommendation for the target column and problem type
      - Flag any data quality issues the next agent should know about
+  7. IMMEDIATELY after writing report.md, call `report-eda-findings` ONCE
+     with the full batch of findings you just narrated — leakage risks,
+     class imbalance, high-cardinality columns, multicollinearity, missing
+     values, outliers, duplicates, ID-like columns, skewed targets. Each
+     finding needs the affected `columns` and a `recommendation` phrased as
+     a concrete instruction data_prep could execute verbatim — the studio
+     renders these as cards with an "Apply in prep" button. Report the SAME
+     findings as the prose: this is the structured view of report.md, not a
+     new analysis. If the data is genuinely clean, one `info` finding saying
+     so is fine.
 
   ## Experiment lifecycle (secondary)
 

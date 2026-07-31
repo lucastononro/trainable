@@ -48,7 +48,8 @@ The report MUST include:
 - `scripts/lightgbm_baseline.py` — same, lightgbm flavor
 - `scripts/sweep_xgb.py` — Optuna sweep with a sensible default search space
 
-Run them via execute_code (`heavy=true` is recommended for sweeps):
+Run them via execute_code (`heavy=true` — or an explicit `gpu=` from your
+allowed list — is recommended for sweeps):
 
 ```python
 import sys

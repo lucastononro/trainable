@@ -98,9 +98,7 @@ def _write_compose_template(dest: Path) -> None:
     Called on every `trainable init` *and* every `trainable up` so existing
     installs migrate to the env-var-tag-aware compose layout automatically.
     """
-    template = resources.files("trainable_cli").joinpath(
-        "_templates", COMPOSE_FILE
-    )
+    template = resources.files("trainable_cli").joinpath("_templates", COMPOSE_FILE)
     (dest / COMPOSE_FILE).write_text(template.read_text(encoding="utf-8"))
 
 
@@ -124,6 +122,26 @@ def check_docker():
     success("Docker and Docker Compose found")
 
 
+def check_docker_daemon():
+    """Preflight: fail fast with friendly guidance when the Docker daemon
+    is installed but not running — otherwise `docker compose` surfaces a
+    raw connection error (#126)."""
+    if not shutil.which("docker"):
+        fail("Docker not found. Install it from https://docs.docker.com/get-docker/")
+        sys.exit(1)
+    result = subprocess.run(
+        ["docker", "info"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        fail(
+            "Docker is installed but the daemon is not running. "
+            "Start Docker Desktop (or the docker service) and try again."
+        )
+        sys.exit(1)
+
+
 # Names the wizard knows about explicitly; everything else is treated as a
 # LiteLLM backend key in the free-form section.
 _KNOWN_PROVIDER_KEYS = {
@@ -134,6 +152,13 @@ _KNOWN_PROVIDER_KEYS = {
     "GOOGLE_API_KEY",
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET",
+    "COMPUTE_PROVIDER",
+    "RUNPOD_API_KEY",
+    "RUNPOD_S3_ACCESS_KEY_ID",
+    "RUNPOD_S3_SECRET_ACCESS_KEY",
+    "RUNPOD_DATACENTER_ID",
+    "RUNPOD_NETWORK_VOLUME_ID",
+    "RUNPOD_WORKER_IMAGE",
 }
 
 
@@ -193,13 +218,40 @@ def write_env(dest: Path, config: dict[str, str]):
 
     lines += [
         "",
-        "# Modal (sandboxed code execution)",
+        "# Compute provider (sandboxes, notebook kernels, deployments)",
+        f"COMPUTE_PROVIDER={config.get('COMPUTE_PROVIDER', 'modal')}",
+        "",
+        "# Modal (used when COMPUTE_PROVIDER=modal)",
         f"MODAL_TOKEN_ID={config.get('MODAL_TOKEN_ID', '')}",
         f"MODAL_TOKEN_SECRET={config.get('MODAL_TOKEN_SECRET', '')}",
     ]
 
+    if config.get("RUNPOD_API_KEY") or config.get("COMPUTE_PROVIDER") == "runpod":
+        lines += [
+            "",
+            "# RunPod (used when COMPUTE_PROVIDER=runpod)",
+            f"RUNPOD_API_KEY={config.get('RUNPOD_API_KEY', '')}",
+            f"RUNPOD_S3_ACCESS_KEY_ID={config.get('RUNPOD_S3_ACCESS_KEY_ID', '')}",
+            f"RUNPOD_S3_SECRET_ACCESS_KEY={config.get('RUNPOD_S3_SECRET_ACCESS_KEY', '')}",
+            f"RUNPOD_DATACENTER_ID={config.get('RUNPOD_DATACENTER_ID', 'US-KS-2')}",
+        ]
+        if config.get("RUNPOD_NETWORK_VOLUME_ID"):
+            lines.append(
+                f"RUNPOD_NETWORK_VOLUME_ID={config['RUNPOD_NETWORK_VOLUME_ID']}"
+            )
+        if config.get("RUNPOD_WORKER_IMAGE"):
+            lines.append(f"RUNPOD_WORKER_IMAGE={config['RUNPOD_WORKER_IMAGE']}")
+
     env_path = dest / ENV_FILE
-    env_path.write_text("\n".join(lines) + "\n")
+    # Secrets file: restrict to owner-only so other users on a shared machine
+    # can't read the plaintext API keys/tokens. Create with O_CREAT mode 0o600
+    # so the file is never visible at a looser permission even for an instant
+    # (avoids a TOCTOU window vs. write-then-chmod). The chmod afterwards
+    # tightens pre-existing files, where the O_CREAT mode doesn't apply.
+    fd = os.open(env_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    os.chmod(env_path, 0o600)
     success(f"Wrote {ENV_FILE}")
 
 
@@ -223,6 +275,63 @@ def configured_providers(config: dict[str, str]) -> list[str]:
         backends = [k.removesuffix("_API_KEY").lower() for k in litellm_keys]
         providers.append(f"LiteLLM ({', '.join(backends)})")
     return providers
+
+
+def _has_compute_creds(config: dict[str, str]) -> bool:
+    """True when the configured compute provider has its credentials."""
+    provider = (config.get("COMPUTE_PROVIDER") or "modal").lower()
+    if provider == "runpod":
+        return bool(
+            config.get("RUNPOD_API_KEY")
+            and config.get("RUNPOD_S3_ACCESS_KEY_ID")
+            and config.get("RUNPOD_S3_SECRET_ACCESS_KEY")
+        )
+    return bool(config.get("MODAL_TOKEN_ID") and config.get("MODAL_TOKEN_SECRET"))
+
+
+def prompt_compute_provider(existing: dict[str, str]) -> dict[str, str]:
+    """Pick the GPU cloud that runs sandboxes/kernels/deployments and
+    collect its credentials. Existing keys are kept and not re-prompted."""
+    print()
+    choice = prompt_choice(
+        "Which compute provider should run sandboxes and deployments?",
+        ["Modal (default)", "RunPod"],
+    )
+    out: dict[str, str] = {}
+    if choice == 1:
+        out["COMPUTE_PROVIDER"] = "modal"
+        if existing.get("MODAL_TOKEN_ID") and existing.get("MODAL_TOKEN_SECRET"):
+            return out
+        print()
+        print(f"  {DIM}Get your Modal tokens from https://modal.com/settings{RESET}\n")
+        out["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
+        out["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
+        return out
+
+    out["COMPUTE_PROVIDER"] = "runpod"
+    print()
+    print(
+        f"  {DIM}RunPod needs two key pairs from https://console.runpod.io:{RESET}\n"
+        f"  {DIM}  1. an API key      (Settings → API Keys){RESET}\n"
+        f"  {DIM}  2. an S3 API key   (Settings → S3 API Keys — for the network volume){RESET}\n"
+    )
+    out["RUNPOD_API_KEY"] = existing.get("RUNPOD_API_KEY") or prompt_secret(
+        "RunPod API Key"
+    )
+    out["RUNPOD_S3_ACCESS_KEY_ID"] = existing.get(
+        "RUNPOD_S3_ACCESS_KEY_ID"
+    ) or prompt_secret("RunPod S3 Access Key ID")
+    out["RUNPOD_S3_SECRET_ACCESS_KEY"] = existing.get(
+        "RUNPOD_S3_SECRET_ACCESS_KEY"
+    ) or prompt_secret("RunPod S3 Secret Access Key")
+    default_dc = existing.get("RUNPOD_DATACENTER_ID") or "US-KS-2"
+    print(
+        f"  {DIM}Datacenter must support the S3 API (e.g. US-KS-2, EU-RO-1, "
+        f"EU-CZ-1, EUR-IS-1).{RESET}"
+    )
+    dc = input(f"  RunPod datacenter {DIM}[{default_dc}]{RESET}: ").strip()
+    out["RUNPOD_DATACENTER_ID"] = dc or default_dc
+    return out
 
 
 def prompt_claude_auth() -> dict[str, str]:
@@ -340,6 +449,10 @@ def _existing_config_choice(existing: dict[str, str]) -> str:
             print(f"    {GREEN}✓{RESET} {p}")
         if existing.get("MODAL_TOKEN_ID"):
             print(f"    {GREEN}✓{RESET} Modal credentials")
+        if existing.get("RUNPOD_API_KEY"):
+            print(f"    {GREEN}✓{RESET} RunPod credentials")
+        provider = (existing.get("COMPUTE_PROVIDER") or "modal").lower()
+        print(f"    {GREEN}✓{RESET} Compute provider: {provider}")
     else:
         print(f"  {DIM}Existing .env appears empty.{RESET}")
     print()
@@ -358,7 +471,10 @@ def cmd_init():
     banner()
 
     dest = CONFIG_DIR
-    dest.mkdir(parents=True, exist_ok=True)
+    dest.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # `mode` is ignored when the directory already exists, so chmod explicitly
+    # to tighten a pre-existing loose (e.g. 0755) config dir holding secrets.
+    os.chmod(dest, 0o700)
     print(f"  {DIM}Config directory: {dest}{RESET}")
 
     # Step 1 — check Docker
@@ -390,31 +506,23 @@ def cmd_init():
             print()
             print("  Pick what to add or replace; existing keys are preserved.")
             config.update(prompt_providers(required=False))
-            # Modal — only re-prompt if missing.
-            if not (config.get("MODAL_TOKEN_ID") and config.get("MODAL_TOKEN_SECRET")):
+            # Compute — only re-prompt when the configured provider is
+            # missing its credentials.
+            if not _has_compute_creds(config):
                 print()
                 print(
-                    f"  {DIM}Modal tokens missing — need both for sandbox execution.{RESET}\n"
+                    f"  {DIM}Compute credentials missing — needed for sandbox execution.{RESET}"
                 )
-                config["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
-                config["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
+                config.update(prompt_compute_provider(config))
         else:  # replace
             config = {}
             config.update(prompt_providers(required=True))
-            print()
-            print(
-                f"  {DIM}Get your Modal tokens from https://modal.com/settings{RESET}\n"
-            )
-            config["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
-            config["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
+            config.update(prompt_compute_provider(config))
     else:
         # Fresh install path
         config = {}
         config.update(prompt_providers(required=True))
-        print()
-        print(f"  {DIM}Get your Modal tokens from https://modal.com/settings{RESET}\n")
-        config["MODAL_TOKEN_ID"] = prompt_secret("Modal Token ID")
-        config["MODAL_TOKEN_SECRET"] = prompt_secret("Modal Token Secret")
+        config.update(prompt_compute_provider(config))
 
     print()
     write_env(dest, config)
@@ -426,6 +534,10 @@ def cmd_init():
         print(f"  {BOLD}Configured providers:{RESET}")
         for p in providers:
             print(f"    {GREEN}✓{RESET} {p}")
+    print(
+        f"    {GREEN}✓{RESET} Compute: "
+        f"{(config.get('COMPUTE_PROVIDER') or 'modal').lower()}"
+    )
     print(
         f"\n  {DIM}Tip: re-run {BOLD}trainable init{RESET}{DIM} (or "
         f"{BOLD}trainable reconfigure{RESET}{DIM}) anytime to add more keys.{RESET}"
@@ -472,6 +584,9 @@ def _require_config():
             f"Config not found at {CONFIG_DIR}. Run {BOLD}trainable init{RESET} first."
         )
         sys.exit(1)
+    # Daemon-liveness preflight so a stopped Docker produces actionable
+    # guidance instead of a raw `docker compose` connection error (#126).
+    check_docker_daemon()
 
 
 FRONTEND_URL = "http://localhost:3000"
@@ -542,6 +657,18 @@ def cmd_down():
     os.execvp("docker", _compose_args(["down"]))
 
 
+def cmd_status():
+    """Show the stack's containers (`docker compose ps`)."""
+    _require_config()
+    os.execvp("docker", _compose_args(["ps"]))
+
+
+def cmd_logs():
+    """Dump the stack's logs (`docker compose logs`)."""
+    _require_config()
+    os.execvp("docker", _compose_args(["logs"]))
+
+
 USAGE = f"""\
 {BOLD}trainable{RESET} — AI-powered ML experimentation platform
 
@@ -552,6 +679,9 @@ USAGE = f"""\
                            Opens {FRONTEND_URL} in your browser once ready.
                            Pass --no-browser (or set TRAINABLE_NO_BROWSER=1) to skip.
   trainable down           Stop all services
+  trainable status         Show running containers (docker compose ps)
+  trainable logs           Show service logs (docker compose logs)
+  trainable --version      Print the installed CLI version
 
 {BOLD}Quick start:{RESET}
   pip install trainable-ai
@@ -571,6 +701,12 @@ def main():
         cmd_up()
     elif cmd == "down":
         cmd_down()
+    elif cmd == "status":
+        cmd_status()
+    elif cmd == "logs":
+        cmd_logs()
+    elif cmd in ("--version", "version"):
+        print(f"trainable {_cli_version()}")
     else:
         print(USAGE)
         sys.exit(0 if cmd in ("-h", "--help") else 1)
