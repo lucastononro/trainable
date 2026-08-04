@@ -35,7 +35,7 @@ pypdf>=5.0.0
 # Observability — OpenTelemetry + structured logging. All exporters
 # gracefully no-op when OTEL_EXPORTER_OTLP_ENDPOINT / SENTRY_DSN are unset,
 # so installing these adds zero runtime overhead in dev.
-structlog>=24.4.0
+structlog>=26.1.0
 opentelemetry-api>=1.27.0
 opentelemetry-sdk>=1.27.0
 opentelemetry-exporter-otlp>=1.27.0
